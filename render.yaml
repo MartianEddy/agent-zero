@@ -1,0 +1,73 @@
+# Render Blueprint for a non-sensitive MVP deployment.
+# The app currently has no production authentication/tenant adapter. Keep
+# public test data only until that work and retention decisions are complete.
+services:
+  - type: web
+    name: agent-zero-api
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    preDeployCommand: alembic upgrade head
+    healthCheckPath: /api/v1/ready
+    envVars: &app-env
+      - key: APP_ENV
+        value: development
+      - key: AUTH_MODE
+        value: disabled
+      - key: DATABASE_URL
+        fromDatabase:
+          name: agent-zero-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: agent-zero-redis
+          type: keyvalue
+          property: connectionString
+      - key: OBJECT_STORAGE_ENDPOINT
+        sync: false
+      - key: OBJECT_STORAGE_BUCKET
+        sync: false
+      - key: OBJECT_STORAGE_ACCESS_KEY
+        sync: false
+      - key: OBJECT_STORAGE_SECRET_KEY
+        sync: false
+      - key: OBJECT_STORAGE_REGION
+        value: auto
+      - key: OBJECT_STORAGE_SECURE
+        value: "true"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: EXA_API_KEY
+        sync: false
+      - key: CLICKCAST_API_TOKEN
+        sync: false
+      - key: CLICKCAST_IDENTITY_KEY
+        sync: false
+      - key: SOURCE_READER_PROVIDER
+        value: disabled
+
+  - type: worker
+    name: agent-zero-worker
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: celery -A app.worker.celery_app worker --beat --schedule=/tmp/agent-zero-celerybeat-schedule --loglevel=INFO
+    envVars: *app-env
+
+  - type: keyvalue
+    name: agent-zero-redis
+    plan: starter
+    region: singapore
+    ipAllowList: []
+
+databases:
+  - name: agent-zero-db
+    plan: basic-256mb
+    region: singapore
+    databaseName: agent_zero
+    user: agent_zero
+    ipAllowList: []
