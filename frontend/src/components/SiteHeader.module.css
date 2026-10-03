@@ -1,0 +1,17 @@
+.header { position: relative; z-index: 5; border-bottom: 1px solid rgb(255 255 255 / 8%); background: rgb(11 13 14 / 92%); }
+.inner { display: flex; height: 72px; align-items: center; justify-content: space-between; gap: 28px; }
+.brand { flex: 0 0 auto; }.brand :global(.agent-mark__word) { font-size: 20px; letter-spacing: .07em; }.brand :global(.agent-mark__ring) { width: 26px; height: 26px; }
+.desktopNav { display: flex; align-items: center; gap: clamp(20px, 3vw, 42px); margin-left: auto; }
+.desktopNav a { position: relative; padding: 28px 0 26px; color: #d2d5d0; font-size: 12px; font-weight: 600; transition: color 150ms ease; }
+.desktopNav a:hover, .desktopNav .active { color: var(--signal); }.desktopNav .active::after { position: absolute; right: 0; bottom: 19px; left: 0; height: 1px; background: var(--signal); content: ""; }
+.cta { min-height: 40px; padding-inline: 15px; font-size: 11px; }
+.menuButton { display: none; width: 44px; height: 44px; border: 1px solid var(--line-dark); border-radius: 4px; background: transparent; }
+.menuButton span { display: block; width: 17px; height: 1px; margin: 5px auto; background: var(--paper); }
+.mobileNav { display: none; }
+@media (max-width: 900px) { .desktopNav { gap: 18px; }.desktopNav a { font-size: 11px; } }
+@media (max-width: 760px) {
+  .inner { height: 66px; }.desktopNav, .cta { display: none; }.menuButton { display: block; }
+  .mobileNav { position: absolute; top: 100%; right: 0; left: 0; display: grid; gap: 0; border-bottom: 1px solid var(--line-dark); padding: 8px 20px 18px; background: #0b0d0e; box-shadow: 0 16px 30px rgb(0 0 0 / 24%); }
+  .mobileNav a { display: flex; min-height: 48px; align-items: center; border-bottom: 1px solid rgb(255 255 255 / 8%); color: #e6e8e3; font-size: 14px; }
+  .mobileNav .mobileCta { justify-content: center; gap: 8px; min-height: 46px; margin-top: 14px; border: 0; border-radius: 4px; color: var(--ink); background: var(--signal); font-weight: 800; }
+}

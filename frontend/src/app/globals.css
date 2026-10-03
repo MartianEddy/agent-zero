@@ -1,0 +1,19 @@
+:root {
+  color-scheme: dark; --ink: #0b0d0e; --ink-raised: #111516; --paper: #f7f7f4; --paper-muted: #e9eae5;
+  --signal: #a3ff47; --slate: #6b7280; --muted: #a4aaa5; --line-dark: rgb(255 255 255 / 12%); --line-light: rgb(11 13 14 / 14%);
+  --status-unverified: #f5b942; --status-verified: #43c17a; --status-contradicted: #f16a62; --status-inconclusive: #aab1bd;
+  --font-sans: 'Avenir Next', Avenir, Inter, ui-sans-serif, system-ui, sans-serif; --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; --container: 1200px;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--ink); color: var(--paper); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+button, a { font: inherit; } a { color: inherit; text-decoration: none; } button { color: inherit; }
+::selection { color: var(--ink); background: var(--signal); } :focus-visible { outline: 2px solid var(--signal); outline-offset: 4px; }
+.container { width: min(var(--container), calc(100% - 64px)); margin-inline: auto; }
+.eyebrow { margin: 0 0 16px; color: var(--signal); font: 500 11px/1.4 var(--font-mono); letter-spacing: .13em; text-transform: uppercase; }
+.button { display: inline-flex; min-height: 48px; align-items: center; justify-content: center; gap: 10px; border: 1px solid transparent; border-radius: 5px; padding: 0 20px; font-size: 13px; font-weight: 800; transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease; }
+.button:hover { transform: translateY(-1px); } .button-primary { color: var(--ink); background: var(--signal); } .button-primary:hover { background: #b8ff72; }
+.button-secondary { border-color: var(--line-dark); color: var(--paper); background: rgb(255 255 255 / 2%); } .button-secondary:hover { border-color: rgb(255 255 255 / 32%); background: rgb(255 255 255 / 6%); }
+.button-dark-secondary { border-color: var(--line-light); color: var(--ink); background: transparent; }
+@media (max-width: 700px) { .container { width: min(var(--container), calc(100% - 40px)); } .button { min-height: 46px; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
