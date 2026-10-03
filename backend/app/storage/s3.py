@@ -25,15 +25,11 @@ def check_bucket() -> None:
 
 def put_private_object(*, key: str, data: bytes, content_type: str) -> None:
     settings = get_settings()
-    options: dict[str, str] = {}
-    if settings.object_storage_secure:
-        options["ServerSideEncryption"] = "AES256"
     s3_client().put_object(
         Bucket=settings.object_storage_bucket,
         Key=key,
         Body=data,
         ContentType=content_type,
-        **options,
     )
 
 
