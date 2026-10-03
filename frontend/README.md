@@ -20,7 +20,11 @@ Open [http://localhost:3000](http://localhost:3000).
 - `/how-it-works` — How it works
 - `/newsrooms` — For Newsrooms
 - `/about` — About
-- `/investigate` — Workspace placeholder (no live investigation service is connected)
+- `/demo` — Interactive illustrative investigation preview
+- `/methodology` — Evidence principles and FAQ
+- `/investigate` — Prototype status page (no live investigation service is connected)
+
+The sample case and all figures shown in the demo are illustrative. No claim submission, pilot intake, account system or evidence-search service is connected. The newsroom page explains the intended pilot considerations; the project still needs a published contact channel before it can collect pilot requests.
 
 ## Checks
 

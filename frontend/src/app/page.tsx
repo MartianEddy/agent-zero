@@ -1,8 +1,12 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { Arrow } from "@/components/Arrow";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SiteHeader } from "@/components/SiteHeader";
+import { InvestigationDemo } from "@/components/InvestigationDemo";
 import styles from "./home.module.css";
+
+export const metadata: Metadata = { title: "Assume nothing. Follow the evidence.", description: "Agent 0 is an AI-assisted verification workspace in development for journalists. Explore an illustrative sample investigation and see the intended evidence trail." };
 
 const capabilities = ["Trace sources", "Compare evidence", "Find corroboration", "Surface contradictions", "Build a verification brief"];
 const stages = [
@@ -37,7 +41,7 @@ function EvidenceRing() {
 
 function InvestigationPreview() {
   return <div className={styles.preview} aria-label="Illustrative Agent 0 investigation preview">
-    <div className={styles.previewTop}><div className={styles.previewBrand}>AGENT <span>0</span></div><div className={styles.previewMeta}>INVESTIGATION&nbsp; / &nbsp;#0042 <i>DEMO DATA</i></div><div className={styles.avatar}>A</div></div>
+    <div className={styles.previewTop}><div className={styles.previewBrand}>AGENT <span>0</span></div><div className={styles.previewMeta}>INVESTIGATION <i>DEMO DATA</i></div><div className={styles.avatar}>A</div></div>
     <div className={styles.previewBody}>
       <aside className={styles.sidebar} aria-label="Sample workspace sections">
         <div className={styles.sideActive}><Glyph type="search" /> New investigation</div><div><Glyph type="brief" /> Investigations</div><div><Glyph type="network" /> Sources</div><div><Glyph type="compare" /> Media analysis</div><div><Glyph type="compare" /> Timeline</div><div><Glyph type="brief" /> Brief</div><div className={styles.sideBottom}>EVIDENCE WORKSPACE</div>
@@ -60,12 +64,14 @@ export default function HomePage() {
     <section className={styles.hero}><div className={`container ${styles.heroGrid}`}>
       <div className={styles.heroCopy}><p className="eyebrow">Investigative intelligence for journalists</p><h1>Assume nothing.<br /><span>Follow the evidence.</span></h1>
         <p className={styles.lede}>Investigate suspicious claims, media and documents against available evidence before they become tomorrow&apos;s headline.</p>
-        <div className={styles.heroActions}><Link href="/investigate" className="button button-primary">Start an investigation <Arrow /></Link><a href="#how-it-works" className="button button-secondary"><span className={styles.playIcon} /> See how it works</a></div>
-        <p className={styles.forWho}><Glyph type="network" /><span>Built for journalists, editors and fact-checkers</span></p>
+        <div className={styles.heroActions}><Link href="/demo" className="button button-primary">Explore the sample investigation <Arrow /></Link><a href="#how-it-works" className="button button-secondary"><span className={styles.playIcon} /> See how it works</a></div>
+        <p className={styles.forWho}><Glyph type="network" /><span>Built for journalists, editors and media practitioners</span></p>
       </div><div className={styles.previewWrap}><EvidenceRing /><InvestigationPreview /></div>
     </div></section>
 
     <section id="capabilities" className={styles.capabilities} aria-label="Agent 0 capabilities"><div className={`container ${styles.capabilityRow}`}>{capabilities.map((label, index) => <div className={styles.capability} key={label}><Glyph type={["search", "compare", "network", "contradictions", "brief"][index]} /><span>{label}</span></div>)}</div></section>
+
+    <InvestigationDemo />
 
     <section className={styles.spread}><div className={`container ${styles.spreadGrid}`}>
       <div className={styles.spreadDiagram} aria-label="Illustration of information shared between sources"><div className={styles.postCard}><span>SCREENSHOT</span><strong>“Schools closed tomorrow?”</strong><div className={styles.postLines} /></div><span className={styles.diagramArrow}>→</span><div className={styles.socialStack}><div>REPOST <b>↗</b></div><div>MESSAGING <b>↗</b></div><div>SOCIAL POST <b>↗</b></div></div><span className={styles.diagramArrow}>→</span><div className={styles.newsroomNode}><span className={styles.newsroomDot} /><strong>NEWSROOM</strong><small>verify before publishing</small></div></div>
@@ -83,7 +89,7 @@ export default function HomePage() {
 
     <section id="principle" className={styles.principle}><div className={`container ${styles.principleInner}`}><div className={styles.principleRing} aria-hidden="true"><span>0</span><i /><i /><i /></div><div><p className={styles.eyebrowDark}>The principle</p><h2>AI investigates.<br /><span>Humans decide.</span></h2><p>Agent 0 organizes evidence, exposes sources and preserves uncertainty. It should help you see what is known and what is missing—not ask you to trust a generated truth score.</p></div></div></section>
 
-    <section className={styles.finalCta}><div className={`container ${styles.finalInner}`}><div><p className="eyebrow">Something doesn&apos;t add up?</p><h2>Start an investigation.</h2><p>Get a clear, evidence-backed verification brief.</p></div><Link href="/investigate" className="button button-primary">Start investigating <Arrow /></Link></div></section>
+    <section className={styles.finalCta}><div className={`container ${styles.finalInner}`}><div><p className="eyebrow">Explore the prototype</p><h2>See an investigation take shape.</h2><p>Review illustrative sample material; no live claim check is connected.</p></div><Link href="/demo" className="button button-primary">Explore the demo <Arrow /></Link></div></section>
     <SiteFooter />
   </main>;
 }

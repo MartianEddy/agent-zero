@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { AgentMark } from "@/components/AgentMark";
 import styles from "./SiteFooter.module.css";
-const links = [{ label: "Product", href: "/product" }, { label: "How it works", href: "/how-it-works" }, { label: "For Newsrooms", href: "/newsrooms" }, { label: "About", href: "/about" }];
+const links = [{ label: "Product", href: "/product" }, { label: "Explore the demo", href: "/demo" }, { label: "How it works", href: "/how-it-works" }, { label: "Methodology & FAQ", href: "/methodology" }, { label: "For Newsrooms", href: "/newsrooms" }, { label: "About", href: "/about" }];
 export function SiteFooter() {
   return <footer className={styles.footer}>
     <div className={`container ${styles.main}`}>
