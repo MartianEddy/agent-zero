@@ -19,7 +19,7 @@ def _check_dependency(name: str, check: Callable[[], object]) -> None:
     except Exception as error:
         # Expose only the dependency name. SDK exception strings can contain
         # hostnames or request details and should not be returned to callers.
-        logger.warning("Readiness dependency check failed", extra={"dependency": name})
+        logger.warning("Readiness dependency check failed dependency=%s", name)
         raise HTTPException(
             status_code=503,
             detail={"code": "REQUIRED_DEPENDENCY_UNAVAILABLE", "dependency": name},
