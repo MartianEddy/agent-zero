@@ -2,10 +2,21 @@ import { createClient } from '@supabase/supabase-js';
 import { pipeline } from '@xenova/transformers';
 import 'dotenv/config';
 
-// Initialize Supabase Client
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY; // Use Service Role Key to bypass RLS during hackathon
-const supabase = createClient(supabaseUrl, supabaseKey);
+let supabase = null;
+function getSupabase() {
+  if (!supabase) {
+    const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.SUPABASE_SECRET_KEY ||
+      process.env.SUPABASE_ANON_KEY ||
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+    if (!supabaseUrl || !supabaseKey) {
+      throw new Error('Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to enable claim matching.');
+    }
+    supabase = createClient(supabaseUrl, supabaseKey);
+  }
+  return supabase;
+}
 
 // Shared embedding pipeline token (cached locally after first run)
 let embedder = null;
@@ -17,7 +28,7 @@ async function getEmbedder() {
 }
 
 /**
- * Helper: Converts text string into a 384-dimension numerical array (vector)
+ * Helper: Converts text string into a 384-dimension numerical array (vect
  */
 async function generateEmbedding(text) {
   const pipe = await getEmbedder();
@@ -49,17 +60,18 @@ export async function seedDemoData() {
     }
   ];
 
+  const client = getSupabase();
   for (const item of mockClaims) {
     const vector = await generateEmbedding(item.claim);
     
-    const { error } = await supabase.from('fact_checks').insert({
+    const { error } = await client.from('fact_checks').insert({
       claim: item.claim,
       verdict: item.verdict,
       source_url: item.source_url,
       embedding: vector
     });
 
-    if (error) console.error(`❌ Error inserting "${item.claim.slice(0,20)}...":`, error.message);
+    if (error) throw new Error(`Failed to insert demo claim "${item.claim.slice(0, 20)}...": ${error.message}`);
   }
   console.log("✅ Database successfully seeded and ready for match tests.");
 }
@@ -68,26 +80,17 @@ export async function seedDemoData() {
  * 🔍 MATCHING FUNCTION: Passes incoming WhatsApp messages against your database
  */
 export async function matchIncomingClaim(incomingWhatsAppText) {
-  try {
-    // 1. Convert user's incoming message into a vector
-    const queryVector = await generateEmbedding(incomingWhatsAppText);
-
-    // 2. Call the Supabase RPC function (match_fact_checks) using pgvector
-    const { data: matchedClaims, error } = await supabase.rpc('match_fact_checks', {
-      query_embedding: queryVector,
-      similarity_threshold: 0.5, // 50% semantic similarity floor to catch loose wording
-      match_count: 1             // Top match only for a snappy WhatsApp response
-    });
-
-    if (error) throw error;
-
-    if (matchedClaims && matchedClaims.length > 0) {
-      return matchedClaims[0]; // Returns { claim, verdict, source_url, similarity }
-    }
-    
-    return null;
-  } catch (err) {
-    console.error("🚨 Agent 0 Core Engine Error:", err.message);
-    return null;
+  if (typeof incomingWhatsAppText !== 'string' || !incomingWhatsAppText.trim()) {
+    throw new TypeError('A non-empty claim is required for matching.');
   }
+  const client = getSupabase();
+  const queryVector = await generateEmbedding(incomingWhatsAppText);
+  const { data: matchedClaims, error } = await client.rpc('match_fact_checks', {
+    query_embedding: queryVector,
+    similarity_threshold: 0.5,
+    match_count: 1
+  });
+
+  if (error) throw new Error(`Supabase claim matching failed: ${error.message}`);
+  return matchedClaims?.[0] ?? null;
 }
