@@ -55,7 +55,8 @@ services:
     region: singapore
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
-    dockerCommand: celery -A app.worker.celery_app worker --beat --schedule=/tmp/agent-zero-celerybeat-schedule --loglevel=INFO
+    # Starter is 512 MB; run one task in-process to avoid prefork child overhead.
+    dockerCommand: celery -A app.worker.celery_app worker --pool=solo --concurrency=1 --beat --schedule=/tmp/agent-zero-celerybeat-schedule --loglevel=INFO
     envVars: *app-env
 
   - type: keyvalue
