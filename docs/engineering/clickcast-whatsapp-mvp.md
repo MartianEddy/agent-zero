@@ -18,7 +18,7 @@ Set these in `backend/.env` (never commit them):
 
 Configure these endpoints in ClickCast HTTP API:
 
-- Intake: `POST /api/v1/channels/clickcast/investigations`, JSON body with `event_id`, `sender`, and `message`.
+- Intake: `POST /api/v1/channels/clickcast/investigations`, JSON body with `sender` and `message`; `event_id` is optional.
 - Result lookup: `POST /api/v1/channels/clickcast/result`, JSON body with `reference` and `sender`.
 
 ## Request and response mapping
@@ -27,13 +27,14 @@ Intake example:
 
 ```json
 {
-  "event_id": "stable-clickcast-message-id",
   "sender": "254700000000",
   "message": "Please check this claim: ..."
 }
 ```
 
-Map ClickCast's stable message ID, subscriber/WhatsApp identifier and incoming text to those three body fields. The intake response contains `id`, `reference`, `status`, `current_stage`, and `created_at`; map `reference` and `status` into the immediate bot acknowledgement.
+Map the subscriber/WhatsApp identifier and saved incoming text to `sender` and `message`. The ClickCast variable picker currently exposes subscriber IDs and phone numbers, but no incoming message ID. If a stable event ID becomes available, map it to `event_id` for retry idempotency. Without it, omit `event_id`; Agent 0 generates a unique idempotency key for each call so distinct messages from the same subscriber do not collide. Retries without an event ID may create duplicate investigations. The intake response contains `id`, `reference`, `status`, `current_stage`, and `created_at`; map `reference` and `status` into the immediate bot acknowledgement.
+
+`event_id` may be included when ClickCast supplies a stable incoming-message identifier. Do not use a subscriber ID as the event ID; it is stable across messages and would cause later submissions from that subscriber to collide.
 
 Result lookup example:
 

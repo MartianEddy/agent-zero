@@ -10,7 +10,7 @@ The product owner connected the Mediremind WhatsApp Business account in ClickCas
 
 - ClickCast remains the WhatsApp connection, bot, and inbox layer. Agent 0 will not register a second Meta webhook or retain Meta access tokens for this MVP.
 - ClickCast's HTTP API builder calls an Agent 0 intake endpoint for text and direct URL messages, then maps the `202` response into a bot acknowledgement.
-- Deduplicate on the stable message event ID. Route through the integration's configured workspace owner and derive a sender reference using HMAC pseudonymization; never persist the raw sender number in submission metadata.
+- Use a stable message event ID for deduplication when ClickCast supplies one. The current ClickCast variable picker has only subscriber IDs and phone numbers, so `event_id` is optional; when absent, Agent 0 generates a unique idempotency key to prevent separate messages from colliding. Retries without an event ID can create duplicate investigations. Route through the integration's configured workspace owner and derive a sender reference using HMAC pseudonymization; never persist the raw sender number in submission metadata.
 - Authenticate requests using a bearer token in the builder's Authorization header.
 - A later user interaction calls Agent 0's result endpoint with the investigation reference and sender; the endpoint returns a bounded result only after verifying the sender reference. ClickCast maps the fields into its reply.
 - Keep the integration disabled unless its API token and HMAC key are configured. Validate request variables and response mappings with Test & Verify before live traffic.

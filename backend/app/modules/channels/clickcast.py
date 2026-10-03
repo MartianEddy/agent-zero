@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
@@ -20,7 +21,10 @@ router = APIRouter(prefix="/channels/clickcast", tags=["ClickCast WhatsApp"])
 
 
 class ClickCastSubmitRequest(BaseModel):
-    event_id: str = Field(min_length=1, max_length=80)
+    # ClickCast currently exposes subscriber identifiers but no incoming
+    # message/event identifier in its HTTP API variable picker. Keep event_id
+    # optional so each accepted call can still start an investigation.
+    event_id: str | None = Field(default=None, min_length=1, max_length=80)
     sender: str = Field(min_length=1, max_length=120)
     message: str = Field(min_length=1, max_length=20_000)
 
@@ -135,7 +139,10 @@ def submit_from_clickcast(
         owner_id=_workspace_owner(settings),
         content=body.message,
         input_type=_submission_type(body.message),
-        idempotency_key=f"clickcast:{body.event_id}",
+        # Preserve retry idempotency when ClickCast supplies an event ID. In
+        # its absence, create a unique key; this avoids collisions between
+        # different messages from the same subscriber.
+        idempotency_key=f"clickcast:{body.event_id or uuid4().hex}",
         channel=Channel.WHATSAPP,
         source_metadata={
             "platform": "clickcast",
@@ -204,6 +211,7 @@ def get_result_from_clickcast(
         summary=brief.summary[:1000] if brief else None,
         limitations=brief.limitations[:5] if brief else [],
         findings=[
-            ClickCastFinding(status=item.status, statement=item.statement[:500]) for item in findings
+            ClickCastFinding(status=item.status, statement=item.statement[:500])
+            for item in findings
         ],
     )
