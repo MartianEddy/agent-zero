@@ -10,6 +10,8 @@
 - The deployed Blueprint assigns the worker the `starter` plan (512 MB RAM).
 - The original worker command used Celery's default prefork pool without an explicit concurrency cap, and embedded Beat in that worker.
 - The supplied deploy log is for the API, not the worker. It shows a successful image build, migrations through `0009`, and Uvicorn startup. `/api/v1/ready` returned 503 because a readiness dependency was unavailable; object storage had not yet been configured.
+- After R2 was configured, the API still returned 503 from `/api/v1/ready`; ClickCast Test & Verify returned 502. The supplied logs do not identify which readiness dependency is failing.
+- A ClickCast bearer token was visible in a screenshot. Treat it as compromised: revoke it and replace it in Render and ClickCast.
 - No worker logs or memory metrics around the restart were supplied, so whether the restart happened during startup or during a task is unknown.
 
 ## Assessment and mitigation
@@ -18,9 +20,11 @@ The confirmed cause is that the worker exceeded its 512 MB limit. Prefork proces
 
 The Render worker command now uses Celery's `solo` pool with concurrency 1. This avoids prefork child processes and serializes MVP jobs without increasing the plan. Beat remains enabled to dispatch the transactional outbox.
 
+Readiness failures now report only a safe dependency label (`database`, `redis`, or `object_storage`) while keeping provider exception details out of the HTTP response and logs. This will identify the dependency behind the ClickCast gateway error after redeploy.
+
 ## Follow-up
 
-After redeploy, check worker logs and the service memory graph around startup and the next controlled task. If memory still reaches the limit with one task in-process, identify the task stage and peak before selecting a larger plan; changing plans affects service cost. Do not treat the API's 503 readiness responses as proof of the worker OOM cause.
+After redeploy, check the `/api/v1/ready` response for the failing dependency, plus worker logs and the service memory graph around startup and the next controlled task. If memory still reaches the limit with one task in-process, identify the task stage and peak before selecting a larger plan; changing plans affects service cost. Do not treat the API's 503 readiness responses as proof of the worker OOM cause.
 
 ## Rollback
 
