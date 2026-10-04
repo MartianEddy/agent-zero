@@ -1,0 +1,32 @@
+.contact {
+  position: fixed;
+  z-index: 20;
+  right: max(24px, env(safe-area-inset-right));
+  bottom: max(24px, env(safe-area-inset-bottom));
+  display: inline-flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid #217b49;
+  border-radius: 999px;
+  padding: 0 19px;
+  color: #fff;
+  background: #218b4e;
+  box-shadow: 0 8px 26px rgb(20 51 32 / 24%), 0 2px 6px rgb(20 51 32 / 12%);
+  font-size: 13px;
+  font-weight: 650;
+  transition: transform 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+
+.contact svg { width: 21px; height: 21px; flex: 0 0 auto; }
+.contact:hover { transform: translateY(-2px); background: #187640; box-shadow: 0 10px 30px rgb(20 51 32 / 28%), 0 3px 8px rgb(20 51 32 / 16%); }
+.contact:active { transform: scale(.97); }
+
+@media (max-width: 520px) {
+  .contact { right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); min-height: 50px; padding-inline: 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .contact { transition: none; }
+}
