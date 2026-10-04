@@ -6,6 +6,7 @@ credibility score and must never be used to infer a finding or evidence polarity
 
 import re
 from collections.abc import Mapping, Sequence
+from datetime import date, datetime
 from typing import Any
 
 from app.modules.sources.evidence_extraction import extract_claim_anchors
@@ -144,6 +145,21 @@ def retrieval_priority(
     )
     domain = str(getattr(source, "domain", None) or "")
     registry = lookup_source(domain)
+    search_is_current = (
+        "prioritize current information and dated sources" in search_context.casefold()
+    )
+    if search_is_current:
+        published_at = str(getattr(source, "published_at", None) or "")
+        try:
+            published = datetime.fromisoformat(published_at.replace("Z", "+00:00")).date()
+        except ValueError:
+            try:
+                published = date.fromisoformat(published_at[:10])
+            except ValueError:
+                published = None
+        if published is not None:
+            age_days = max(0, (date.today() - published).days)
+            score += 20 if age_days <= 30 else 10 if age_days <= 365 else 0
     for claim in claims:
         claim_words = _words(claim)
         score = max(score, ROLE_PRIORITY.get(role, 0) + TYPE_PRIORITY.get(source_type, 0))

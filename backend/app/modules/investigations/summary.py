@@ -41,48 +41,23 @@ def journalist_assessment_summary(
             "Please review the cited sources directly; no conclusion has been reached."
         )
     elif present == {"INCONCLUSIVE"}:
-        review_count = counts["INCONCLUSIVE"]
-        review_text = (
-            "One finding needs human review."
-            if review_count == 1
-            else f"{review_count} findings need human review."
-        )
-        summary = "\n\n".join(
-            (
-                "Assessment: Inconclusive.",
-                "The evidence reviewed so far does not confirm or refute the claim. "
-                + review_text,
-                "Before publication, verify the claim with an independent, authoritative source.",
-            )
+        summary = (
+            "Assessment: Inconclusive. Retrieved evidence conflicts or cannot be reconciled."
         )
     elif present == {"UNVERIFIED"}:
-        count = counts["UNVERIFIED"]
-        finding_text = (
-            "One finding remains unverified."
-            if count == 1
-            else f"{count} findings remain unverified."
-        )
-        summary = "\n\n".join(
-            (
-                "Assessment: Not verified.",
-                "The evidence reviewed so far does not establish whether the claim is accurate. "
-                + finding_text,
-                "Before publication, seek confirmation from an independent, authoritative source.",
-            )
+        summary = (
+            "Assessment: Not verified. The available record does not establish whether the claim "
+            "is accurate."
         )
     elif present == {"SUPPORTED"}:
-        count = counts["SUPPORTED"]
         summary = (
-            "Assessment: Evidence supports the claim.\n\n"
-            f"Review the {count} supporting finding{'s' if count != 1 else ''} and cited source "
-            "context before publication."
+            "Assessment: The evidence supports the claim. Review the linked sources and context "
+            "before publication."
         )
     elif present == {"CONTRADICTED"}:
-        count = counts["CONTRADICTED"]
         summary = (
-            "Assessment: Evidence challenges the claim.\n\n"
-            f"Review the {count} contradicting finding{'s' if count != 1 else ''} and cited "
-            "source context before publication."
+            "Assessment: The evidence challenges the claim. Review the linked sources and context "
+            "before publication."
         )
     else:
         count_phrases = {
@@ -100,7 +75,7 @@ def journalist_assessment_summary(
                 findings.append(f"{count} {noun} {phrase}")
         summary = "\n\n".join(
             (
-                "Assessment: Mixed evidence.",
+                "Assessment: Mixed findings.",
                 "Findings: " + "; ".join(findings) + ".",
                 "Review each finding and its cited sources before publication; the evidence does "
                 "not support a single conclusion.",

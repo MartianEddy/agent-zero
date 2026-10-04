@@ -41,7 +41,8 @@ Agent 0 is an evidence-verification platform. Web, WhatsApp and future integrati
 - Shared async investigation workflow for text, URL, image, and video submissions.
 - Persisted claims, sources, evidence, evidence/claim relationships, findings, and versioned brief.
 - One Lead Investigator using OpenAI Agents SDK behind a provider adapter; narrow application tools; validate structured outputs and evidence references.
-- Web search results are candidate sources. An optional source-reader adapter retrieves public pages; only verbatim quotations matched against the retrieved page may become source evidence. If retrieval is disabled or unavailable, the claim assessment remains inconclusive.
+- Web search results are candidate sources. An optional source-reader adapter retrieves public pages; only verbatim quotations matched against the retrieved page may become source evidence. If retrieval is disabled or unavailable, Luna explains that limitation and the claim remains unverified; source candidates cannot support or contradict it.
+- Before dispatch, Luna classifies each search query as `CURRENT`, `HISTORICAL`, or `BALANCED`. Current queries explicitly seek latest official updates and dated independent reporting; historical queries retain the requested period; balanced queries seek both original records and current context. Persist provider publication dates when supplied and use recency to order retrieval only for current-intent searches. Recency does not replace source relevance, authority, independence, or evidence validation.
 - Agent Reach may inform channel/backend selection, but its local CLI, browser sessions, cookies and social-platform credentials are not executed or stored by the server-side investigation workflow.
 - Image/video intake to private object storage with type/size validation, content hashes, and available metadata/keyframe/transcript observations. Unsupported analysis is recorded as a limitation; no universal deepfake verdict.
 - API read surfaces for investigation progress, claims, sources, evidence, findings, and brief.
@@ -64,7 +65,8 @@ Agent 0 is an evidence-verification platform. Web, WhatsApp and future integrati
 
 ### Evidence answer and confidence presentation
 
-- For every claim finding, OpenAI Luna drafts a concise, direct answer grounded in the evidence packet, along with the finding status, traceable evidence links, limitations, and a confidence rationale.
+- For every claim finding, OpenAI Luna drafts a concise, direct answer grounded in the investigation packet, along with the finding status, traceable evidence links where available, limitations, and a confidence rationale. When no source excerpt is retrieved, Luna still explains what the investigation found and could not assess; candidate sources are explicitly leads, never evidence.
+- Use `UNVERIFIED` when claim-linked source evidence is absent or insufficient. Reserve `INCONCLUSIVE` for materially conflicting or irreconcilable retrieved evidence. The application must downgrade any supported or contradicted model assessment that lacks eligible traceable evidence, while retaining Luna's useful explanation of the gap.
 - Show evidence confidence as LOW, MODERATE, or HIGH with its rationale. This is a qualitative assessment of evidence sufficiency, not a calibrated probability that the claim is true. Do not expose a numeric confidence percentage until calibration is supported by a labelled evaluation set.
 - HIGH requires multiple relevant, independent, authoritative sources and no material contradiction. UNVERIFIED and INCONCLUSIVE findings cannot receive HIGH confidence. If application validation downgrades a finding, the persisted confidence must also be downgraded.
 - The web result and WhatsApp result message use the same persisted answer and confidence rationale; channel formatting must not add new factual conclusions.

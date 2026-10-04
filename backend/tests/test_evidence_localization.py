@@ -1,5 +1,6 @@
 import json
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -197,6 +198,7 @@ class SourcePrioritizationTests(unittest.TestCase):
         source_role="UNKNOWN",
         status="CANDIDATE",
         url=None,
+        published_at=None,
     ):
         return SimpleNamespace(
             id=uuid4(),
@@ -207,6 +209,7 @@ class SourcePrioritizationTests(unittest.TestCase):
             source_type=source_type,
             source_role=source_role,
             retrieval_status=status,
+            published_at=published_at,
         )
 
     def test_relevant_official_q4_source_outranks_older_q2_source(self) -> None:
@@ -258,6 +261,33 @@ class SourcePrioritizationTests(unittest.TestCase):
             },
         )
         self.assertEqual(ranked[0], relevant)
+
+    def test_publication_recency_only_boosts_current_intent_searches(self) -> None:
+        today = date.today()
+        older = self.source(
+            domain="news.example",
+            title="County update",
+            source_type="NEWS",
+            published_at=(today - timedelta(days=800)).isoformat(),
+        )
+        recent = self.source(
+            domain="news.example",
+            title="County update",
+            source_type="NEWS",
+            published_at=today.isoformat(),
+        )
+        claim = "County announces a new school closure policy."
+        current = prioritize_sources(
+            [older, recent],
+            [claim],
+            context_by_source={
+                older.id: "prioritize current information and dated sources",
+                recent.id: "prioritize current information and dated sources",
+            },
+        )
+        historical = prioritize_sources([older, recent], [claim])
+        self.assertEqual(current[0], recent)
+        self.assertEqual(historical[0], older)
 
     def test_duplicate_canonical_urls_are_ranked_once(self) -> None:
         first = self.source(

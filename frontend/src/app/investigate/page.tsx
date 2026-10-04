@@ -395,7 +395,7 @@ export default function InvestigatePage() {
                         {cited.map(({ item, relationship }) => <a key={item.id} href={`#evidence-${item.id}`}>
                           {relationshipPresentation(relationship)} · View evidence
                         </a>)}
-                      {cited.length === 0 && <span>No evidence was linked to this finding.</span>}
+                      {cited.length === 0 && <span>No retrieved evidence excerpt supports this finding. Source candidates are listed below as leads only.</span>}
                       </div>
                     </>}
                   </article>;
@@ -420,7 +420,7 @@ export default function InvestigatePage() {
                   <p className={styles.evidenceFamily}>{item.source ? safeEvidenceText(results.sources.find((source) => source.id === item.source?.id)?.publisher || "Source evidence") : "Image evidence"}</p>
                   <p>{safeEvidenceText(item.content).slice(0, 360)}{item.content.length > 360 ? "…" : ""}</p><a className={styles.textLink} href={`#evidence-${item.id}`}>{relationshipPresentation(relationship)} · See details</a>
                 </article>)}
-              </div> : <p className={styles.empty}>{finished ? "No reliable evidence was linked to a finding. Review the available sources and what remains unknown below." : "Agent 0 is gathering and reviewing available evidence. Findings will appear here when the review is complete."}</p>}
+              </div> : <p className={styles.empty}>{finished ? "No retrieved evidence excerpt was linked to a finding. The result explains what could not be assessed; source candidates remain leads until their contents are reviewed." : "Agent 0 is gathering and reviewing available evidence. Findings will appear here when the review is complete."}</p>}
             </section>
 
             <section className={styles.unknowns} aria-labelledby="unknowns-title">

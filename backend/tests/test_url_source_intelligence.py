@@ -452,7 +452,7 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
             ),
         )
         finding = session.scalar(select(Finding).where(Finding.claim_id == claim.id))
-        self.assertEqual(finding.status, "INCONCLUSIVE")
+        self.assertEqual(finding.status, "UNVERIFIED")
         self.assertEqual(
             session.scalar(
                 select(func.count())
@@ -508,14 +508,13 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
         self.assertEqual(source.retrieval_status, "FAILED")
         self.assertTrue(source.retrieval_failure_reason)
         self.assertEqual(session.scalar(select(func.count()).select_from(Claim)), 0)
-        self.assertIn(
-            "site:news.example missing story",
-            [
-                trace.query
+        self.assertTrue(
+            any(
+                (trace.query or "").startswith("site:news.example missing story")
                 for trace in session.scalars(
                     select(SearchTrace).where(SearchTrace.investigation_id == investigation.id)
                 )
-            ],
+            )
         )
         gateway.assert_not_called()
         session.close()

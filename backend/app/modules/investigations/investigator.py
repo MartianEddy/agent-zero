@@ -32,9 +32,14 @@ class PlannedClaim(BaseModel):
     claim_type: str = Field(default="GENERAL", max_length=40)
 
 
+class PlannedQuery(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+    freshness: Literal["CURRENT", "HISTORICAL", "BALANCED"] = "BALANCED"
+
+
 class ResearchPlan(BaseModel):
     claims: list[PlannedClaim] = Field(default_factory=list, max_length=3)
-    queries: list[str] = Field(default_factory=list, max_length=5)
+    queries: list[PlannedQuery | str] = Field(default_factory=list, max_length=5)
 
 
 class EvidenceAssessment(BaseModel):
@@ -101,7 +106,15 @@ class ModelGateway:
     ) -> ModelRun:
         instructions = (
             "Extract at most three independently verifiable factual claims from this submission. "
-            "Return concise claims and at most five focused search queries. Queries should seek "
+            "Return concise claims and at most five focused search-query objects, each with text "
+            "and freshness. Classify each query as CURRENT when the claim is time-sensitive, "
+            "ongoing, asks about latest/current/recent state, or refers to a recent event whose "
+            "status should be checked against current reporting. Use HISTORICAL only when the "
+            "request is confined to a past period or settled historical record. Use BALANCED when "
+            "both the original period and later/current context matter. For CURRENT queries, seek "
+            "the latest available reports and updates; for HISTORICAL queries, preserve the "
+            "requested period and seek original records; for BALANCED, seek both. Search queries "
+            "should seek "
             "primary/official records first, then original sources, independent reporting, "
             "established fact-checks, and public records. When input marks a SUBMITTED SOURCE, "
             "extract what it claims but do not treat that article as independent proof. "
@@ -129,10 +142,14 @@ class ModelGateway:
         investigation_id,
     ) -> ModelRun:
         instructions = (
-            "Assess each supplied claim using only the supplied persisted evidence. Return one "
-            "finding per claim. Cite packet evidence IDs and assign a relationship to each. "
+            "Assess each supplied claim using only the supplied packet. Distinguish retrieved "
+            "evidence excerpts from source-candidate and retrieval context; only eligible cited "
+            "evidence may support or contradict a claim. Return one finding per claim. Cite "
+            "packet evidence IDs and assign a relationship to each. "
             "SUPPORTED requires supporting evidence; CONTRADICTED requires contradicting evidence. "
-            "Otherwise use INCONCLUSIVE or UNVERIFIED. Preserve disagreement and limitations. "
+            "Use UNVERIFIED when the packet has no retrieved, claim-linked evidence or has only "
+            "unreviewed source candidates. Use INCONCLUSIVE when retrieved evidence materially "
+            "conflicts or cannot be reconciled. Preserve disagreement and limitations. "
             "For each finding, draft a direct, plain-language answer for the person who asked: "
             "state what the evidence does and does not establish, and name the most relevant "
             "finding or source detail when the packet supports it. This statement is user-facing. "
@@ -142,7 +159,10 @@ class ModelGateway:
             "relevant traceable evidence but material gaps or limited corroboration; HIGH requires "
             "multiple relevant, independent, authoritative sources with no material conflict. "
             "Provide a short confidence_rationale grounded in source quality, independence, "
-            "relevance, and disagreement. Never use HIGH when the claim is UNVERIFIED or "
+            "relevance, and disagreement. When evidence is absent, still give a useful, specific "
+            "answer: say what the search and retrieval found, what could not be assessed, "
+            "and the most useful next step. Do not turn source candidates or search-result titles "
+            "into evidence. Never use HIGH when the claim is UNVERIFIED or "
             "INCONCLUSIVE. This is a qualitative, uncalibrated evidence-strength judgment, not a "
             "numeric score or probability. Do not assert specifics absent from the packet. "
             "Treat SUBMITTED sources as context, not proof. Consider source type, claim-specific "

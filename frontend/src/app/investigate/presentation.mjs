@@ -12,12 +12,12 @@ const STATUS_COPY = {
   UNVERIFIED: {
     icon: "○",
     label: "Not verified",
-    explanation: "There isn’t enough reliable evidence to confirm this yet.",
+    explanation: "The evidence reviewed did not establish whether this claim is accurate.",
   },
   INCONCLUSIVE: {
     icon: "?",
     label: "Inconclusive",
-    explanation: "The available evidence points in different directions or is insufficient for a clear conclusion.",
+    explanation: "Retrieved evidence conflicts or cannot be reconciled into a clear conclusion.",
   },
   MISLEADING_CONTEXT: {
     icon: "!",
@@ -148,17 +148,17 @@ export function unknownsFromResults(results, reviewComplete = true) {
     unknowns.push("No verifiable claim was extracted from the submitted request.");
   }
   if (results.evidence_coverage.claims_without_linked_evidence > 0) {
-    unknowns.push("No evidence is linked to one or more claims.");
+    unknowns.push("No retrieved evidence excerpt is linked to one or more claims, so those claims could not be assessed from source content.");
   }
   if (results.sources.length > 0 && results.evidence_coverage.sources_retrieved === 0) {
-    unknowns.push("No source page could be independently retrieved.");
+    unknowns.push(`${results.sources.length} source candidate${results.sources.length === 1 ? " was" : "s were"} found, but no page content could be retrieved. Candidate titles are leads, not evidence.`);
   }
   const provenance = results.evidence.find((item) => item.provenance)?.provenance;
   if (provenance?.status === "NOT_PRESENT") {
     unknowns.push("No supported Content Credentials were present; this does not indicate synthetic or manipulated media.");
   }
-  if (results.findings.some((item) => item.status === "UNVERIFIED" || item.status === "INCONCLUSIVE")) {
-    unknowns.push("The available evidence does not resolve every claim.");
+  if (results.findings.some((item) => item.status === "INCONCLUSIVE")) {
+    unknowns.push("Retrieved evidence conflicts or leaves a material question unresolved.");
   }
   if (unknowns.length === 0 && results.findings.length > 0) {
     unknowns.push("No additional unknowns were recorded in this brief.");
@@ -182,11 +182,15 @@ export function recommendedNextSteps(results, reviewComplete = true) {
   if (results.findings.every((item) => item.status === "SUPPORTED" || item.status === "CONTRADICTED") && results.evidence.length > 0) {
     return [];
   }
-  return [
-    "Locate the original upload or request the original media file.",
-    "Check for an official statement and seek another independent source.",
-    "Consider an external reverse-image search; Agent 0 did not perform one.",
-  ];
+  const steps = [];
+  if (results.sources.length === 0 || results.evidence_coverage.sources_retrieved === 0) {
+    steps.push("Open a source candidate and provide an accessible primary source or article with the relevant passage.");
+  }
+  steps.push("Check for an official statement and compare it with an independent source.");
+  if (results.media_assets?.some((asset) => asset.media_type === "IMAGE" && asset.role.toUpperCase() === "ORIGINAL")) {
+    steps.push("Locate the original upload and consider an external reverse-image search; Agent 0 did not perform one.");
+  }
+  return steps;
 }
 
 /** @param {import('./types').Results} results */

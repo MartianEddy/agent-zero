@@ -16,6 +16,7 @@ from app.modules.investigations.investigator import (
     ModelInvocationFailed,
     ModelRun,
     PlannedClaim,
+    PlannedQuery,
     ReasonedFinding,
     ResearchPlan,
 )
@@ -33,7 +34,11 @@ from app.modules.investigations.models import (
     SearchTrace,
     Source,
 )
-from app.modules.investigations.orchestrator import _persist_findings, process_investigation
+from app.modules.investigations.orchestrator import (
+    _persist_findings,
+    _query_for_freshness,
+    process_investigation,
+)
 from app.modules.investigations.provider_errors import FailureCategory
 from app.modules.investigations.routes import retry_investigation
 from app.modules.investigations.service import InvestigationService
@@ -119,7 +124,9 @@ class CostControlledPipelineTests(unittest.TestCase):
         self.assertTrue(event_record.event_metadata["retryable"])
         self.assertIsNone(record.total_tokens)
 
-    def _provider_patches(self, *, final_error: bool = True, queries: list[str] | None = None):
+    def _provider_patches(
+        self, *, final_error: bool = True, queries: list[str | PlannedQuery] | None = None
+    ):
         search_counter = 0
         plan = ResearchPlan(
             claims=[
@@ -174,11 +181,14 @@ class CostControlledPipelineTests(unittest.TestCase):
         def search(**kwargs):
             nonlocal search_counter
             search_counter += 1
+            if hasattr(self, "search_queries"):
+                self.search_queries.append(kwargs["query"])
             results = [
                 {
                     "url": f"https://news.example/story/{search_counter}?utm_source=test#top",
                     "title": f"Nyeri County school notice {search_counter}",
                     "author": "County Desk",
+                    "publishedDate": "2026-10-03T08:00:00Z",
                 }
             ]
             return ExaSearchResponse(request_id="mock-request", results=results)
@@ -236,6 +246,42 @@ class CostControlledPipelineTests(unittest.TestCase):
             "Evidence collected so far has been preserved", self.investigation.failure_reason
         )
         self.assertNotIn("PROVIDER_UNAVAILABLE", self.investigation.failure_reason)
+
+    def test_freshness_intent_is_encoded_in_dispatched_search_query(self) -> None:
+        current_query = _query_for_freshness("Mwai Kibaki death report", "CURRENT")
+        self.assertIn(
+            "latest official updates",
+            current_query,
+        )
+        self.assertEqual(_query_for_freshness(current_query, "CURRENT"), current_query)
+        self.assertIn(
+            "original records and recent reporting",
+            _query_for_freshness("Mwai Kibaki biography", "BALANCED"),
+        )
+        self.assertEqual(
+            _query_for_freshness("Mwai Kibaki presidency 2002 to 2013", "HISTORICAL"),
+            "Mwai Kibaki presidency 2002 to 2013",
+        )
+        self.assertEqual(
+            ResearchPlan(
+                queries=[PlannedQuery(text="latest cabinet changes", freshness="CURRENT")]
+            )
+            .queries[0]
+            .freshness,
+            "CURRENT",
+        )
+
+    def test_current_query_dispatch_persists_publication_dates(self) -> None:
+        self.search_queries = []
+        self._run_with_patches(
+            self._provider_patches(
+                final_error=True,
+                queries=[PlannedQuery(text="Mwai Kibaki death latest", freshness="CURRENT")],
+            )
+        )
+        self.assertIn("latest official updates", self.search_queries[0])
+        source = self.session.scalar(select(Source))
+        self.assertEqual(source.published_at, "2026-10-03T08:00:00Z")
 
     def test_normal_text_flow_completes_with_two_model_operations(self) -> None:
         result = self._run_with_patches(self._provider_patches(final_error=False))
@@ -396,7 +442,7 @@ class CostControlledPipelineTests(unittest.TestCase):
             ),
         )
         finding = self.session.scalar(select(Finding).where(Finding.claim_id == claim.id))
-        self.assertEqual(finding.status, "INCONCLUSIVE")
+        self.assertEqual(finding.status, "UNVERIFIED")
         self.assertEqual(self.session.scalar(select(func.count()).select_from(FindingEvidence)), 0)
 
     def test_contradicted_finding_requires_contradicting_evidence(self) -> None:
@@ -441,7 +487,7 @@ class CostControlledPipelineTests(unittest.TestCase):
             ),
         )
         finding = self.session.scalar(select(Finding).where(Finding.claim_id == claim.id))
-        self.assertEqual(finding.status, "INCONCLUSIVE")
+        self.assertEqual(finding.status, "UNVERIFIED")
 
 
 if __name__ == "__main__":

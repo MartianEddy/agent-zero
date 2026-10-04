@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import re
+from datetime import datetime
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -144,6 +145,17 @@ def _source_domain(url: str) -> str | None:
     return (urlsplit(url).hostname or "").casefold() or None
 
 
+def _valid_publication_date(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return value[:80]
+
+
 def _normalized_existing_sources(session: Session, investigation_id: UUID) -> dict[str, Source]:
     output: dict[str, Source] = {}
     for source in session.scalars(
@@ -163,6 +175,7 @@ def _create_source_candidate(
     url: str,
     title: str | None = None,
     publisher: str | None = None,
+    published_at: str | None = None,
     discovery_method: str,
     trace_id: UUID | None = None,
 ) -> Source | None:
@@ -172,7 +185,11 @@ def _create_source_candidate(
         return None
     existing = _normalized_existing_sources(session, investigation.id)
     if normalized in existing:
-        return existing[normalized]
+        source = existing[normalized]
+        if published_at and not source.published_at:
+            source.published_at = published_at[:80]
+            session.commit()
+        return source
     settings = get_settings()
     if len(existing) >= settings.max_sources_per_investigation:
         add_limitation(session, investigation.id, "Source-candidate limit reached.")
@@ -185,6 +202,7 @@ def _create_source_candidate(
         publisher=(classify_source(domain or "").name if domain else publisher or "")[:255] or None,
         domain=domain,
         source_type=classify_source(domain or "").source_type,
+        published_at=published_at[:80] if published_at else None,
         source_role="SUBMITTED" if discovery_method == "SUBMITTED_URL" else "UNKNOWN",
         discovery_method=discovery_method[:40],
         discovery_trace_id=trace_id,
@@ -254,9 +272,9 @@ def _save_retrieved_source(
         return None
     text = page.text[: getattr(settings, "max_retrieved_document_chars", 60_000)]
     source.title = (page.title or source.title or "")[:2000] or None
-    source.author = (page.author or "")[:255] or None
-    source.published_at = (page.published_at or "")[:80] or None
-    source.modified_at = (page.modified_at or "")[:80] or None
+    source.author = (page.author or source.author or "")[:255] or None
+    source.published_at = (page.published_at or source.published_at or "")[:80] or None
+    source.modified_at = (page.modified_at or source.modified_at or "")[:80] or None
     if page.canonical_url:
         try:
             source.canonical_url = normalize_source_url(page.canonical_url)
@@ -460,8 +478,14 @@ def _persist_plan(
     )
     already_planned = {trace.query for trace in traces}
     queries = []
-    for query in plan.queries:
-        normalized_query = " ".join(query.split())[:500]
+    for planned_query in plan.queries:
+        if isinstance(planned_query, str):
+            query_text = planned_query
+            freshness = "BALANCED"
+        else:
+            query_text = planned_query.text
+            freshness = planned_query.freshness
+        normalized_query = _query_for_freshness(query_text, freshness)[:500]
         if normalized_query and normalized_query not in already_planned:
             queries.append(normalized_query)
             already_planned.add(normalized_query)
@@ -479,6 +503,25 @@ def _persist_plan(
             )
         )
     session.commit()
+
+
+def _query_for_freshness(query: str, freshness: str) -> str:
+    """Turn Luna's temporal classification into explicit provider search intent."""
+    query = " ".join(query.split())
+    if freshness == "CURRENT":
+        if "prioritize current information and dated sources" in query.casefold():
+            return query[:500]
+        query = query[:350]
+        query += (
+            " latest official updates and recent independent reporting; prioritize current "
+            "information and dated sources"
+        )
+    elif freshness == "BALANCED":
+        if "original records and recent reporting that checks the current context" in query.casefold():
+            return query[:500]
+        query = query[:400]
+        query += " original records and recent reporting that checks the current context"
+    return query[:500]
 
 
 def _link_unclaimed_media_evidence(session: Session, investigation: Investigation) -> None:
@@ -761,6 +804,7 @@ def _execute_searches(session: Session, investigation: Investigation) -> None:
                 url=str(item["url"]),
                 title=str(item.get("title") or ""),
                 publisher=str(item.get("author") or _source_domain(str(item["url"])) or ""),
+                published_at=_valid_publication_date(item.get("publishedDate")),
                 discovery_method="EXA",
                 trace_id=trace.id,
             )
@@ -1050,6 +1094,24 @@ def _evidence_packet(session: Session, investigation: Investigation) -> str:
                 )
             )
         ],
+        "source_candidates_not_evidence": [
+            {
+                "source_id": str(source.id),
+                "title": (source.title or "")[:250],
+                "publisher": (source.publisher or "")[:100],
+                "domain": source.domain,
+                "source_type": source.source_type,
+                "published_at": source.published_at,
+                "retrieval_status": source.retrieval_status,
+                "role": "Candidate only; page content was not retrieved as evidence.",
+            }
+            for source in session.scalars(
+                select(Source)
+                .where(Source.investigation_id == investigation.id)
+                .order_by(Source.id)
+                .limit(12)
+            )
+        ],
         "evidence": [],
         "source_relationships": [],
         "limitations": _usage(session, investigation.id).limitations,
@@ -1280,9 +1342,7 @@ def _persist_findings(
                         support_capable_ids.add(evidence_id)
                 if evidence.source_id is not None:
                     contradiction_capable_ids.add(evidence_id)
-        status = candidate.status if candidate is not None else "INCONCLUSIVE"
-        has_support = any(rel == "SUPPORTS" for _, rel in accepted)
-        has_contradiction = any(rel == "CONTRADICTS" for _, rel in accepted)
+        status = candidate.status if candidate is not None else "UNVERIFIED"
         has_eligible_support = any(
             rel == "SUPPORTS" and evidence_id in support_capable_ids
             for evidence_id, rel in accepted
@@ -1292,15 +1352,20 @@ def _persist_findings(
             for evidence_id, rel in accepted
         )
         if status == "SUPPORTED" and not has_eligible_support:
-            status = "INCONCLUSIVE"
+            status = "UNVERIFIED"
         elif status == "CONTRADICTED" and not has_eligible_contradiction:
+            status = "UNVERIFIED"
+        has_material_conflict = has_eligible_support and has_eligible_contradiction
+        if has_material_conflict:
             status = "INCONCLUSIVE"
-        if has_support and has_contradiction:
-            status = "INCONCLUSIVE"
-        if status not in ALLOWED_FINDING_STATUSES or not accepted:
-            status = "INCONCLUSIVE"
-        conflicting = has_support and has_contradiction
-        if candidate is not None and status != "INCONCLUSIVE":
+        elif status == "INCONCLUSIVE":
+            status = "UNVERIFIED"
+        if status not in ALLOWED_FINDING_STATUSES:
+            status = "UNVERIFIED"
+        if not accepted and status in {"SUPPORTED", "CONTRADICTED", "INCONCLUSIVE"}:
+            status = "UNVERIFIED"
+        conflicting = has_material_conflict
+        if candidate is not None and status == candidate.status and not conflicting:
             statement = candidate.statement.strip()
             limitations = candidate.limitations
             evidence_confidence = candidate.evidence_confidence
@@ -1314,10 +1379,30 @@ def _persist_findings(
             confidence_rationale = (
                 "Retrieved evidence conflicts, so the available record cannot resolve the claim."
             )
-        else:
-            statement = "There is not enough traceable evidence to assess this claim."
+        elif accepted:
+            statement = (
+                "The retrieved material did not provide enough claim-specific evidence to "
+                "confirm or challenge this claim. Review the linked context and seek a source "
+                "that addresses it directly."
+            )
             limitations = [
-                "No accepted evidence with a matching relationship supports a factual conclusion."
+                "Retrieved excerpts were linked, but none had an eligible relationship and source "
+                "type to support a factual conclusion."
+            ]
+            evidence_confidence = "LOW"
+            confidence_rationale = (
+                "The linked material did not provide eligible, claim-specific support or "
+                "contradiction."
+            )
+        else:
+            statement = (
+                "Agent 0 could not verify this claim because no retrieved, claim-linked evidence "
+                "was available. Review the source candidates or provide an accessible primary "
+                "source."
+            )
+            limitations = [
+                "Source candidates and search-result titles are leads, not evidence; no retrieved "
+                "excerpt was available to assess this claim."
             ]
             evidence_confidence = "LOW"
             confidence_rationale = (
@@ -1327,6 +1412,11 @@ def _persist_findings(
             evidence_confidence = "LOW"
             confidence_rationale = (
                 "The evidence does not resolve the claim, so confidence in this assessment is low."
+            )
+        if not accepted:
+            evidence_confidence = "LOW"
+            confidence_rationale = (
+                "No retrieved, claim-linked excerpt was available to assess the evidence."
             )
         if status == "SUPPORTED":
             supporting_methods = {
@@ -1394,7 +1484,7 @@ def _persist_findings(
     _audit(session, investigation.id, "FINDINGS_CREATED", {"count": len(claims)})
 
 
-def _create_inconclusive_findings(session: Session, investigation: Investigation) -> None:
+def _create_unverified_findings(session: Session, investigation: Investigation) -> None:
     claims = list(session.scalars(select(Claim).where(Claim.investigation_id == investigation.id)))
     existing = {
         item.claim_id
@@ -1408,8 +1498,12 @@ def _create_inconclusive_findings(session: Session, investigation: Investigation
                 Finding(
                     investigation_id=investigation.id,
                     claim_id=claim.id,
-                    status="INCONCLUSIVE",
-                    statement="There is not enough traceable evidence to assess this claim.",
+                    status="UNVERIFIED",
+                    statement=(
+                        "Agent 0 could not verify this claim because no retrieved, claim-linked "
+                        "evidence was available. Review the listed source candidates or provide "
+                        "an accessible primary source."
+                    ),
                     evidence_confidence="LOW",
                     confidence_rationale=(
                         "The available evidence is insufficient or not traceably linked to this claim."
@@ -1485,7 +1579,20 @@ def _load_plan(session: Session, investigation_id: UUID) -> ResearchPlan:
             )
         )
     )
-    from app.modules.investigations.investigator import PlannedClaim
+    from app.modules.investigations.investigator import PlannedClaim, PlannedQuery
+
+    planned_queries = []
+    for item in planned:
+        query = item.query or ""
+        freshness = (
+            "CURRENT"
+            if "prioritize current information and dated sources" in query.casefold()
+            else "BALANCED"
+            if "original records and recent reporting that checks the current context"
+            in query.casefold()
+            else "HISTORICAL"
+        )
+        planned_queries.append(PlannedQuery(text=query[:500], freshness=freshness))
 
     return ResearchPlan(
         claims=[
@@ -1494,7 +1601,7 @@ def _load_plan(session: Session, investigation_id: UUID) -> ResearchPlan:
             )
             for item in claims
         ],
-        queries=[item.query or "" for item in planned],
+        queries=planned_queries,
     )
 
 
@@ -1614,7 +1721,7 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
             session.scalars(select(Claim).where(Claim.investigation_id == investigation.id))
         )
         evidence_exists = _has_claim_linked_evidence(session, investigation)
-        if evidence_exists and claims:
+        if claims:
             has_missing_findings = any(
                 session.scalar(select(Finding.id).where(Finding.claim_id == claim.id).limit(1))
                 is None
@@ -1629,13 +1736,13 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
                 )
                 _persist_findings(session, investigation, result.output)
         else:
-            _create_inconclusive_findings(session, investigation)
-            if claims and not evidence_exists:
-                add_limitation(
-                    session,
-                    investigation.id,
-                    "No retrieved evidence was available; findings remain inconclusive.",
-                )
+            _create_unverified_findings(session, investigation)
+        if claims and not evidence_exists:
+            add_limitation(
+                session,
+                investigation.id,
+                "No retrieved evidence was available; findings remain unverified.",
+            )
         if investigation.status != InvestigationStatus.GENERATING_BRIEF:
             _stage(session, investigation, InvestigationStatus.GENERATING_BRIEF)
         _build_brief(session, investigation)
