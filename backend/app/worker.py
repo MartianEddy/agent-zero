@@ -16,6 +16,10 @@ celery_app.conf.update(
         "dispatch-investigation-outbox": {
             "task": "agent_zero.dispatch_outbox",
             "schedule": 2.0,
+        },
+        "recover-stalled-investigations": {
+            "task": "agent_zero.recover_stalled_investigations",
+            "schedule": 60.0,
         }
     },
 )

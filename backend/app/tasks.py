@@ -1,10 +1,11 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
 
 from app.db.session import SessionLocal
-from app.modules.investigations.models import OutboxEvent
+from app.domain.investigation import InvestigationStatus
+from app.modules.investigations.models import AuditEvent, Investigation, OutboxEvent, ProcessingJob
 from app.modules.investigations.orchestrator import process_investigation as run_pipeline
 from app.worker import celery_app
 
@@ -33,6 +34,62 @@ def dispatch_outbox() -> int:
             dispatched += 1
         session.commit()
     return dispatched
+
+
+@celery_app.task(name="agent_zero.recover_stalled_investigations")
+def recover_stalled_investigations() -> int:
+    """Stop reporting work as active when its worker has disappeared."""
+    cutoff = datetime.now(UTC) - timedelta(minutes=10)
+    recovered = 0
+    active_statuses = (
+        InvestigationStatus.RECEIVED,
+        InvestigationStatus.PROCESSING,
+        InvestigationStatus.ANALYZING,
+        InvestigationStatus.RESEARCHING,
+        InvestigationStatus.CORROBORATING,
+        InvestigationStatus.GENERATING_BRIEF,
+    )
+    with SessionLocal() as session:
+        rows = list(
+            session.execute(
+                select(Investigation, ProcessingJob)
+                .join(ProcessingJob, ProcessingJob.investigation_id == Investigation.id)
+                .where(
+                    Investigation.status.in_(active_statuses),
+                    Investigation.updated_at < cutoff,
+                    ProcessingJob.status.in_(["QUEUED", "RUNNING"]),
+                )
+                .order_by(Investigation.updated_at)
+                .limit(50)
+                .with_for_update(skip_locked=True)
+            ).all()
+        )
+        for investigation, job in rows:
+            # Recheck under lock; a worker may have advanced the stage while
+            # the sweep query was being assembled.
+            if investigation.updated_at >= cutoff or job.status not in {"QUEUED", "RUNNING"}:
+                continue
+            investigation.status = InvestigationStatus.FAILED
+            investigation.current_stage = InvestigationStatus.FAILED.value
+            investigation.failure_reason = (
+                "This investigation stopped progressing before its evidence review was complete. "
+                "You can retry it; any evidence already collected remains available."
+            )
+            job.status = "BLOCKED"
+            job.error_code = "WORKER_STALLED"
+            job.attempts += 1
+            session.add(
+                AuditEvent(
+                    investigation_id=investigation.id,
+                    event_type="INVESTIGATION_WORKER_STALLED",
+                    actor="system",
+                    event_metadata={"last_stage": job.stage},
+                )
+            )
+            recovered += 1
+        if recovered:
+            session.commit()
+    return recovered
 
 
 @celery_app.task(

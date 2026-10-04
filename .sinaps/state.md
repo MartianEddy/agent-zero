@@ -1,9 +1,10 @@
 ---
 project: agent-zero
 current_stage: OPERATE
-tier: medium
-tier_reason: Improves journalist-facing investigation summaries across the backend, web UI, and ClickCast guidance; adds a reference-bound WhatsApp recheck interaction without a schema change.
-last_updated: 2026-10-04T02:21:39Z
+tier: small
+tier_reason: Fix stalled investigation recovery and active/terminal state messaging across the worker and investigation UI; no schema change.
+last_updated: 2026-10-04T06:35:00Z
+current_session_deliverable: Diagnose and fix investigations that remain active after worker loss; improve interim and image-only result messaging.
 ---
 
 ## Current feature
@@ -26,6 +27,8 @@ Agent 0 cost-controlled evidence-first investigation pipeline, URL Source Intell
 - The ClickCast payload schema and dynamic outbound reply mechanism are undocumented publicly; confirm with a test event before live webhook traffic or WhatsApp result replies.
 
 ## Last session summary
+Investigation stuck-state and result UX fix (2026-10-04): added a one-minute worker-beat sweep that changes active jobs with no stage update for 10 minutes to a retryable FAILED state, records a WORKER_STALLED code and audit event, and preserves collected evidence. Updated investigation result messaging so empty claim/source/evidence/media states read as in-progress until the job is terminal; terminal failures are labelled paused, and image-only results ask for claim/context without implying a factual assessment. ESLint, TypeScript no-emit, Ruff, Python AST parsing, and diff whitespace checks passed; tests and browser journey were not run. The user-provided Render host could not be resolved from this environment, so the specific investigation record and worker logs could not be inspected; the failure mode is addressed defensively but the screenshot's exact cause is not confirmed. Deploying this worker/UI change remains necessary for it to affect the hosted demo.
+
 Frontend reference recheck and Render web service (2026-10-04): added owner-scoped API lookup by investigation reference and a journalist-facing reference form on the history screen that opens the existing live status/results view. Centralized frontend API origin handling so Render's private `hostport` value is accepted without exposing credentials. Added a free Next.js Render web service to the Blueprint and clear shared-demo warnings in the investigation/history UI. Deployment remains non-sensitive demo only; public production/auth/retention/provider decisions remain open. Tests not run.
 
 ClickCast WhatsApp hardening (2026-10-04): result lookup optionally selects the latest sender-owned WhatsApp investigation when no reference is passed, and terminal outcomes report ready with an explanatory summary. When ClickCast omits a stable event ID, identical active submissions from the same sender reuse existing work; a stable ID remains needed for concurrency-safe retry idempotency. Updated setup and architecture notes. ClickCast automatic completion webhook recipient/auth contract is still undocumented, so no push sender or raw recipient storage was added. No schema change. Tests not run.
@@ -49,3 +52,5 @@ URL Source Intelligence v0.2 adds submitted-source retrieval/metadata/failure st
 Evidence Localization + Source Prioritization v0.3 adds claim-aware deterministic source ordering before bounded retrieval and heading/table-aware evidence windows ranked using numbers, entities, units, dates, titles, registry scope and source roles. Boilerplate receives a relevance penalty. Excerpts remain traceable and `UNKNOWN` until reasoning; no new model operation or schema migration was added. Validation used only local fixtures/mocks; no live OpenAI, Exa, or source-reader calls were made.
 
 Targeted PDF Evidence Acquisition v0.4 separates source acquisition (60,000 characters) from selected evidence context (6,000 per source and 24,000 total). Full bounded reader text is stored in private object storage, then deterministic claim-anchor scanning chooses at most four local regions per claim before the existing evidence passage ranker. Local CA-style fixture places target figures beyond character 6,000. No schema migration or live provider/search/reader calls.
+
+Agent 0 launch video (2026-10-04): read the product requirements, public-site UX journey, architecture, brand audit, frontend homepage/product/how-it-works/investigation flow, and brand board/workspace/workflow/landing references. Created `brag-output-2026-10-04-082012/brag-plan.md`, composition brief, a HyperFrames composition pinned to 0.8.119, and share copy. The supplied 55.09-second HUD effects MP3 is retained in the composition and mixed to a 23.4-second local WAV at 20% gain with fades. The composition uses the site's Nyeri schools example and keeps “ILLUSTRATIVE EXAMPLE · NOT A LIVE CHECK” visible; it makes no production-readiness, adoption, or certainty claims. `hyperframes check --snapshots --json` passed runtime, layout and contrast with 0 errors; 5 non-blocking nested-scene-structure warnings remain. User authorized proceeding with available resources and no cache cleanup. Single-worker render completed; final MP4 is H.264/AAC, 1920x1080, 30 fps, 23.4 seconds, 702 frames. Extracted and visually inspected the opening hook as `brag.jpg`, baked it into frame one, and verified duration/frame count/audio streams after encoding. Post-render health remains BLOCKED (CPU load 9.91/4 cores, disk 2% free; RAM 69%, swap 3.59/4.1 GiB); render and poster are complete. No cache, images, containers or volumes were pruned.

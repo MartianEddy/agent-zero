@@ -264,6 +264,7 @@ export default function InvestigatePage() {
   }
 
   const finished = investigation !== null && !ACTIVE.has(investigation.status);
+  const completed = investigation?.status === "COMPLETE";
   const claims = results?.claims ?? [];
   const evidence = (results?.evidence ?? []).filter((item) => item.method !== "MEDIA_FINGERPRINT");
   const mediaEvidence = evidence.filter((item) => Boolean(item.media_asset));
@@ -326,18 +327,18 @@ export default function InvestigatePage() {
           <p>Try asking</p>{EXAMPLES.map((example) => <button type="button" key={example} onClick={() => { setContent(example); selectFile(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}>{example}</button>)}
         </section>}
 
-        {investigation && <section className={styles.results} aria-live="polite" aria-labelledby="result-title">
+        {investigation && <section className={styles.results} aria-labelledby="result-title">
           <div className={styles.resultHeader}>
-            <div><p className="eyebrow">Investigation {investigation.reference}</p><h2 id="result-title">{finished ? "What Agent 0 found" : "Investigating…"}</h2></div>
+            <div><p className="eyebrow">Investigation {investigation.reference}</p><h2 id="result-title">{completed ? "What Agent 0 found" : investigation.status === "FAILED" || investigation.status === "NEEDS_REVIEW" ? "Investigation paused" : investigation.status === "CANCELLED" ? "Investigation cancelled" : "Investigating…"}</h2></div>
             <div className={styles.checked}>Last checked <time dateTime={lastChecked}>{lastChecked ? new Date(lastChecked).toLocaleTimeString() : "just now"}</time></div>
           </div>
 
           <div className={styles.stagePanel}>
             <span className={`${styles.stageMark}${finished ? "" : ` ${styles.stageActive}`}`} aria-hidden="true">{finished ? "✓" : "…"}</span>
-            <div><strong>{stagePresentation(investigation.current_stage)}</strong><span>{investigation.status === "NEEDS_REVIEW" ? "Review needed" : investigation.status === "FAILED" ? "Couldn’t complete" : "In progress"}</span></div>
+            <div><strong>{stagePresentation(investigation.current_stage)}</strong><span role="status" aria-live="polite">{investigation.status === "NEEDS_REVIEW" ? "Review needed" : investigation.status === "FAILED" ? "Couldn’t complete" : investigation.status === "CANCELLED" ? "Cancelled" : completed ? "Complete" : "In progress"}</span></div>
             {!finished && <p className={styles.processingNote}>This can take a little while. You can stay here while Agent 0 checks the available evidence.</p>}
           </div>
-          {investigation.failure_reason && <div className={styles.failure} role="alert"><strong>Part of the investigation couldn’t be completed</strong><p>Some checks may still be available below. Review the evidence and limitations before drawing a conclusion.</p></div>}
+          {investigation.failure_reason && <div className={styles.failure} role="alert"><strong>Agent 0 stopped before completing the review</strong><p>{safeEvidenceText(investigation.failure_reason)} Review any evidence already collected before drawing a conclusion.</p></div>}
           {results?.retry_allowed && <button type="button" className="button button-secondary" disabled={retryBusy} onClick={() => void retryInvestigation()}>{retryBusy ? "Retrying…" : "Retry investigation"}</button>}
           {error && <p className={styles.error} role="alert">{error}</p>}
 
@@ -351,7 +352,7 @@ export default function InvestigatePage() {
 
             <section id="overview" className={styles.overview}>
               <div className={styles.overviewMain}>
-                <p className={styles.sectionKicker}>What we are investigating</p>
+                <p className={styles.sectionKicker}>{originalMedia && !content.trim() ? "Image submitted" : "What we are investigating"}</p>
                 {claims.length > 0 ? <div className={styles.claimList}>{claims.map((claim) => {
                   const finding = results.findings.find((item) => item.claim_id === claim.id);
                   const presentation = finding ? statusPresentation(finding.status) : null;
@@ -376,7 +377,7 @@ export default function InvestigatePage() {
                 })}</div> : <article className={styles.finding}>
                   <p className={styles.sectionKicker}>Submitted question</p>
                   {content.trim() && <h3>{safeEvidenceText(content.trim())}</h3>}
-                  <p className={styles.empty}>No verifiable claim was extracted from this request. The question is shown as submitted, not treated as a finding.</p>
+                  <p className={styles.empty}>{!finished ? "Agent 0 is examining the submission. Any claim or image observations will appear here when this step is complete." : originalMedia && !content.trim() ? "No claim or context is available for this image review. Available file and origin signals do not establish where or when the depicted event occurred." : "No verifiable claim was extracted from this request. The question is shown as submitted, not treated as a finding."}</p>
                 </article>}
               </div>
             </section>
@@ -394,17 +395,17 @@ export default function InvestigatePage() {
                   <p className={styles.evidenceFamily}>{item.source ? safeEvidenceText(results.sources.find((source) => source.id === item.source?.id)?.publisher || "Source evidence") : "Image evidence"}</p>
                   <p>{safeEvidenceText(item.content).slice(0, 360)}{item.content.length > 360 ? "…" : ""}</p><a className={styles.textLink} href={`#evidence-${item.id}`}>{relationshipPresentation(relationship)} · See details</a>
                 </article>)}
-              </div> : <p className={styles.empty}>No reliable evidence was linked to a finding. Review the available sources and what remains unknown below.</p>}
+              </div> : <p className={styles.empty}>{finished ? "No reliable evidence was linked to a finding. Review the available sources and what remains unknown below." : "Agent 0 is gathering and reviewing available evidence. Findings will appear here when the review is complete."}</p>}
             </section>
 
             <section className={styles.unknowns} aria-labelledby="unknowns-title">
               <div><p className={styles.sectionKicker}>Open questions</p><h3 id="unknowns-title">What we still don’t know</h3></div>
-              {unknowns.length ? <ul>{unknowns.map((item) => <li key={item}>{safeEvidenceText(item)}</li>)}</ul> : <p>No additional unknowns were recorded.</p>}
+              {unknowns.length ? <ul>{unknowns.map((item) => <li key={item}>{safeEvidenceText(item)}</li>)}</ul> : <p>{finished ? "No additional unknowns were recorded." : "Open questions will be summarized when the evidence review is complete."}</p>}
             </section>
 
             <section className={styles.nextSteps} aria-labelledby="next-steps-title">
               <div><p className={styles.sectionKicker}>Continue the reporting</p><h3 id="next-steps-title">What you can do next</h3></div>
-              {nextSteps.length ? <ol>{nextSteps.map((item) => <li key={item}>{item}</li>)}</ol> : <p>Review the cited evidence with an editor before publication.</p>}
+              {nextSteps.length ? <ol>{nextSteps.map((item) => <li key={item}>{item}</li>)}</ol> : <p>{finished ? "Review the cited evidence with an editor before publication." : "Recommended next steps will appear when the evidence review is complete."}</p>}
             </section>
 
             <section id="evidence" className={styles.contentSection}>
@@ -416,10 +417,10 @@ export default function InvestigatePage() {
               {results.sources.length > 0 ? <div className={styles.sourceList}>
                 <h4>Sources reviewed</h4>
                 {results.sources.map((source) => <SourceCard key={source.id} source={source} evidence={filteredSourceEvidence} relationships={results.source_relationships} sources={results.sources} />)}
-              </div> : <p className={styles.empty}>No external sources were collected for this investigation.</p>}
+              </div> : <p className={styles.empty}>{finished ? "No external sources were collected for this investigation." : "Source checks are still in progress. Results will appear here when available."}</p>}
               {otherEvidence.length > 0 && <div className={styles.otherEvidence}>
                 <h4>Other evidence checked</h4>
-                {otherFilteredEvidence.length ? otherFilteredEvidence.map((item) => <EvidenceCard key={item.id} item={item} relationship={item.claim_links[0]?.relationship} />) : <p className={styles.empty}>No additional evidence matches this filter.</p>}
+                {otherFilteredEvidence.length ? otherFilteredEvidence.map((item) => <EvidenceCard key={item.id} item={item} relationship={item.claim_links[0]?.relationship} />) : <p className={styles.empty}>{finished ? "No additional evidence matches this filter." : "Evidence will appear here as Agent 0 reviews the submission and available sources."}</p>}
               </div>}
             </section>
 
@@ -427,7 +428,9 @@ export default function InvestigatePage() {
               <div className={styles.sectionHeading}><div><p className={styles.sectionKicker}>Image submitted</p><h3>Image details</h3></div><span className={styles.mediaState}>{mediaEvidence.length ? "Review available" : "Review pending"}</span></div>
               <div className={styles.mediaCard}>
                 <div className={styles.previewFrame}>
-                  {previewUnavailable
+                  {!finished
+                    ? <p className={styles.muted}>Preparing a safe image preview…</p>
+                    : previewUnavailable
                     ? <p className={styles.muted}>A safe preview will appear after media preparation.</p>
                     : <Image src={`/api/investigations/${investigation.id}/media-preview`} alt="Metadata-stripped preview of the submitted image" width={960} height={640} unoptimized onError={() => setPreviewUnavailable(true)} />}
                 </div>
@@ -445,7 +448,7 @@ export default function InvestigatePage() {
                     <p className={styles.caution}>{provenancePresentation(provenance.status).limitation}</p>
                     <details className={styles.offlineDetails}><summary>What does this mean?</summary><p>Content credentials can provide information about where an image came from or how it was edited. Their presence does not prove the event shown is true, and their absence does not mean an image is fake.</p><p>Technical details: credentials were checked on the uploaded file. Online certificate checks were not performed.</p></details>
                     {provenance.limitations.map((item) => <small className={styles.muted} key={item}>{safeEvidenceText(item)}</small>)}
-                  </> : <p className={styles.muted}>No image origin information is available.</p>}
+                  </> : <p className={styles.muted}>{finished ? "No image origin information is available." : "Checking available origin information…"}</p>}
                 </section>
 
                 <section className={styles.mediaGroup} aria-labelledby="metadata-title">
@@ -453,12 +456,12 @@ export default function InvestigatePage() {
                   {metadataEvidence.length ? metadataEvidence.map((item) => {
                     const fields = technicalMetadata(item.content);
                     return <div key={item.id}>{fields.length ? <dl className={styles.metadataList}>{fields.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl> : <p>Allowlisted technical metadata was examined.</p>}{item.limitations && <p className={styles.caution}>{safeEvidenceText(item.limitations)}</p>}</div>;
-                  }) : <p className={styles.muted}>No useful file details are available.</p>}
+                  }) : <p className={styles.muted}>{finished ? "No useful file details are available." : "Reviewing file details…"}</p>}
                 </section>
 
                 <section className={styles.mediaGroup} aria-labelledby="visual-title">
                   <p className={styles.sectionKicker}>Visual review</p><h4 id="visual-title">What Agent 0 can see</h4>
-                  {visualEvidence.length ? visualEvidence.flatMap((item): { observation: string; relevance: string; limitations: string[] }[] => visualObservations(item.content)).map((item, index) => <article className={styles.observation} key={`${item.observation}-${index}`}><span>OBSERVATION</span><p>{item.observation}</p>{item.relevance && <small>Relevance: {item.relevance}</small>}{item.limitations.map((limitation) => <small className={styles.caution} key={limitation}>{limitation}</small>)}</article>) : <p className={styles.muted}>{mediaNotice ? "Visual interpretation did not complete." : "No visual observations were recorded."}</p>}
+                  {visualEvidence.length ? visualEvidence.flatMap((item): { observation: string; relevance: string; limitations: string[] }[] => visualObservations(item.content)).map((item, index) => <article className={styles.observation} key={`${item.observation}-${index}`}><span>OBSERVATION</span><p>{item.observation}</p>{item.relevance && <small>Relevance: {item.relevance}</small>}{item.limitations.map((limitation) => <small className={styles.caution} key={limitation}>{limitation}</small>)}</article>) : <p className={styles.muted}>{mediaNotice ? "Visual interpretation did not complete." : finished ? "No visual observations were recorded." : "Visual review is still in progress…"}</p>}
                   <p className={styles.caution}>Visual interpretation may be incomplete or mistaken; it is not forensic proof.</p>
                 </section>
               </div>
@@ -468,7 +471,7 @@ export default function InvestigatePage() {
               <div><p className={styles.sectionKicker}>Read with care</p><h3 id="limitations-title">Limitations</h3></div>
               <ul>
                 {presentedLimitations(results).map((item) => <li key={item}>{item}</li>)}
-                {!results.brief?.limitations.length && !evidence.some((item) => item.limitations) && <li>Evidence collection is limited to the sources and media available in this investigation.</li>}
+                {!results.brief?.limitations.length && !evidence.some((item) => item.limitations) && <li>{finished ? "Evidence collection is limited to the sources and media available in this investigation." : "Limitations will be summarized after the evidence review."}</li>}
                 {originalMedia && <li>Reverse-image search was not performed.</li>}
               </ul>
             </section>
@@ -481,7 +484,7 @@ export default function InvestigatePage() {
                   const view = finding ? statusPresentation(finding.status) : null;
                   return <article className={styles.briefClaim} key={claim.id}><h4>Claim</h4><p>{safeEvidenceText(claim.text)}</p>{finding && <><h4>Status</h4><p>{view?.label} — {safeEvidenceText(finding.statement)}</p><h4>Key evidence</h4>{findingRelationship(finding, evidence).map(({ item, relationship }) => <a key={item.id} href={`#evidence-${item.id}`}>{relationshipPresentation(relationship)} · View cited evidence</a>)}</>}</article>;
                 })}
-                {claims.length === 0 && <article className={styles.briefClaim}><h4>Submitted question</h4><p>{content.trim() ? safeEvidenceText(content.trim()) : "No verifiable claim was extracted from this request."}</p><p>No factual finding was produced from the question alone.</p></article>}
+                {claims.length === 0 && <article className={styles.briefClaim}><h4>{originalMedia && !content.trim() ? "Image review" : "Submitted question"}</h4><p>{content.trim() ? safeEvidenceText(content.trim()) : originalMedia ? "No claim or context is available for this image review. Available image signals do not establish where or when the depicted event occurred." : "No verifiable claim was extracted from this request."}</p><p>No factual finding was produced from the question alone.</p></article>}
                 {originalMedia && <><h4>Image origin &amp; history</h4><p>{provenance ? `${provenancePresentation(provenance.status).label}. ${provenancePresentation(provenance.status).limitation}` : "An image was submitted; no origin information is available."}</p></>}
                 <h4>Assessment summary</h4><p className={styles.briefSummary}>{safeEvidenceText(results.brief.summary)}</p>
                 <h4>Unknowns</h4><ul>{unknowns.map((item) => <li key={item}>{item}</li>)}</ul>
