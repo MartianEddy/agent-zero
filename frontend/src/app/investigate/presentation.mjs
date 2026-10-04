@@ -132,6 +132,20 @@ export function aiDeclarationCopy(declarations) {
     : null;
 }
 
+/** A cautious direct answer for AI-origin questions when no factual claim was extracted. */
+export function imageOriginAnswer(question, provenanceStatus, declarations = []) {
+  if (!/\b(ai[- ]?generated|synthetic|deepfake|made by ai|created with ai|ai[- ]?made)\b/i.test(question)) return null;
+  const declaration = aiDeclarationCopy(declarations);
+  if (declaration) return `${declaration} This reports the attached declaration; it does not independently prove how the image was made.`;
+  if (provenanceStatus === "NOT_PRESENT") {
+    return "I can’t determine whether this image was AI-generated from its appearance. No supported Content Credentials were found; that absence does not mean the image is AI-generated. An original upload or source page is needed to investigate its origin.";
+  }
+  if (["INVALID", "INDETERMINATE", "UNSUPPORTED", "ERROR"].includes(provenanceStatus)) {
+    return "I can’t determine whether this image was AI-generated from its appearance. Agent 0 could not confirm its Content Credentials in this run, and no reverse-image search was performed. Share the original post or source page to investigate where it came from.";
+  }
+  return "I can’t determine whether this image was AI-generated from its appearance alone. A source page, original upload, or verifiable Content Credentials could provide useful origin information.";
+}
+
 /** @param {import('./types').Finding} finding @param {import('./types').Evidence[]} evidence */
 export function findingEvidenceReferences(finding, evidence) {
   return finding.evidence_ids.flatMap((id) => {
@@ -170,12 +184,12 @@ export function unknownsFromResults(results, reviewComplete = true) {
 export function recommendedNextSteps(results, reviewComplete = true) {
   if (!reviewComplete) return [];
   if (results.claims.length === 0) {
-    const steps = ["Add a specific, verifiable claim or question to investigate."];
+    const steps = [];
     if (results.media_assets?.some((asset) => asset.media_type === "IMAGE" && asset.role.toUpperCase() === "ORIGINAL")) {
-      steps.push("Review any available Content Credentials for an attributable AI declaration.");
-      steps.push("Seek independent source evidence about the image's origin.");
+      steps.push("Share the original post or source page where you found the image.");
+      steps.push("An external reverse-image search may help trace earlier appearances; Agent 0 did not perform one.");
     } else {
-      steps.push("Review the submitted material and identify details that can be checked independently.");
+      steps.push("Add a specific, verifiable claim or context to investigate.");
     }
     return steps;
   }

@@ -4,7 +4,7 @@ import hashlib
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -16,6 +16,7 @@ from app.domain.investigation import InputType, InvestigationStatus, validate_tr
 from app.modules.investigations.image_safety import ImageValidationError
 from app.modules.investigations.investigator import (
     EvidenceReasoning,
+    ImageQuestionAnswer,
     ModelGateway,
     ModelInvocationFailed,
     ResearchPlan,
@@ -78,6 +79,7 @@ USER_FAILURE_MESSAGE = (
     "Evidence collected so far has been preserved. "
     "No unsupported verification finding was produced."
 )
+CURRENT_QUERY_MARKER = "prioritize current information and dated sources"
 
 
 class MediaStorageError(RuntimeError):
@@ -154,6 +156,42 @@ def _valid_publication_date(value: object) -> str | None:
     except ValueError:
         return None
     return value[:80]
+
+
+def _relative_date_context(text: str, received_at: datetime) -> str:
+    """Resolve common relative dates deterministically against intake UTC date."""
+    utc_received = (
+        received_at.astimezone(timezone.utc)
+        if received_at.tzinfo
+        else received_at.replace(tzinfo=timezone.utc)
+    )
+    reference_date = utc_received.date()
+    normalized = []
+    if re.search(r"\btoday\b", text, re.I):
+        normalized.append(f"'today' means {reference_date.isoformat()} UTC.")
+    if re.search(r"\byesterday\b", text, re.I):
+        normalized.append(f"'yesterday' means {reference_date - timedelta(days=1):%Y-%m-%d} UTC.")
+    if re.search(r"\b(\d{1,2})\s+days?\s+ago\b", text, re.I):
+        for match in re.finditer(r"\b(\d{1,2})\s+days?\s+ago\b", text, re.I):
+            days = int(match.group(1))
+            if days <= 3650:
+                normalized.append(
+                    f"'{match.group(0)}' means {reference_date - timedelta(days=days):%Y-%m-%d} UTC."
+                )
+    if re.search(r"\blast week\b", text, re.I):
+        start_of_week = reference_date - timedelta(days=reference_date.weekday() + 7)
+        normalized.append(
+            f"'last week' is interpreted as {start_of_week:%Y-%m-%d} through "
+            f"{start_of_week + timedelta(days=6):%Y-%m-%d} UTC calendar week."
+        )
+    if not normalized:
+        return ""
+    return (
+        "Relative-date normalization: "
+        + " ".join(normalized)
+        + " This is a UTC calendar basis; the submitter timezone is unknown and may shift "
+        "the date near midnight. State this ambiguity if it could affect the conclusion."
+    )
 
 
 def _normalized_existing_sources(session: Session, investigation_id: UUID) -> dict[str, Source]:
@@ -489,6 +527,21 @@ def _persist_plan(
         if normalized_query and normalized_query not in already_planned:
             queries.append(normalized_query)
             already_planned.add(normalized_query)
+    # Reserve budget for historical context beside recent coverage. Search results
+    # from the background lane never substitute for date-checked recent reporting.
+    current_queries = [query for query in queries if CURRENT_QUERY_MARKER in query.casefold()]
+    other_queries = [query for query in queries if query not in current_queries]
+    queries = list(current_queries)
+    if current_queries and len(queries) < settings.max_search_queries:
+        current_query = current_queries[0]
+        base_query = current_query.split(
+            " latest official updates and recent independent reporting", 1
+        )[0]
+        historical_query = (base_query[:390] + " original historical records and background context")[:500]
+        if historical_query not in already_planned:
+            queries.append(historical_query)
+            already_planned.add(historical_query)
+    queries.extend(other_queries)
     if not queries and not traces:
         queries = [claim.text[:500] for claim in claims]
     for query in queries[: settings.max_search_queries]:
@@ -770,10 +823,19 @@ def _execute_searches(session: Session, investigation: Investigation) -> None:
         trace.created_at = utcnow()
         session.commit()
         try:
+            current_lane = CURRENT_QUERY_MARKER in (trace.query or "").casefold()
+            search_now = utcnow()
+            date_filters: dict[str, str] = {}
+            if current_lane:
+                date_filters = {
+                    "start_published_date": (search_now - timedelta(days=30)).date().isoformat(),
+                    "end_published_date": search_now.date().isoformat(),
+                }
             response = search_exa(
                 api_key=key,
                 query=trace.query or "",
                 num_results=settings.max_search_results_per_query,
+                **date_filters,
             )
         except ExaSearchError:
             trace.action = "error"
@@ -1060,6 +1122,10 @@ def _detect_source_relationships(
 
 def _evidence_packet(session: Session, investigation: Investigation) -> str:
     settings = get_settings()
+    received_at = investigation.created_at
+    if received_at.tzinfo is None:
+        received_at = received_at.replace(tzinfo=timezone.utc)
+    received_at = received_at.astimezone(timezone.utc)
     claims = list(session.scalars(select(Claim).where(Claim.investigation_id == investigation.id)))
     evidence_rows = list(
         session.execute(
@@ -1072,6 +1138,8 @@ def _evidence_packet(session: Session, investigation: Investigation) -> str:
         )
     )
     packet = {
+        "investigation_received_at_utc": received_at.isoformat(),
+        "relative_date_policy": "Relative dates are anchored to received_at_utc. Submitter timezone is unknown; disclose date ambiguity when it could change the conclusion.",
         "claims": [{"id": str(claim.id), "text": claim.text[:2000]} for claim in claims],
         "submitted_sources": [
             {
@@ -1520,7 +1588,9 @@ def _create_unverified_findings(session: Session, investigation: Investigation) 
     )
 
 
-def _build_brief(session: Session, investigation: Investigation) -> None:
+def _build_brief(
+    session: Session, investigation: Investigation, *, summary_override: str | None = None
+) -> None:
     if session.scalar(
         select(VerificationBrief.id).where(VerificationBrief.investigation_id == investigation.id)
     ):
@@ -1546,8 +1616,8 @@ def _build_brief(session: Session, investigation: Investigation) -> None:
         "MEDIA_VISUAL_OBSERVATION": "visible image content",
     }
     present_media = [media_labels[name] for name, count in media_counts.items() if count]
-    summary = finding_result_summary(findings)
-    if present_media:
+    summary = summary_override or finding_result_summary(findings)
+    if present_media and not summary_override:
         summary += "\n\nMedia reviewed: " + ", ".join(present_media) + "."
     limitations = list(usage.limitations)
     if not findings and claims:
@@ -1673,6 +1743,15 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
         if url_text:
             bounded_url_text = url_text[: get_settings().max_model_input_chars]
             model_input = _submitted_source_prompt(url_source, bounded_url_text, submitted_url)
+        received_at = investigation.created_at
+        if received_at.tzinfo is None:
+            received_at = received_at.replace(tzinfo=utcnow().tzinfo)
+        model_input = (
+            f"INVESTIGATION RECEIVED AT: {received_at.isoformat()} (UTC; submitter timezone unknown).\n"
+            + _relative_date_context(model_input, received_at)
+            + "\n"
+            + model_input
+        )
 
         claims_exist = (
             session.scalar(
@@ -1721,6 +1800,7 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
             session.scalars(select(Claim).where(Claim.investigation_id == investigation.id))
         )
         evidence_exists = _has_claim_linked_evidence(session, investigation)
+        summary_override = None
         if claims:
             has_missing_findings = any(
                 session.scalar(select(Finding.id).where(Finding.claim_id == claim.id).limit(1))
@@ -1737,6 +1817,41 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
                 _persist_findings(session, investigation, result.output)
         else:
             _create_unverified_findings(session, investigation)
+            ai_origin_question = re.search(
+                r"\b(ai[- ]?generated|synthetic|deepfake|made by ai|created with ai|ai[- ]?made)\b",
+                text,
+                re.I,
+            )
+            if images and ai_origin_question:
+                media_rows = list(
+                    session.scalars(
+                        select(Evidence)
+                        .where(
+                            Evidence.investigation_id == investigation.id,
+                            Evidence.method.in_(MEDIA_PACKET_METHODS),
+                        )
+                        .order_by(Evidence.created_at)
+                    )
+                )
+                signals = "\n".join(
+                    f"{item.method}: {_media_packet_excerpt(item)}"
+                    for item in media_rows
+                ) or "No image checks were recorded."
+                try:
+                    response = ModelGateway().answer_image_origin_question(
+                        question=text,
+                        signals=signals,
+                        session=session,
+                        investigation_id=investigation.id,
+                    )
+                    if isinstance(response.output, ImageQuestionAnswer):
+                        summary_override = response.output.answer.strip()[:700]
+                except (ModelInvocationFailed, ModelCallBudgetExceeded):
+                    add_limitation(
+                        session,
+                        investigation.id,
+                        "A direct image-origin response could not be generated; the recorded checks remain available.",
+                    )
         if claims and not evidence_exists:
             add_limitation(
                 session,
@@ -1745,7 +1860,7 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
             )
         if investigation.status != InvestigationStatus.GENERATING_BRIEF:
             _stage(session, investigation, InvestigationStatus.GENERATING_BRIEF)
-        _build_brief(session, investigation)
+        _build_brief(session, investigation, summary_override=summary_override)
         _stage(session, investigation, InvestigationStatus.COMPLETE)
         job.status = "COMPLETE"
         job.stage = "COMPLETE"

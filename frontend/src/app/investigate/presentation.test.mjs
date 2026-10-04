@@ -127,7 +127,7 @@ test("a question without an extracted claim remains visible as an unknown with u
     media_assets: [{ media_type: "IMAGE", role: "ORIGINAL" }],
   };
   assert.ok(unknownsFromResults(results).some((item) => item.includes("No verifiable claim was extracted")));
-  assert.ok(recommendedNextSteps(results).some((item) => item.includes("Content Credentials")));
+  assert.ok(recommendedNextSteps(results).some((item) => item.includes("original post or source page")));
 });
 
 test("visible observations render as observations and finding evidence resolves to detail", () => {

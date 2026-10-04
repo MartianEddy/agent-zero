@@ -64,6 +64,10 @@ class EvidenceReasoning(BaseModel):
     findings: list[ReasonedFinding] = Field(default_factory=list, max_length=3)
 
 
+class ImageQuestionAnswer(BaseModel):
+    answer: str = Field(min_length=1, max_length=700)
+
+
 class VisualObservation(BaseModel):
     observation: str = Field(min_length=1, max_length=300)
     confidence: Literal["LOW", "MODERATE", "HIGH"]
@@ -106,6 +110,8 @@ class ModelGateway:
     ) -> ModelRun:
         instructions = (
             "Extract at most three independently verifiable factual claims from this submission. "
+            "The prompt may include an application-supplied receipt timestamp and deterministic "
+            "relative-date normalization; treat those lines as temporal context, not submitted claims. "
             "Return concise claims and at most five focused search-query objects, each with text "
             "and freshness. Classify each query as CURRENT when the claim is time-sensitive, "
             "ongoing, asks about latest/current/recent state, or refers to a recent event whose "
@@ -118,7 +124,13 @@ class ModelGateway:
             "primary/official records first, then original sources, independent reporting, "
             "established fact-checks, and public records. When input marks a SUBMITTED SOURCE, "
             "extract what it claims but do not treat that article as independent proof. "
-            "Do not assess truth or invent details. "
+            "Anchor relative dates such as today, yesterday, and last week to the supplied "
+            "investigation receipt timestamp (UTC). Normalize the date in the claim/query and "
+            "carry that date into the user-facing answer. The submitter's timezone is unknown; "
+            "when local-time ambiguity could change the date or conclusion, state that limitation "
+            "and ask for the intended timezone instead of guessing. For current-event claims, "
+            "plan separate CURRENT coverage and HISTORICAL context queries when the budget allows. "
+            "Do not treat old coverage as evidence of current status. Do not assess truth or invent details. "
             "If the submission contains no factual claim, return empty arrays."
         )
         return asyncio.run(
@@ -153,6 +165,10 @@ class ModelGateway:
             "For each finding, draft a direct, plain-language answer for the person who asked: "
             "state what the evidence does and does not establish, and name the most relevant "
             "finding or source detail when the packet supports it. This statement is user-facing. "
+            "When a claim contains a relative date, use the packet's investigation receipt time "
+            "and temporal policy to state its normalized calendar date; disclose the unknown "
+            "submitter timezone if it could change the interpretation. Never say there is no "
+            "reference date when the packet supplies the receipt time. "
             "Also assess evidence_confidence as LOW, MODERATE, or HIGH for the strength and "
             "coverage of the evidence packet, not the probability that the claim is true. LOW "
             "means sparse, indirect, conflicting, or weakly matched evidence; MODERATE means "
@@ -200,6 +216,7 @@ class ModelGateway:
             "Do not infer image origin, event truth, manipulation, or synthetic generation "
             "from appearance."
         )
+
         return asyncio.run(
             self._structured_call(
                 purpose="MEDIA_VISUAL_ANALYSIS",
@@ -213,6 +230,29 @@ class ModelGateway:
                 images=[image],
                 output_type=VisualAnalysis,
                 max_tokens=min(700, self.settings.max_model_output_tokens_research),
+                session=session,
+                investigation_id=investigation_id,
+            )
+        )
+
+    def answer_image_origin_question(self, *, question: str, signals: str, session, investigation_id) -> ModelRun:
+        instructions = (
+            "Answer the user's image-origin question using only the supplied recorded checks. "
+            "Be direct, plain-language, and specific to the actual results. Do not infer AI "
+            "generation, authenticity, manipulation, or event truth from appearance or metadata. "
+            "A C2PA declaration can be reported as an attached declaration, not independent proof. "
+            "Distinguish unavailable/failed checks from checks that found no credentials. State "
+            "when the result cannot determine origin and give one useful next step. Do not invent "
+            "checks or sources."
+        )
+        return asyncio.run(
+            self._structured_call(
+                purpose="IMAGE_ORIGIN_RESPONSE",
+                instructions=instructions,
+                prompt=f"User question: {question[:1000]}\nRecorded image checks:\n{signals[:4000]}",
+                images=[],
+                output_type=ImageQuestionAnswer,
+                max_tokens=min(450, self.settings.max_model_output_tokens_synthesis),
                 session=session,
                 investigation_id=investigation_id,
             )

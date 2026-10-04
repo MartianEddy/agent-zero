@@ -16,16 +16,26 @@ class ExaSearchResponse:
     results: list[dict[str, object]]
 
 
-def search_exa(*, api_key: str, query: str, num_results: int = 5) -> ExaSearchResponse:
+def search_exa(
+    *,
+    api_key: str,
+    query: str,
+    num_results: int = 5,
+    start_published_date: str | None = None,
+    end_published_date: str | None = None,
+) -> ExaSearchResponse:
     """Search Exa and return provider results with token-efficient highlights."""
-    body = json.dumps(
-        {
+    payload = {
             "query": query,
             "type": "auto",
             "numResults": max(1, min(num_results, 10)),
             "contents": {"highlights": True},
         }
-    ).encode("utf-8")
+    if start_published_date:
+        payload["startPublishedDate"] = start_published_date
+    if end_published_date:
+        payload["endPublishedDate"] = end_published_date
+    body = json.dumps(payload).encode("utf-8")
     request = Request(
         "https://api.exa.ai/search",
         data=body,
