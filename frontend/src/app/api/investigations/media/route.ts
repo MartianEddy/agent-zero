@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-
-const backend = process.env.AGENT_ZERO_API_URL ?? "http://127.0.0.1:18000";
+import { backendUrl } from "@/lib/backend-url";
 
 export async function POST(request: NextRequest) {
   try {
@@ -8,7 +7,7 @@ export async function POST(request: NextRequest) {
     const headers = new Headers();
     const idempotencyKey = request.headers.get("idempotency-key");
     if (idempotencyKey) headers.set("idempotency-key", idempotencyKey);
-    const response = await fetch(`${backend}/api/v1/investigations/media`, {
+    const response = await fetch(`${backendUrl}/api/v1/investigations/media`, {
       method: "POST",
       headers,
       body: form,

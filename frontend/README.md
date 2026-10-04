@@ -13,7 +13,7 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-The `/investigate` workspace proxies requests to the FastAPI service at `http://127.0.0.1:18000` by default. Set `AGENT_ZERO_API_URL` in the frontend environment to override that backend origin. Start the backend and its worker separately; the owner should set `OPENAI_API_KEY` in `backend/.env` before starting investigations.
+The `/investigate` workspace proxies requests to the FastAPI service at `http://127.0.0.1:18000` by default. Set `AGENT_ZERO_API_URL` in the frontend environment to override that backend origin. It accepts either a URL or a host and port (Render Blueprint supplies the API's private host and port). Start the backend and its worker separately; the owner should set `OPENAI_API_KEY` in `backend/.env` before starting investigations.
 
 ## Routes
 
@@ -23,6 +23,9 @@ The `/investigate` workspace proxies requests to the FastAPI service at `http://
 - `/newsrooms` — For Newsrooms
 - `/about` — About
 - `/investigate` — Submit claims, public URLs, or images and review progress, provenance, evidence links, and findings
+- `/investigations` — Browse recent cases or reopen a case using its `AZ-YYMMDD-XXXXXX` reference
+
+The Render Blueprint includes a free Next.js web service. The API remains the source of truth for ownership checks, and the browser never receives backend or ClickCast credentials. The current deployment uses a shared demo owner because authentication and tenant isolation are not implemented; its UI labels the workspace as public and advises against private or sensitive submissions. Do not use it as a private newsroom workspace until authentication and data-retention controls are in place.
 
 ## Checks
 

@@ -86,6 +86,19 @@ def list_investigations(session: DbSession) -> list[InvestigationResponse]:
     ]
 
 
+@router.get("/reference/{reference}", response_model=InvestigationResponse)
+def get_investigation_by_reference(reference: str, session: DbSession) -> InvestigationResponse:
+    investigation = session.scalar(
+        select(Investigation).where(
+            Investigation.reference == reference.strip().upper(),
+            Investigation.owner_id == current_owner_id(),
+        )
+    )
+    if investigation is None:
+        raise HTTPException(status_code=404, detail="Investigation not found")
+    return InvestigationResponse.model_validate(investigation)
+
+
 @router.get("/{investigation_id}", response_model=InvestigationResponse)
 def get_investigation(investigation_id: UUID, session: DbSession) -> InvestigationResponse:
     investigation = InvestigationService(session).get(

@@ -295,6 +295,7 @@ export default function InvestigatePage() {
       </header>
 
       <div className={styles.workspace}>
+        <p className={styles.processingNote}>Public demo: use public information only. Do not submit private or sensitive details.</p>
         <section className={styles.intro}>
           <p className="eyebrow">A clear place to start</p>
           <h1>What do you want to check?</h1>

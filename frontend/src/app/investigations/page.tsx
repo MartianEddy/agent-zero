@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { AgentMark } from "@/components/AgentMark";
 import { statusPresentation, safeEvidenceText } from "@/app/investigate/presentation.mjs";
 import type { Investigation, Results } from "@/app/investigate/types";
@@ -20,8 +21,12 @@ function relativeDate(value: string) {
 }
 
 export default function InvestigationsPage() {
+  const router = useRouter();
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [query, setQuery] = useState("");
+  const [reference, setReference] = useState("");
+  const [referenceBusy, setReferenceBusy] = useState(false);
+  const [referenceError, setReferenceError] = useState("");
   const [filter, setFilter] = useState<Filter>("ALL");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -58,10 +63,37 @@ export default function InvestigationsPage() {
     return (filter === "ALL" || status === filter) && `${title} ${investigation.reference}`.toLowerCase().includes(query.toLowerCase());
   }), [items, query, filter]);
 
+  async function reopenByReference(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setReferenceBusy(true);
+    setReferenceError("");
+    try {
+      const response = await fetch(`/api/investigations/reference?reference=${encodeURIComponent(reference)}`, { cache: "no-store" });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { detail?: string } | null;
+        throw new Error(payload?.detail || "We couldn’t find an investigation with that reference.");
+      }
+      const investigation = await response.json() as Investigation;
+      router.push(`/investigate?investigation=${encodeURIComponent(investigation.id)}`);
+    } catch (reason) {
+      setReferenceError(reason instanceof Error ? reason.message : "We couldn’t find that investigation. Try again.");
+    } finally {
+      setReferenceBusy(false);
+    }
+  }
+
   return <main className={styles.page}>
     <header className={styles.header}><Link href="/" aria-label="Agent 0 home"><AgentMark /></Link><nav aria-label="Main navigation"><Link href="/investigate">Investigate</Link><Link href="/investigations" aria-current="page">Investigations</Link><Link href="/how-it-works">How it works</Link></nav></header>
     <div className={styles.content}>
+      <p className={styles.demoNotice}>Public demo workspace. Use public information only; investigation history is shared.</p>
       <div className={styles.titleRow}><div><p className={styles.eyebrow}>Your workspace</p><h1>Investigations</h1><p>Return to a claim, link or image you’ve already checked.</p></div><Link className="button button-primary" href="/investigate">New investigation <span aria-hidden="true">→</span></Link></div>
+
+      <form className={styles.referenceLookup} onSubmit={reopenByReference}>
+        <div><h2>Reopen an investigation</h2><p>Enter the reference shown when you submitted it.</p></div>
+        <label htmlFor="reference-lookup">Investigation reference</label>
+        <div className={styles.referenceControls}><input id="reference-lookup" value={reference} onChange={(event) => setReference(event.target.value.toUpperCase())} placeholder="AZ-261004-ABC123" autoCapitalize="characters" autoComplete="off" required /><button className="button button-secondary" type="submit" disabled={referenceBusy}>{referenceBusy ? "Finding…" : "Open case"}</button></div>
+        {referenceError && <p className={styles.referenceError} role="alert">{referenceError}</p>}
+      </form>
 
       <div className={styles.controls}><label className={styles.searchLabel} htmlFor="history-search">Search investigations</label><input id="history-search" type="search" placeholder="Search by claim or reference" value={query} onChange={(event) => setQuery(event.target.value)} /><div className={styles.filters} role="group" aria-label="Filter by result">{(["ALL", "SUPPORTED", "CONTRADICTED", "UNVERIFIED", "INCONCLUSIVE"] as const).map((item) => <button key={item} type="button" aria-pressed={filter === item} onClick={() => setFilter(item)}>{item === "ALL" ? "All results" : statusPresentation(item).label}</button>)}</div></div>
 

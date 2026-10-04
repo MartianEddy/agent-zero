@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-
-const backend = process.env.AGENT_ZERO_API_URL ?? "http://127.0.0.1:18000";
+import { backendUrl } from "@/lib/backend-url";
 
 export async function GET(
   _request: NextRequest,
@@ -9,7 +8,7 @@ export async function GET(
   const { investigationId } = await params;
   try {
     const response = await fetch(
-      `${backend}/api/v1/investigations/${encodeURIComponent(investigationId)}/results`,
+      `${backendUrl}/api/v1/investigations/${encodeURIComponent(investigationId)}/results`,
       { cache: "no-store" },
     );
     return new NextResponse(response.body, {

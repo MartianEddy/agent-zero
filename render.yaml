@@ -3,6 +3,24 @@
 # public test data only until that work and retention decisions are complete.
 services:
   - type: web
+    name: agent-zero-web
+    runtime: node
+    plan: free
+    region: singapore
+    rootDir: ./frontend
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start -- --hostname 0.0.0.0
+    healthCheckPath: /
+    envVars:
+      - key: AGENT_ZERO_API_URL
+        fromService:
+          name: agent-zero-api
+          type: web
+          property: hostport
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
+
+  - type: web
     name: agent-zero-api
     runtime: docker
     plan: starter
