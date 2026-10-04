@@ -77,6 +77,7 @@ export type Source = {
   retrieval_provider?: string | null;
   retrieved_at?: string | null;
   discovery_method: string;
+  discovery_trace_id?: string | null;
 };
 
 export type Evidence = {
@@ -123,6 +124,7 @@ export type Results = {
     url?: string | null;
     sources: { url: string; title: string }[];
     citations: { url: string; title: string }[];
+    created_at?: string;
   }[];
   claim_evidence: { claim_id: string; evidence_id: string; relationship: string }[];
   evidence: Evidence[];

@@ -73,10 +73,10 @@ const STAGE_COPY = {
   RECEIVED: "Understanding what you shared",
   PROCESSING: "Preparing the investigation",
   ANALYZING: "Examining what you shared",
-  RESEARCHING: "Looking for reliable sources",
-  CORROBORATING: "Comparing what the evidence says",
+  RESEARCHING: "Searching for sources",
+  CORROBORATING: "Comparing retrieved pages",
   GENERATING_BRIEF: "Preparing the result",
-  COMPLETE: "Investigation complete",
+  COMPLETE: "Review complete",
   NEEDS_REVIEW: "Part of the investigation needs review",
   FAILED: "Part of the investigation could not be completed",
   CANCELLED: "Investigation stopped",
@@ -216,8 +216,69 @@ export function visualAnalysisNotice(results) {
 }
 
 /** @param {string} stage */
-export function stagePresentation(stage) {
+export function stagePresentation(stage, results = null) {
+  if (stage === "RESEARCHING" && results?.search_traces?.length) {
+    const queries = results.search_traces.map((trace) => trace.query ?? "").join(" ").toLowerCase();
+    const recent = queries.includes("prioritize current information and dated sources");
+    const historical = queries.includes("prioritize historical context and original records");
+    if (recent && historical) return "Searching recent coverage and historical context";
+    if (recent) return "Searching recent coverage";
+    if (historical) return "Finding historical context";
+  }
   return STAGE_COPY[stage] ?? "Preparing investigation";
+}
+
+/** @param {import('./types').Source} source @param {import('./types').Results['search_traces']} traces */
+export function sourceResearchLane(source, traces) {
+  const query = traces.find((trace) => trace.id === source.discovery_trace_id)?.query?.toLowerCase() ?? "";
+  if (query.includes("prioritize current information and dated sources")) return "RECENT";
+  if (query.includes("prioritize historical context and original records")) return "HISTORICAL";
+  return "OTHER";
+}
+
+/** @param {string} submittedText @param {string} receivedAt */
+export function relativeDateBasis(submittedText, receivedAt) {
+  if (!/\b(today|yesterday|last week|\d{1,2}\s+days?\s+ago)\b/i.test(submittedText)) return null;
+  const received = new Date(receivedAt);
+  if (!Number.isFinite(received.getTime())) return null;
+  const date = new Date(Date.UTC(received.getUTCFullYear(), received.getUTCMonth(), received.getUTCDate()));
+  const receivedLabel = new Intl.DateTimeFormat("en", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC",
+  }).format(received);
+  const values = [];
+  if (/\btoday\b/i.test(submittedText)) values.push(`today = ${date.toISOString().slice(0, 10)}`);
+  if (/\byesterday\b/i.test(submittedText)) {
+    const yesterday = new Date(date);
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+    values.push(`yesterday = ${yesterday.toISOString().slice(0, 10)}`);
+  }
+  const ago = [...submittedText.matchAll(/\b(\d{1,2})\s+days?\s+ago\b/gi)];
+  for (const match of ago) {
+    const resolved = new Date(date);
+    resolved.setUTCDate(resolved.getUTCDate() - Number(match[1]));
+    values.push(`${match[0]} = ${resolved.toISOString().slice(0, 10)}`);
+  }
+  if (/\blast week\b/i.test(submittedText)) {
+    const weekdayOffset = (date.getUTCDay() + 6) % 7;
+    const monday = new Date(date);
+    monday.setUTCDate(monday.getUTCDate() - weekdayOffset - 7);
+    const sunday = new Date(monday);
+    sunday.setUTCDate(sunday.getUTCDate() + 6);
+    values.push(`last week = ${monday.toISOString().slice(0, 10)} to ${sunday.toISOString().slice(0, 10)}`);
+  }
+  return `Date basis: submitted ${receivedLabel} UTC; ${values.join("; ")}. The submitter’s timezone was not recorded.`;
+}
+
+/** @param {string | null | undefined} value */
+export function publicationDateLabel(value) {
+  if (typeof value !== "string") return null;
+  const datePart = value.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+  if (!datePart) return null;
+  const date = new Date(`${datePart}T00:00:00Z`);
+  if (!Number.isFinite(date.getTime())) return null;
+  return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone: "UTC" }).format(date);
 }
 
 /** @param {string} stage */

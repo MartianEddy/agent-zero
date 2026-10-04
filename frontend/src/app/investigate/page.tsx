@@ -11,12 +11,15 @@ import {
   inferInputType,
   imageOriginAnswer,
   presentedLimitations,
+  publicationDateLabel,
   provenancePresentation,
   progressStepForStage,
   recommendedNextSteps,
+  relativeDateBasis,
   relationshipPresentation,
   safeEvidenceText,
   stagePresentation,
+  sourceResearchLane,
   statusPresentation,
   technicalMetadata,
   unknownsFromResults,
@@ -44,7 +47,7 @@ const EXAMPLES = [
   "Has this claim been reported elsewhere?",
   "Where did this information come from?",
 ];
-const REVIEW_STEPS = ["Understand the claim", "Find sources", "Compare evidence", "Prepare the brief"];
+const REVIEW_STEPS = ["Understand the question", "Search for sources", "Compare retrieved pages", "Prepare the result"];
 
 async function readError(response: Response) {
   try {
@@ -113,26 +116,35 @@ function EvidenceCard({ item, relationship, showSourceAction = true }: { item: E
   );
 }
 
-function SourceCard({ source, evidence, relationships, sources }: {
+function SourceCard({ source, evidence, relationships, sources, lane }: {
   source: Source;
   evidence: Evidence[];
   relationships: Results["source_relationships"];
   sources: Source[];
+  lane: "RECENT" | "HISTORICAL" | "OTHER";
 }) {
   const excerpts = evidence.filter((item) => item.source?.id === source.id);
   const related = relationships.filter((item) => item.source_id === source.id || item.related_source_id === source.id);
+  const retrievalStyle = source.retrieval_status === "RETRIEVED"
+    ? styles.sourceRETRIEVED
+    : source.retrieval_status === "FAILED" ? styles.sourceFAILED : styles.sourceCANDIDATE;
   return (
-    <article className={styles.sourceCard}>
+    <article className={`${styles.sourceCard} ${retrievalStyle}`}>
       <div className={styles.sourceHeading}>
         <div>
           <p className={styles.sourcePublisher}>{safeEvidenceText(source.publisher || source.domain || source.source_type)}</p>
           <h4>{safeEvidenceText(source.title || source.url)}</h4>
         </div>
-        <span className={styles.role}>{sourceRoleLabel(source.source_role)}</span>
+        <div className={styles.sourceBadges}>
+          {lane !== "OTHER" && <span className={`${styles.sourceLane} ${lane === "RECENT" ? styles.laneRecent : styles.laneHistorical}`}>{lane === "RECENT" ? "Recent coverage" : "Historical context"}</span>}
+          <span className={styles.role}>{sourceRoleLabel(source.source_role)}</span>
+        </div>
       </div>
+      <p className={`${styles.sourceState} ${source.retrieval_status === "RETRIEVED" ? styles.sourceStateRetrieved : source.retrieval_status === "FAILED" ? styles.sourceStateFailed : styles.sourceStateCandidate}`}>
+        {source.retrieval_status === "FAILED" ? "Retrieval failed" : source.retrieval_status === "RETRIEVED" ? "Page retrieved" : "Candidate only · not retrieved"}
+      </p>
       <p className={styles.sourceMeta}>
-        {source.retrieval_status === "FAILED" ? "Couldn’t retrieve this page" : source.retrieval_status === "RETRIEVED" ? "Page reviewed" : "Source identified"}
-        {source.published_at ? ` · Published ${new Date(source.published_at).toLocaleDateString()}` : ""}
+        {source.published_at ? `Published ${publicationDateLabel(source.published_at) ?? "date unavailable"}` : "Publication date unavailable"}
         {source.author ? ` · ${safeEvidenceText(source.author)}` : ""}
       </p>
       {source.discovery_method === "SUBMITTED_URL" && <p className={styles.contextNote}>Submitted page. Its claims are context, not independent evidence.</p>}
@@ -301,6 +313,12 @@ export default function InvestigatePage() {
   const unknowns = useMemo(() => results ? unknownsFromResults(results, finished) : [], [results, finished]);
   const nextSteps = useMemo(() => results ? recommendedNextSteps(results, finished) : [], [results, finished]);
   const mediaNotice = results ? visualAnalysisNotice(results) : null;
+  const dateReferenceText = [content, ...(results?.claims ?? []).map((claim) => claim.text)].join(" ");
+  const dateBasis = investigation ? relativeDateBasis(dateReferenceText, investigation.created_at) : null;
+  const retrievalDisabled = Boolean(results?.usage_summary?.limitations.some((item) => item.includes("Source retrieval is disabled")));
+  const searchUnavailable = Boolean(results?.search_traces.some((trace) => ["unavailable", "error", "budget_exceeded"].includes(trace.action)));
+  const searchReturnedNoResults = Boolean(results?.search_traces.length && results.search_traces.every((trace) => trace.action === "empty"));
+  const unretrievedSourceCount = results?.sources.filter((source) => source.retrieval_status !== "RETRIEVED").length ?? 0;
   const filteringEvidence = evidence.filter((item) => {
     if (evidenceFilter === "ALL") return true;
     const links = item.claim_links.map((link) => link.relationship);
@@ -309,8 +327,13 @@ export default function InvestigatePage() {
     return links.some((value) => ["CONTEXTUALIZES", "MENTIONS", "UNKNOWN"].includes(value));
   });
   const filteredSourceEvidence = filteringEvidence.filter((item) => Boolean(item.source));
-  const otherEvidence = evidence.filter((item) => !item.source);
-  const otherFilteredEvidence = filteringEvidence.filter((item) => !item.source);
+  const otherEvidence = evidence.filter((item) => !item.source && !item.media_asset);
+  const otherFilteredEvidence = filteringEvidence.filter((item) => !item.source && !item.media_asset);
+  const sourceGroups = results ? ([
+    { lane: "RECENT" as const, title: "Recent coverage", sources: results.sources.filter((source) => sourceResearchLane(source, results.search_traces) === "RECENT") },
+    { lane: "HISTORICAL" as const, title: "Historical context", sources: results.sources.filter((source) => sourceResearchLane(source, results.search_traces) === "HISTORICAL") },
+    { lane: "OTHER" as const, title: "Other sources found", sources: results.sources.filter((source) => sourceResearchLane(source, results.search_traces) === "OTHER") },
+  ].filter((group) => group.sources.length > 0)) : [];
 
   return (
     <main className={styles.page}>
@@ -359,15 +382,16 @@ export default function InvestigatePage() {
 
           <div className={styles.stagePanel}>
             <span className={`${styles.stageMark}${finished ? "" : ` ${styles.stageActive}`}`} aria-hidden="true">{finished ? "✓" : "…"}</span>
-            <div><strong>{stagePresentation(investigation.current_stage)}</strong><span role="status" aria-live="polite">{investigation.status === "NEEDS_REVIEW" ? "Review needed" : investigation.status === "FAILED" ? "Couldn’t complete" : investigation.status === "CANCELLED" ? "Cancelled" : completed ? "Complete" : "In progress"}</span></div>
+            <div><strong>{stagePresentation(investigation.current_stage, results)}</strong><span role="status" aria-live="polite">{investigation.status === "NEEDS_REVIEW" ? "Review needed" : investigation.status === "FAILED" ? "Couldn’t complete" : investigation.status === "CANCELLED" ? "Cancelled" : completed ? "Processing finished" : "In progress"}</span></div>
             {!finished && <p className={styles.processingNote}>This can take a little while. You can stay here while Agent 0 checks the available evidence.</p>}
+            {completed && <p className={styles.progressHint}>Processing completed. This does not mean the claim was verified; see the finding status and evidence below.</p>}
             {!finished && <div className={styles.progressDetails}>
               <ol className={styles.progressSteps} aria-label="Investigation checkpoints">
                 {REVIEW_STEPS.map((step, index) => <li key={step} data-state={index < activeProgressStep ? "complete" : index === activeProgressStep ? "active" : "upcoming"} aria-current={index === activeProgressStep ? "step" : undefined}>
                   <span className={styles.progressMarker} aria-hidden="true">{index < activeProgressStep ? "✓" : index + 1}</span><span>{step}</span>
                 </li>)}
               </ol>
-              <div className={styles.progressTrack} role="progressbar" aria-label="Investigation progress" aria-valuemin={0} aria-valuemax={100} aria-valuetext={stagePresentation(investigation.current_stage)}><span /></div>
+              <div className={styles.progressTrack} role="progressbar" aria-label="Investigation progress" aria-valuemin={0} aria-valuemax={100} aria-valuetext={stagePresentation(investigation.current_stage, results)}><span /></div>
               <p className={styles.progressHint}>Checkpoints update as the review advances. This indicator does not estimate completion time.</p>
             </div>}
           </div>
@@ -392,7 +416,8 @@ export default function InvestigatePage() {
                   const presentation = finding ? statusPresentation(finding.status) : null;
                   const cited = finding ? findingRelationship(finding, evidence) : [];
                   return <article className={styles.finding} key={claim.id}>
-                    <h3>{safeEvidenceText(claim.text)}</h3>
+                      <h3>{safeEvidenceText(claim.text)}</h3>
+                      {dateBasis && <p className={styles.dateBasis}>{safeEvidenceText(dateBasis)}</p>}
                 {finding && <>
                       <div className={`${styles.findingStatus} ${styles[`tone${finding.status}`] ?? ""}`}>
                         <span aria-hidden="true">{presentation?.icon}</span><strong>{presentation?.label}</strong>
@@ -415,6 +440,7 @@ export default function InvestigatePage() {
                   <p className={styles.empty}>{!finished ? "Agent 0 is examining the submission. Any claim or image observations will appear here when this step is complete." : imageAnswer ?? (originalMedia && !content.trim() ? "No claim or context is available for this image review. Available file and origin signals do not establish where or when the depicted event occurred." : "No verifiable claim was extracted from this request. The question is shown as submitted, not treated as a finding.")}</p>
                 </article>}
               </div>
+              {claims.length > 0 && unretrievedSourceCount > 0 && <p className={styles.resultCaveat}>{retrievalDisabled && results.evidence_coverage.sources_retrieved === 0 ? "Search found candidates, but page retrieval is disabled for this run. No source text was reviewed; headlines cannot support a finding." : results.evidence_coverage.sources_retrieved === 0 ? "No source page was retrieved for this run. Search-result titles are leads only; source-based verification could not be completed." : `${unretrievedSourceCount} source candidate${unretrievedSourceCount === 1 ? " was" : "s were"} not retrieved. Only retrieved page content can support a source-based finding.`}</p>}
             </section>
 
             {claims.length > 0 && <section className={styles.keyEvidence} aria-labelledby="key-evidence-title">
@@ -449,11 +475,16 @@ export default function InvestigatePage() {
                   {(["ALL", "SUPPORTS", "CONTRADICTS", "CONTEXT"] as const).map((filter) => <button type="button" key={filter} aria-pressed={evidenceFilter === filter} onClick={() => setEvidenceFilter(filter)}>{filter === "ALL" ? "All" : filter === "CONTEXT" ? "Context" : relationshipPresentation(filter)}</button>)}
                 </div>
               </div>
+              <p className={styles.searchScopeNote}>Agent 0 searches public web results. It does not search social platform feeds or logged-in pages directly.</p>
               {results.sources.length > 0 ? <div className={styles.sourceList}>
                 <h4>{results.sources.every((source) => source.retrieval_status === "RETRIEVED") ? "Sources reviewed" : "Sources found"}</h4>
-                {results.sources.some((source) => source.retrieval_status !== "RETRIEVED") && <p className={styles.partialNotice}>{results.evidence_coverage.sources_retrieved === 0 ? "No source pages were retrieved in this investigation. These are search candidates only; titles and publication dates are leads, not evidence." : "Some results are source candidates only. Their titles and publication dates are leads, not reviewed evidence, until page content is retrieved."}</p>}
-                {results.sources.map((source) => <SourceCard key={source.id} source={source} evidence={filteredSourceEvidence} relationships={results.source_relationships} sources={results.sources} />)}
-              </div> : <p className={styles.empty}>{finished ? "No external sources were collected for this investigation." : "Source checks are still in progress. Results will appear here when available."}</p>}
+                {!retrievalDisabled && results.sources.some((source) => source.retrieval_status !== "RETRIEVED") && <p className={styles.partialNotice}>{results.evidence_coverage.sources_retrieved === 0 ? "No source pages were retrieved in this investigation. These are search candidates only; titles and publication dates are leads, not evidence." : "Some results are source candidates only. Their titles and publication dates are leads, not reviewed evidence, until page content is retrieved."}</p>}
+                {retrievalDisabled && <p className={styles.partialNotice}>Public web search returned candidates, but page retrieval is disabled for this run. Candidate titles are not evidence.</p>}
+                {sourceGroups.map((group) => <div className={styles.sourceLaneGroup} key={group.lane}>
+                  <h5>{group.title}</h5>
+                  {group.sources.map((source) => <SourceCard key={source.id} source={source} evidence={filteredSourceEvidence} relationships={results.source_relationships} sources={results.sources} lane={group.lane} />)}
+                </div>)}
+              </div> : <p className={styles.empty}>{!finished ? "Source checks are still in progress. Results will appear here when available." : searchUnavailable ? "Web search could not complete, so no source candidates were collected. The result is not verified." : searchReturnedNoResults ? "Web search completed but returned no source candidates. No external page evidence was reviewed." : "No external sources were collected for this investigation."}</p>}
               {otherEvidence.length > 0 && <div className={styles.otherEvidence}>
                 <h4>Other evidence checked</h4>
                 {otherFilteredEvidence.length ? otherFilteredEvidence.map((item) => <EvidenceCard key={item.id} item={item} relationship={item.claim_links[0]?.relationship} />) : <p className={styles.empty}>{finished ? "No additional evidence matches this filter." : "Evidence will appear here as Agent 0 reviews the submission and available sources."}</p>}
@@ -474,7 +505,9 @@ export default function InvestigatePage() {
               </div>
               {mediaNotice && <p className={styles.partialNotice}>{mediaNotice}</p>}
 
-              <div className={styles.mediaEvidenceGrid}>
+              <details className={styles.mediaChecksDetails}>
+                <summary>View image checks and technical details</summary>
+                <div className={styles.mediaEvidenceGrid}>
                 <section className={styles.mediaGroup} aria-labelledby="provenance-title">
                   <p className={styles.sectionKicker}>Image origin</p><h4 id="provenance-title">Origin &amp; history</h4>
                   {provenance ? <>
@@ -500,17 +533,18 @@ export default function InvestigatePage() {
                   {visualEvidence.length ? visualEvidence.flatMap((item): { observation: string; relevance: string; limitations: string[] }[] => visualObservations(item.content)).map((item, index) => <article className={styles.observation} key={`${item.observation}-${index}`}><span>OBSERVATION</span><p>{item.observation}</p>{item.relevance && <small>Relevance: {item.relevance}</small>}{item.limitations.map((limitation) => <small className={styles.caution} key={limitation}>{limitation}</small>)}</article>) : <p className={styles.muted}>{mediaNotice ? "Visual interpretation did not complete." : finished ? "No visual observations were recorded." : "Visual review is still in progress…"}</p>}
                   {!imageAnswerFallback && <p className={styles.caution}>Visual interpretation may be incomplete or mistaken; it is not forensic proof.</p>}
                 </section>
-              </div>
+                </div>
+              </details>
             </section>}
 
-            <section className={styles.limitations} aria-labelledby="limitations-title">
-              <div><p className={styles.sectionKicker}>Read with care</p><h3 id="limitations-title">Limitations</h3></div>
+            <details className={styles.limitations}>
+              <summary>Additional limitations and review notes</summary>
               <ul>
                 {conciseMediaLimitations.map((item) => <li key={item}>{item}</li>)}
                 {!results.brief?.limitations.length && !evidence.some((item) => item.limitations) && <li>{finished ? "Evidence collection is limited to the sources and media available in this investigation." : "Limitations will be summarized after the evidence review."}</li>}
                 {originalMedia && !imageAnswerFallback && <li>Reverse-image search was not performed.</li>}
               </ul>
-            </section>
+            </details>
 
             <section id="brief" className={styles.brief} aria-labelledby="brief-title">
               <div className={styles.sectionHeading}><div><p className={styles.sectionKicker}>A newsroom-ready summary</p><h3 id="brief-title">Verification brief</h3></div></div>

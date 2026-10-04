@@ -95,11 +95,27 @@
 .filters button { min-height: 34px; padding: 0 10px; font-size: 10px; }
 .sourceList > h4, .otherEvidence > h4 { margin: 25px 0 12px; font-size: 13px; }
 .sourceCard, .evidenceCard { min-width: 0; margin-top: 11px; border: 1px solid var(--line-dark); border-radius: 5px; padding: 16px; background: #111516; scroll-margin-top: 70px; }
+.sourceRETRIEVED { border-left: 3px solid #6c9f44; }
+.sourceFAILED { border-left: 3px solid #bd6256; }
+.sourceCANDIDATE { border-left: 3px solid #c79b3f; }
 .sourceHeading { display: flex; justify-content: space-between; gap: 14px; }
+.sourceBadges { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: flex-end; gap: 6px; }
 .sourcePublisher { margin: 0 0 5px; color: #a3c88c; font: 10px var(--font-mono); text-transform: uppercase; }
 .sourceHeading h4 { margin: 0; font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
 .role { align-self: flex-start; border: 1px solid var(--line-dark); border-radius: 3px; padding: 5px 7px; color: #bbc2bb; font-size: 9px; white-space: nowrap; }
 .sourceMeta, .scope { color: #a1aaa2; font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
+.sourceState { display: inline-flex; margin: 12px 0 0; border-radius: 3px; padding: 5px 8px; font-size: 10px; font-weight: 700; }
+.sourceStateRetrieved { color: #315c25; background: #e7f1df; }
+.sourceStateCandidate { color: #72500b; background: #f8f0da; }
+.sourceStateFailed { color: #843b32; background: #f8e8e5; }
+.sourceLaneGroup { margin-top: 18px; }
+.sourceLaneGroup h5 { margin: 15px 0 3px; color: #454c43; font-size: 12px; }
+.sourceLane { display: inline-flex; border-radius: 3px; padding: 5px 7px; font-size: 9px; font-weight: 700; white-space: nowrap; }
+.laneRecent { color: #315c25; background: #e7f1df; }
+.laneHistorical { color: #46536d; background: #e9edf5; }
+.searchScopeNote { margin: 12px 0 4px; color: #687067; font-size: 10px; line-height: 1.5; }
+.dateBasis { margin: 8px 0 12px; color: #59644f; font-size: 10px; line-height: 1.5; }
+.resultCaveat { grid-column: 1 / -1; align-self: start; margin: 0; border-left: 3px solid #c79b3f; border-radius: 3px; padding: 12px 14px; color: #584916; background: #f8f0da; font-size: 12px; line-height: 1.55; }
 .contextNote { margin: 9px 0; color: #d3c28f; font-size: 11px; line-height: 1.5; }
 .relationshipList { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; padding: 0; list-style: none; }
 .relationshipList li { border: 1px solid var(--line-dark); border-radius: 3px; padding: 5px 7px; color: #b9c4b9; font-size: 10px; }
@@ -118,6 +134,10 @@
 .mediaDetails > span { border: 1px solid var(--line-dark); border-radius: 3px; padding: 6px 8px; color: #d3dbd3; font: 10px var(--font-mono); }
 .mediaDetails p { flex-basis: 100%; max-width: 360px; color: #aeb6af; font-size: 12px; line-height: 1.6; }
 .mediaEvidenceGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 15px; }
+.mediaChecksDetails { margin-top: 18px; border-top: 1px solid var(--line-dark); padding-top: 13px; }
+.mediaChecksDetails > summary, .limitations > summary { color: #485044; cursor: pointer; font-size: 12px; font-weight: 700; }
+.limitations { display: block; margin-top: 18px; border: 1px solid var(--line-dark); border-radius: 5px; padding: 15px 18px; background: #fff; }
+.limitations ul { display: grid; gap: 8px; margin: 12px 0 0; padding-left: 18px; color: #626960; font-size: 11px; line-height: 1.55; }
 .mediaGroup { min-width: 0; padding: 16px; border: 1px solid var(--line-dark); border-radius: 5px; background: #111516; }
 .mediaGroup h4 { margin: 0 0 12px; font-size: 15px; }
 .mediaGroup > p:not(.sectionKicker) { color: #d0d7d0; font-size: 12px; line-height: 1.6; }
@@ -282,6 +302,15 @@
 .page .keyEvidenceItem > p:nth-child(2) { margin: 7px 0; color: #353a34; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; white-space: pre-wrap; }
 .page .evidenceCard { border-radius: 8px; }
 .page .sourceCard { border-radius: 10px; }
+.page .sourceRETRIEVED { border-left-color: #6c9f44; }
+.page .sourceFAILED { border-left-color: #bd6256; }
+.page .sourceCANDIDATE { border-left-color: #c79b3f; }
+.page .sourceState, .page .sourceLane { letter-spacing: .01em; }
+.page .resultCaveat { border-left-color: #c18b18; color: #594915; background: #fbf4df; }
+.page .dateBasis, .page .searchScopeNote { color: #687067; }
+.page .limitations { border-color: #e5e7e1; }
+.page .mediaChecksDetails { border-color: #e5e7e1; }
+.page .mediaChecksDetails > summary, .page .limitations > summary { color: #485044; }
 .page .mediaGroup { border-radius: 10px; }
 .page .error { color: #a53f38; }
 .page .formFooter button:disabled { opacity: .55; }

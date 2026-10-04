@@ -80,6 +80,7 @@ USER_FAILURE_MESSAGE = (
     "No unsupported verification finding was produced."
 )
 CURRENT_QUERY_MARKER = "prioritize current information and dated sources"
+HISTORICAL_QUERY_MARKER = "prioritize historical context and original records"
 
 
 class MediaStorageError(RuntimeError):
@@ -537,7 +538,10 @@ def _persist_plan(
         base_query = current_query.split(
             " latest official updates and recent independent reporting", 1
         )[0]
-        historical_query = (base_query[:390] + " original historical records and background context")[:500]
+        historical_query = (
+            base_query[:330] + " original historical records and background context; "
+            + HISTORICAL_QUERY_MARKER
+        )[:500]
         if historical_query not in already_planned:
             queries.append(historical_query)
             already_planned.add(historical_query)
@@ -574,6 +578,11 @@ def _query_for_freshness(query: str, freshness: str) -> str:
             return query[:500]
         query = query[:400]
         query += " original records and recent reporting that checks the current context"
+    elif freshness == "HISTORICAL":
+        if HISTORICAL_QUERY_MARKER in query.casefold():
+            return query[:500]
+        query = query[:400]
+        query += " " + HISTORICAL_QUERY_MARKER
     return query[:500]
 
 
@@ -1656,7 +1665,7 @@ def _load_plan(session: Session, investigation_id: UUID) -> ResearchPlan:
         query = item.query or ""
         freshness = (
             "CURRENT"
-            if "prioritize current information and dated sources" in query.casefold()
+            if CURRENT_QUERY_MARKER in query.casefold()
             else "BALANCED"
             if "original records and recent reporting that checks the current context"
             in query.casefold()
