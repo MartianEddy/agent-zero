@@ -215,7 +215,7 @@ export function visualAnalysisNotice(results) {
     : null;
 }
 
-/** @param {string} stage */
+/** @param {string} stage @param {import('./types').Results | null} [results] */
 export function stagePresentation(stage, results = null) {
   if (stage === "RESEARCHING" && results?.search_traces?.length) {
     const queries = results.search_traces.map((trace) => trace.query ?? "").join(" ").toLowerCase();
