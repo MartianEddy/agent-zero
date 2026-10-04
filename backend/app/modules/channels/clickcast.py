@@ -16,6 +16,7 @@ from app.domain.investigation import Channel, InputType, InvestigationStatus
 from app.modules.investigations.models import Finding, Investigation, Submission, VerificationBrief
 from app.modules.investigations.schemas import InvestigationResponse
 from app.modules.investigations.service import DEV_USER_ID, InvestigationService
+from app.modules.investigations.summary import journalist_assessment_summary
 
 router = APIRouter(prefix="/channels/clickcast", tags=["ClickCast WhatsApp"])
 
@@ -235,17 +236,33 @@ def get_result_from_clickcast(
         InvestigationStatus.CANCELLED,
     }
     terminal_summary = {
-        InvestigationStatus.NEEDS_REVIEW: "Human review is needed before findings can be provided.",
-        InvestigationStatus.FAILED: "The investigation could not be completed. Please try again later.",
-        InvestigationStatus.CANCELLED: "The investigation was cancelled.",
-        InvestigationStatus.COMPLETE: "The investigation completed, but no summary was produced.",
+        InvestigationStatus.NEEDS_REVIEW: (
+            "This check is ready for human review. The available evidence does not support a "
+            "final assessment. Review the cited sources before publication."
+        ),
+        InvestigationStatus.FAILED: (
+            "We could not complete this check, so there is no assessment to share. Please try "
+            "again later or review the sources directly."
+        ),
+        InvestigationStatus.CANCELLED: "This check was cancelled before an assessment was ready.",
+        InvestigationStatus.COMPLETE: (
+            "This check is ready, but no summary was produced. No conclusion is available; "
+            "please review the cited sources directly."
+        ),
     }
     return ClickCastResult(
         reference=investigation.reference,
         status=investigation.status.value,
         current_stage=investigation.current_stage,
         ready=brief is not None or investigation.status in terminal_statuses,
-        summary=(brief.summary[:1000] if brief else terminal_summary.get(investigation.status)),
+        # Rebuild from persisted findings so existing investigations also get
+        # the journalist-facing copy after this code is deployed; stored briefs
+        # are immutable snapshots and may contain the older system-focused text.
+        summary=(
+            journalist_assessment_summary(item.status for item in findings)[:1000]
+            if brief
+            else terminal_summary.get(investigation.status)
+        ),
         limitations=brief.limitations[:5] if brief else [],
         findings=[
             ClickCastFinding(status=item.status, statement=item.statement[:500])

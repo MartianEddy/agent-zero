@@ -41,6 +41,7 @@ from app.modules.investigations.models import (
     utcnow,
 )
 from app.modules.investigations.provider_errors import FailureCategory
+from app.modules.investigations.summary import journalist_assessment_summary
 from app.modules.investigations.usage import (
     ModelCallBudgetExceeded,
     add_limitation,
@@ -1405,18 +1406,6 @@ def _build_brief(session: Session, investigation: Investigation) -> None:
         session.scalars(select(Finding).where(Finding.investigation_id == investigation.id))
     )
     claims = list(session.scalars(select(Claim).where(Claim.investigation_id == investigation.id)))
-    if findings:
-        counts = {
-            status: sum(item.status == status for item in findings)
-            for status in ALLOWED_FINDING_STATUSES
-        }
-        summary = (
-            "Automated evidence review recorded "
-            + ", ".join(f"{count} {status.lower()}" for status, count in counts.items() if count)
-            + ". Human review remains necessary."
-        )
-    else:
-        summary = "No claim-level finding was produced; human review is needed."
     media_counts = {
         method: session.scalar(
             select(func.count(Evidence.id)).where(
@@ -1427,20 +1416,22 @@ def _build_brief(session: Session, investigation: Investigation) -> None:
         or 0
         for method in ("MEDIA_PROVENANCE", "MEDIA_TECHNICAL_METADATA", "MEDIA_VISUAL_OBSERVATION")
     }
-    present_media = [
-        name.replace("MEDIA_", "").replace("_", " ").lower()
-        for name, count in media_counts.items()
-        if count
-    ]
-    if present_media:
-        summary += " Media examined: " + ", ".join(present_media) + "."
+    media_labels = {
+        "MEDIA_PROVENANCE": "image provenance",
+        "MEDIA_TECHNICAL_METADATA": "image file details",
+        "MEDIA_VISUAL_OBSERVATION": "visible image content",
+    }
+    present_media = [media_labels[name] for name, count in media_counts.items() if count]
+    summary = journalist_assessment_summary(
+        (item.status for item in findings), media_reviews=present_media
+    )
     limitations = list(usage.limitations)
     if not findings and claims:
         limitations.append("Findings are unavailable because evidence reasoning did not complete.")
     if any(item.status in {"INCONCLUSIVE", "UNVERIFIED"} for item in findings):
         limitations.append(
-            "Recommended next steps: obtain the original media file, verify its publication "
-            "timestamp, and consult an authoritative source. These are recommendations, "
+            "Recommended next step: review the cited sources and seek confirmation from an "
+            "independent, authoritative source before publication. This is a recommendation, "
             "not evidence."
         )
     brief = VerificationBrief(

@@ -121,6 +121,7 @@
 .brief > .sectionHeading > span { color: #9da69f; font: 10px var(--font-mono); }
 .brief > h4, .briefClaim h4 { margin: 20px 0 6px; color: #a3c88c; font: 10px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; }
 .brief > p, .briefClaim p { color: #d3dad3; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.briefSummary { white-space: pre-line; }
 .brief ul { display: grid; gap: 7px; padding-left: 19px; color: #c1c9c1; font-size: 11px; line-height: 1.6; }
 .briefClaim { padding-bottom: 8px; border-bottom: 1px solid var(--line-dark); }
 .briefClaim a { display: block; margin: 7px 0; color: #c5e5b2; font-size: 11px; }

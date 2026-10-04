@@ -1,8 +1,8 @@
 ---
 project: agent-zero
 current_stage: OPERATE
-tier: small
-tier_reason: Hardens ClickCast result lookup and suppresses duplicate active submissions without a stable event ID; no schema change.
+tier: medium
+tier_reason: Improves journalist-facing investigation summaries across the backend, web UI, and ClickCast guidance; adds a reference-bound WhatsApp recheck interaction without a schema change.
 last_updated: 2026-10-04T02:21:39Z
 ---
 
@@ -27,6 +27,8 @@ Agent 0 cost-controlled evidence-first investigation pipeline, URL Source Intell
 
 ## Last session summary
 ClickCast WhatsApp hardening (2026-10-04): result lookup optionally selects the latest sender-owned WhatsApp investigation when no reference is passed, and terminal outcomes report ready with an explanatory summary. When ClickCast omits a stable event ID, identical active submissions from the same sender reuse existing work; a stable ID remains needed for concurrency-safe retry idempotency. Updated setup and architecture notes. ClickCast automatic completion webhook recipient/auth contract is still undocumented, so no push sender or raw recipient storage was added. No schema change. Tests not run.
+
+Journalist-facing result UX (2026-10-04): brief summaries now lead with a cautious assessment, explain whether the evidence supports, challenges, or cannot establish the claim, and give an editorial next step. ClickCast reconstructs result copy from persisted finding statuses so existing briefs receive the updated wording after deployment; web brief display preserves paragraph breaks. Documented reference-bound “Check this result” and typed-reference lookup configuration. No schema change. Automatic completion delivery remains unimplemented pending ClickCast recipient/auth confirmation. Tests not run.
 
 ClickCast variable picker inspection (2026-10-04): the HTTP API body picker exposes subscriber name, email, WhatsApp chat ID/phone number, subscriber ID, and location; no stable incoming-message ID is available. `event_id` is optional. When absent, an identical message from the same sender reuses matching active work as a best-effort retry guard; concurrent retries can still race, so a stable event ID remains needed for strict idempotency. The user confirmed the exposed ClickCast bearer token has been rotated. No external provider calls or migrations. Production-sensitive use remains blocked pending auth, retention/deletion, provider handling and deployment decisions.
 

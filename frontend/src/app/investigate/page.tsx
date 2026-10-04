@@ -482,7 +482,7 @@ export default function InvestigatePage() {
                 })}
                 {claims.length === 0 && <article className={styles.briefClaim}><h4>Submitted question</h4><p>{content.trim() ? safeEvidenceText(content.trim()) : "No verifiable claim was extracted from this request."}</p><p>No factual finding was produced from the question alone.</p></article>}
                 {originalMedia && <><h4>Image origin &amp; history</h4><p>{provenance ? `${provenancePresentation(provenance.status).label}. ${provenancePresentation(provenance.status).limitation}` : "An image was submitted; no origin information is available."}</p></>}
-                <h4>Summary</h4><p>{safeEvidenceText(results.brief.summary)}</p>
+                <h4>Assessment summary</h4><p className={styles.briefSummary}>{safeEvidenceText(results.brief.summary)}</p>
                 <h4>Unknowns</h4><ul>{unknowns.map((item) => <li key={item}>{item}</li>)}</ul>
                 <h4>Recommended next steps</h4><ul>{nextSteps.length ? nextSteps.map((item) => <li key={item}>{item}</li>) : <li>Review all cited material with an editor.</li>}</ul>
                 <h4>Limitations</h4><ul>{presentedLimitations(results).map((item) => <li key={item}>{item}</li>)}</ul>
