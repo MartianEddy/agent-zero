@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.domain.investigation import Channel, InputType
+from app.domain.investigation import Channel, InputType, InvestigationStatus
 from app.modules.investigations.models import Finding, Investigation, Submission, VerificationBrief
 from app.modules.investigations.schemas import InvestigationResponse
 from app.modules.investigations.service import DEV_USER_ID, InvestigationService
@@ -46,7 +46,10 @@ class ClickCastSubmitRequest(BaseModel):
 
 
 class ClickCastResultRequest(BaseModel):
-    reference: str = Field(min_length=1, max_length=20)
+    # Supplying a reference checks that exact investigation. If ClickCast
+    # cannot reliably retain/pass it into a separate keyword flow, omit it to
+    # retrieve the latest investigation belonging to this sender.
+    reference: str | None = Field(default=None, min_length=1, max_length=20)
     sender: str = Field(min_length=1, max_length=120)
 
     @field_validator("sender")
@@ -135,6 +138,35 @@ def submit_from_clickcast(
 ) -> InvestigationResponse:
     settings = get_settings()
     identity_key = _configured_clickcast_secrets(settings, authorization)
+    sender_ref = _sender_reference(body.sender, identity_key)
+    # The current ClickCast variable picker has no stable message/event ID.
+    # Avoid starting duplicate work when it retries the same exact submission
+    # while that investigation is still active. Once terminal, a new request
+    # may intentionally submit the same text again.
+    if body.event_id is None:
+        terminal_statuses = {
+            InvestigationStatus.COMPLETE,
+            InvestigationStatus.NEEDS_REVIEW,
+            InvestigationStatus.FAILED,
+            InvestigationStatus.CANCELLED,
+        }
+        existing_in_progress = session.scalar(
+            select(Investigation)
+            .join(Submission, Submission.investigation_id == Investigation.id)
+            .where(
+                Investigation.owner_id == _workspace_owner(settings),
+                Investigation.channel == Channel.WHATSAPP,
+                Investigation.status.not_in(terminal_statuses),
+                Submission.channel == Channel.WHATSAPP,
+                Submission.original_text == body.message,
+                Submission.source_metadata["sender_ref"].as_string() == sender_ref,
+            )
+            .order_by(Investigation.created_at.desc())
+            .limit(1)
+        )
+        if existing_in_progress is not None:
+            return InvestigationResponse.model_validate(existing_in_progress)
+
     investigation = InvestigationService(session).create(
         owner_id=_workspace_owner(settings),
         content=body.message,
@@ -148,7 +180,7 @@ def submit_from_clickcast(
             "platform": "clickcast",
             "event_id": body.event_id,
             "message_type": "TEXT",
-            "sender_ref": _sender_reference(body.sender, identity_key),
+            "sender_ref": sender_ref,
         },
     )
     return InvestigationResponse.model_validate(investigation)
@@ -166,30 +198,23 @@ def get_result_from_clickcast(
 ) -> ClickCastResult:
     settings = get_settings()
     identity_key = _configured_clickcast_secrets(settings, authorization)
-    investigation = session.scalar(
-        select(Investigation).where(
-            Investigation.reference == body.reference,
+    sender_ref = _sender_reference(body.sender, identity_key)
+    statement = (
+        select(Investigation)
+        .join(Submission, Submission.investigation_id == Investigation.id)
+        .where(
             Investigation.owner_id == _workspace_owner(settings),
             Investigation.channel == Channel.WHATSAPP,
-        )
-    )
-    if investigation is None:
-        raise HTTPException(status_code=404, detail="Investigation not found")
-
-    submission = session.scalar(
-        select(Submission).where(
-            Submission.investigation_id == investigation.id,
             Submission.channel == Channel.WHATSAPP,
+            Submission.source_metadata["sender_ref"].as_string() == sender_ref,
         )
     )
-    sender_ref = (
-        submission.source_metadata.get("sender_ref")
-        if submission and isinstance(submission.source_metadata, dict)
-        else None
-    )
-    if not sender_ref or not hmac.compare_digest(
-        str(sender_ref), _sender_reference(body.sender, identity_key)
-    ):
+    if body.reference:
+        statement = statement.where(Investigation.reference == body.reference)
+    else:
+        statement = statement.order_by(Investigation.created_at.desc()).limit(1)
+    investigation = session.scalar(statement)
+    if investigation is None:
         raise HTTPException(status_code=404, detail="Investigation not found")
 
     brief = session.scalar(
@@ -203,12 +228,24 @@ def get_result_from_clickcast(
             .limit(5)
         )
     )
+    terminal_statuses = {
+        InvestigationStatus.COMPLETE,
+        InvestigationStatus.NEEDS_REVIEW,
+        InvestigationStatus.FAILED,
+        InvestigationStatus.CANCELLED,
+    }
+    terminal_summary = {
+        InvestigationStatus.NEEDS_REVIEW: "Human review is needed before findings can be provided.",
+        InvestigationStatus.FAILED: "The investigation could not be completed. Please try again later.",
+        InvestigationStatus.CANCELLED: "The investigation was cancelled.",
+        InvestigationStatus.COMPLETE: "The investigation completed, but no summary was produced.",
+    }
     return ClickCastResult(
         reference=investigation.reference,
         status=investigation.status.value,
         current_stage=investigation.current_stage,
-        ready=brief is not None,
-        summary=brief.summary[:1000] if brief else None,
+        ready=brief is not None or investigation.status in terminal_statuses,
+        summary=(brief.summary[:1000] if brief else terminal_summary.get(investigation.status)),
         limitations=brief.limitations[:5] if brief else [],
         findings=[
             ClickCastFinding(status=item.status, statement=item.statement[:500])

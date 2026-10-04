@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: { default: "Agent 0 — Assume nothing. Follow the evidence.", template: "%s — Agent 0" },
-  description: "Investigate suspicious claims, media and documents against available evidence.",
+  title: { default: "Agent 0 — Follow the evidence", template: "%s — Agent 0" },
+  description: "Investigate questionable claims, links and images. See the available evidence, what remains uncertain, and what to check next.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

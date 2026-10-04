@@ -1,0 +1,117 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: agent_zero
+      POSTGRES_USER: agent_zero
+      POSTGRES_PASSWORD: agent_zero_local
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent_zero -d agent_zero"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:16379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  object-storage:
+    image: chrislusf/seaweedfs:latest
+    environment:
+      AWS_ACCESS_KEY_ID: agentzero
+      AWS_SECRET_ACCESS_KEY: local-development-only
+      S3_BUCKET: agent-zero
+    ports:
+      - "127.0.0.1:8333:8333"
+      - "127.0.0.1:9333:9333"
+    volumes:
+      - object_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:9333/cluster/status >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build: ./backend
+    working_dir: /app
+    environment:
+      APP_ENV: development
+      AUTH_MODE: disabled
+      DATABASE_URL: postgresql+psycopg://agent_zero:agent_zero_local@postgres:5432/agent_zero
+      REDIS_URL: redis://redis:6379/0
+      OBJECT_STORAGE_ENDPOINT: http://object-storage:8333
+      OBJECT_STORAGE_BUCKET: agent-zero
+      OBJECT_STORAGE_ACCESS_KEY: agentzero
+      OBJECT_STORAGE_SECRET_KEY: local-development-only
+      OBJECT_STORAGE_REGION: us-east-1
+      OBJECT_STORAGE_SECURE: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+
+  api:
+    build: ./backend
+    env_file:
+      - ./backend/.env
+    environment:
+      APP_ENV: development
+      AUTH_MODE: disabled
+      DATABASE_URL: postgresql+psycopg://agent_zero:agent_zero_local@postgres:5432/agent_zero
+      REDIS_URL: redis://redis:6379/0
+      OBJECT_STORAGE_ENDPOINT: http://object-storage:8333
+      OBJECT_STORAGE_BUCKET: agent-zero
+      OBJECT_STORAGE_ACCESS_KEY: agentzero
+      OBJECT_STORAGE_SECRET_KEY: local-development-only
+      OBJECT_STORAGE_REGION: us-east-1
+      OBJECT_STORAGE_SECURE: "false"
+    ports:
+      - "127.0.0.1:18000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      object-storage:
+        condition: service_healthy
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+  worker:
+    build: ./backend
+    env_file:
+      - ./backend/.env
+    environment:
+      APP_ENV: development
+      AUTH_MODE: disabled
+      DATABASE_URL: postgresql+psycopg://agent_zero:agent_zero_local@postgres:5432/agent_zero
+      REDIS_URL: redis://redis:6379/0
+      OBJECT_STORAGE_ENDPOINT: http://object-storage:8333
+      OBJECT_STORAGE_BUCKET: agent-zero
+      OBJECT_STORAGE_ACCESS_KEY: agentzero
+      OBJECT_STORAGE_SECRET_KEY: local-development-only
+      OBJECT_STORAGE_REGION: us-east-1
+      OBJECT_STORAGE_SECURE: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "app.worker.celery_app", "worker", "--beat", "--schedule=/tmp/agent-zero-celerybeat-schedule", "--loglevel=INFO"]
+
+volumes:
+  postgres_data:
+  redis_data:
+  object_data:

@@ -7,7 +7,7 @@ export function SiteFooter() {
     <div className={`container ${styles.main}`}>
       <div className={styles.identity}>
         <Link href="/" className={styles.brand} aria-label="Agent 0 home"><AgentMark /></Link>
-        <p>Investigative intelligence<br />for a more informed world.</p>
+        <p>Evidence for better-informed<br />human decisions.</p>
       </div>
       <nav className={styles.navigation} aria-label="Footer navigation">
         <p className={styles.navLabel}>Explore Agent 0</p>

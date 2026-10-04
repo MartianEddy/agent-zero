@@ -5,7 +5,7 @@ import { AgentMark } from "@/components/AgentMark";
 import { Arrow } from "@/components/Arrow";
 import styles from "./SiteHeader.module.css";
 
-const links = [{ label: "Home", href: "/" }, { label: "Product", href: "/product" }, { label: "How it works", href: "/how-it-works" }, { label: "For Newsrooms", href: "/newsrooms" }, { label: "About", href: "/about" }];
+const links = [{ label: "Product", href: "/product" }, { label: "How it works", href: "/how-it-works" }, { label: "For Newsrooms", href: "/newsrooms" }, { label: "About", href: "/about" }];
 export function SiteHeader({ activeHref = "/" }: { activeHref?: string }) {
   const [open, setOpen] = useState(false);
   return <header className={styles.header}><div className={`container ${styles.inner}`}>

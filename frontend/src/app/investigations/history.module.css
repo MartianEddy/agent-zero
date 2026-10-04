@@ -1,0 +1,46 @@
+.page { min-height: 100vh; color: #20231f; background: #f6f6f2; }
+.header { display: flex; height: 68px; align-items: center; justify-content: space-between; border-bottom: 1px solid #e5e7e1; padding: 0 max(24px, calc((100vw - 1120px) / 2)); }
+.header nav { display: flex; gap: 22px; }
+.header nav a { color: #535a50; font-size: 13px; }
+.header nav a[aria-current="page"] { color: #20231f; font-weight: 700; }
+.content { width: min(820px, calc(100% - 48px)); margin: 0 auto; padding: 64px 0 100px; }
+.titleRow { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
+.titleRow h1 { margin: 0; font-size: clamp(32px, 5vw, 42px); letter-spacing: -.045em; }
+.titleRow p:last-child { margin: 10px 0 0; color: #687067; font-size: 14px; line-height: 1.6; }
+.eyebrow { margin: 0 0 10px; color: #688f3e; font-size: 12px; }
+.controls { display: grid; grid-template-columns: minmax(200px, 1fr) auto; align-items: center; gap: 12px 16px; margin: 36px 0 12px; }
+.searchLabel { grid-column: 1 / -1; color: #535a50; font-size: 12px; font-weight: 600; }
+.controls input { width: 100%; min-height: 44px; border: 1px solid #d9ddd5; border-radius: 8px; padding: 0 12px; color: #20231f; background: white; font: inherit; }
+.filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.filters button { min-height: 36px; border: 1px solid #d9ddd5; border-radius: 7px; padding: 0 10px; color: #535a50; background: transparent; font-size: 11px; cursor: pointer; }
+.filters button[aria-pressed="true"] { border-color: #7ca74f; color: #355b1a; background: #eff5e9; }
+.list { margin: 0; padding: 0; list-style: none; }
+.list li { border-top: 1px solid #e5e7e1; }
+.item { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto auto; align-items: center; gap: 14px; padding: 18px 4px; }
+.item:hover .mainText strong { color: #466b27; }
+.typeIcon { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 8px; color: #587a38; background: #edf3e7; font-size: 15px; }
+.mainText { display: grid; gap: 6px; min-width: 0; }
+.mainText strong { overflow: hidden; color: #252923; font-size: 14px; font-weight: 650; line-height: 1.45; text-overflow: ellipsis; }
+.mainText small { color: #747b72; font-size: 11px; }
+.result { max-width: 175px; color: #666c65; font-size: 12px; text-align: right; }
+.statusSupported { color: #287346; }
+.statusContradicted { color: #a53f38; }
+.statusUnverified { color: #85601c; }
+.statusInconclusive { color: #60666f; }
+.item time { color: #747b72; font-size: 11px; white-space: nowrap; }
+.empty, .loading { margin-top: 20px; padding: 24px 0; color: #687067; }
+.empty h2 { margin: 0; color: #20231f; font-size: 20px; }
+.empty p { font-size: 14px; }
+.empty a, .empty button { color: #466b27; font: inherit; }
+.empty button { border: 0; padding: 0; background: none; cursor: pointer; text-decoration: underline; }
+.empty [role="alert"] { color: #a53f38; }
+@media (max-width: 700px) {
+  .content { width: calc(100% - 32px); padding-top: 40px; }
+  .titleRow { align-items: flex-start; flex-direction: column; }
+  .controls { grid-template-columns: 1fr; }
+  .filters { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 3px; }
+  .filters button { flex: 0 0 auto; }
+  .item { grid-template-columns: 30px minmax(0, 1fr) auto; gap: 10px; padding: 15px 2px; }
+  .result { grid-column: 2; grid-row: 2; max-width: none; text-align: left; }
+  .item time { grid-column: 3; grid-row: 1; align-self: start; font-size: 10px; }
+}

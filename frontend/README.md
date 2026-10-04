@@ -1,6 +1,6 @@
 # Agent 0 public frontend
 
-The Agent 0 marketing site and investigation workspace entry placeholder. This is a Next.js App Router application using TypeScript, React Server Components and route-level CSS Modules.
+The Agent 0 marketing site and investigation workspace. This is a Next.js App Router application using TypeScript, React Server Components and route-level CSS Modules.
 
 ## Run locally
 
@@ -13,6 +13,8 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+The `/investigate` workspace proxies requests to the FastAPI service at `http://127.0.0.1:18000` by default. Set `AGENT_ZERO_API_URL` in the frontend environment to override that backend origin. Start the backend and its worker separately; the owner should set `OPENAI_API_KEY` in `backend/.env` before starting investigations.
+
 ## Routes
 
 - `/` — Home
@@ -20,7 +22,7 @@ Open [http://localhost:3000](http://localhost:3000).
 - `/how-it-works` — How it works
 - `/newsrooms` — For Newsrooms
 - `/about` — About
-- `/investigate` — Workspace placeholder (no live investigation service is connected)
+- `/investigate` — Submit claims, public URLs, or images and review progress, provenance, evidence links, and findings
 
 ## Checks
 

@@ -1,24 +1,23 @@
 import Link from "next/link";
+import Image from "next/image";
 import { Arrow } from "@/components/Arrow";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SiteHeader } from "@/components/SiteHeader";
-import styles from "./page.module.css";
+import styles from "../public.module.css";
 
-const roles = [
-  ["01", "Journalists", "Check claims, trace original sources and understand what is known before a story moves forward."],
-  ["02", "Editors", "Review the material behind a claim and make editorial decisions with its limits in view."],
-  ["03", "Fact-checkers", "Record evidence, compare accounts and keep a transparent trail for further review."],
-  ["04", "Newsrooms", "Support a shared approach to verification across reporting and editorial work."],
+const people = [
+  ["01", "Journalists", "Check a claim or image before it moves into a story."],
+  ["02", "Editors", "Review the material and its limits before making an editorial decision."],
+  ["03", "Researchers & fact-checkers", "Compare accounts and keep a clear record of what was examined."],
+  ["04", "Anyone checking information", "Understand what the available evidence can—and cannot—show."],
 ];
 
 export default function NewsroomsPage() {
   return <main className={styles.page}><SiteHeader activeHref="/newsrooms" />
-    <section className={styles.hero}><div className="container"><p className="eyebrow">For newsrooms</p><h1>Make room for<br /><span>better verification.</span></h1><p>Agent 0 is being designed for the people who investigate information under real editorial pressure: journalists, editors and fact-checkers.</p><Link href="/investigate" className="button button-primary">Start investigating <Arrow /></Link>
-      <div className={styles.quote}><span>THE WORK</span><p>Follow the trail.<br />Keep the uncertainty visible.</p><div className={styles.quoteRing}>0<i /><i /><i /></div></div>
-    </div></section>
-    <section className={styles.roles}><div className="container"><p className={styles.darkEyebrow}>Designed around newsroom roles</p><h2>Support every step<br />of the verification process.</h2><div className={styles.grid}>{roles.map(([number, title, text]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{text}</p></article>)}</div></div></section>
-    <section className={styles.workflow}><div className="container"><div><p className="eyebrow">A practical workflow companion</p><h2>Evidence in view.<br />Editorial judgment in human hands.</h2></div><div><p>Agent 0 is intended to help organize a verification process, make source relationships easier to review and document what the evidence can and cannot establish.</p><p>The current workspace is a prototype. Team management, newsroom integrations and collaborative review are not yet available.</p></div></div></section>
-    <section className={styles.cta}><div className="container"><div><p className="eyebrow">Assume nothing</p><h2>Begin with a claim.</h2><p>See where the evidence leads.</p></div><Link href="/investigate" className="button button-primary">Start investigating <Arrow /></Link></div></section>
+    <section className={styles.hero}><div className={`${styles.heroInner} ${styles.heroSplit}`}><div><p className={styles.eyebrow}>For newsrooms and beyond</p><h1>Make evidence easier to review.</h1><p>Agent 0 helps people checking fast-moving information see the sources, the result and the questions that remain.</p><Link href="/investigate" className="button button-primary">Start an investigation <Arrow /></Link><div className={styles.manifesto}><p>Evidence in view.<br />Human judgment in human hands.</p></div></div><figure className={styles.heroVisual}><Image src="/images/press-briefing.webp" alt="Journalists and cameras gathered at a press briefing" width={1500} height={1000} sizes="(max-width: 640px) 100vw, 48vw" priority /><figcaption>For reporters, editors, researchers and anyone checking information.</figcaption></figure></div></section>
+    <section className={styles.section}><div className={styles.sectionInner}><h2>Useful wherever verification happens.</h2><p className={styles.intro}>The same careful questions matter in a newsroom, a research desk, a classroom, a public office or when deciding whether to share a message.</p><div className={styles.steps}>{people.map(([number, title, description]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{description}</p></article>)}</div></div></section>
+    <section className={styles.sectionAlt}><div className={styles.sectionInner}><h2>Support the decision. Don’t make it for people.</h2><p className={styles.intro}>Agent 0 is an investigation aid. It organizes available information and keeps its limitations visible; it does not replace newsroom standards, expert review or personal judgment.</p><div className={styles.values}><article><h3>Before a story moves forward</h3><p>Review available sources and identify gaps that need follow-up.</p></article><article><h3>When an image raises questions</h3><p>Check attached origin details and visible observations in context.</p></article><article><h3>When accounts conflict</h3><p>See where reports agree, differ or appear to rely on the same source.</p></article><article><h3>When the answer is still unclear</h3><p>Keep “not established yet” distinct from a false claim.</p></article></div></div></section>
+    <section className={styles.cta}><div className={styles.ctaInner}><div><h2>Bring a question into view.</h2><p>Investigate a claim, link or image.</p></div><Link href="/investigate" className="button button-primary">Investigate something <Arrow /></Link></div></section>
     <SiteFooter />
   </main>;
 }

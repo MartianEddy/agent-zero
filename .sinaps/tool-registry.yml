@@ -1,0 +1,29 @@
+# Project-level overrides for the SEOS toolchain. Keep optional tools explicit.
+version: 1
+tools:
+  spec_kit:
+    enabled: false
+    stages: [DEFINE, PLAN]
+    evidence: docs/engineering/specs/
+  playwright:
+    enabled: false
+    stages: [UX, VERIFY]
+    evidence: docs/verification/evidence/
+  mobile:
+    enabled: false
+    adapter: argent-or-maestro
+    stages: [VERIFY]
+    evidence: docs/verification/evidence/
+  semgrep:
+    enabled: false
+    stages: [VERIFY, REVIEW]
+    evidence: docs/verification/evidence/
+  trivy:
+    enabled: false
+    stages: [VERIFY, REVIEW]
+    evidence: docs/verification/evidence/
+  telemetry:
+    enabled: false
+    adapters: [opentelemetry, sentry]
+    stages: [OPERATE]
+    evidence: docs/operations/

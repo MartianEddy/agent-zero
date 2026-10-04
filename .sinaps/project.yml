@@ -1,0 +1,11 @@
+version: 1
+stack: <language/framework/database>
+commands:
+  test: <command to run tests>
+  lint: <command to run lint>
+  build: <command to build the project>
+  run: <command to start the project>
+  verify: <command to run the complete verification suite>
+
+# Optional agent handoff command. Use $1 for the generated prompt.
+agent_command: codex exec "$1"

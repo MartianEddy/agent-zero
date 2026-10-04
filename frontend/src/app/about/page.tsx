@@ -2,21 +2,21 @@ import Link from "next/link";
 import { Arrow } from "@/components/Arrow";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SiteHeader } from "@/components/SiteHeader";
-import styles from "./page.module.css";
+import styles from "../public.module.css";
 
 const principles = [
-  ["01", "Assume nothing", "Treat every claim as something to investigate. Start from the evidence, not the conclusion you expect."],
-  ["02", "Show the trail", "Keep sources and the path between a claim and its evidence visible for review."],
-  ["03", "Respect uncertainty", "Make gaps and conflicts clear. An absence of evidence is not evidence that a claim is false."],
-  ["04", "Keep people accountable", "Use AI to support investigation. Leave editorial judgment and decisions with people."],
+  ["01", "Start with evidence", "Treat a question as something to examine, not a conclusion to confirm."],
+  ["02", "Show the way through", "Help people follow important findings back to what was reviewed."],
+  ["03", "Respect uncertainty", "Keep missing information and conflicting accounts visible."],
+  ["04", "Leave decisions with people", "Use AI to support investigation while people remain accountable."],
 ];
 
 export default function AboutPage() {
   return <main className={styles.page}><SiteHeader activeHref="/about" />
-    <section className={styles.hero}><div className="container"><p className="eyebrow">About Agent 0</p><h1>Information deserves<br />to be <span>investigated.</span></h1><p>Agent 0 is an AI-assisted verification workspace in development for journalists, editors, fact-checkers and newsrooms.</p><div className={styles.manifesto}><span className={styles.manifestoZero}>0</span><p>Assume nothing.<br /><b>Follow the evidence.</b></p></div></div></section>
-    <section className={styles.mission}><div className="container"><div><p className={styles.darkEyebrow}>Why Agent 0</p><h2>Help people follow<br />information to its sources.</h2></div><div><p>Claims can move quickly between people and platforms. The work of checking them takes time: finding sources, comparing accounts, checking provenance and making uncertainty explicit.</p><p>Agent 0 is being built to organize that work in one place, so people can examine the evidence and make informed decisions.</p></div></div></section>
-    <section className={styles.principles}><div className="container"><p className={styles.darkEyebrow}>The principles</p><h2>AI investigates.<br /><span>Humans decide.</span></h2><div className={styles.grid}>{principles.map(([number, title, text]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{text}</p></article>)}</div></div></section>
-    <section className={styles.cta}><div className="container"><div><p className="eyebrow">Follow the evidence</p><h2>Start an investigation.</h2><p>Explore the current Agent 0 workspace preview.</p></div><Link href="/investigate" className="button button-primary">Start investigating <Arrow /></Link></div></section>
+    <section className={styles.hero}><div className={styles.heroInner}><p className={styles.eyebrow}>About Agent 0</p><h1>The internet doesn’t need another AI telling people what to believe.</h1><p>It needs better tools for examining evidence.</p><div className={styles.manifesto}><p>Assume nothing.<br /><strong>Follow the evidence.</strong></p></div></div></section>
+    <section className={styles.section}><div className={styles.sectionInner}><h2>Why Agent 0 exists.</h2><p className={styles.intro}>Information can move quickly between people and platforms. Checking it takes deliberate work: finding sources, comparing accounts, understanding media and being clear about what remains unknown. Agent 0 is being built to make that work easier to follow.</p><div className={styles.steps}>{principles.map(([number, title, description]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{description}</p></article>)}</div></div></section>
+    <section className={styles.sectionAlt}><div className={styles.sectionInner}><p className={styles.eyebrow}>The principle</p><h2>AI investigates.<br />Humans decide.</h2><p className={styles.intro}>A result should come with the evidence behind it, the limitations that matter and a clear view of what could not be established.</p></div></section>
+    <section className={styles.cta}><div className={styles.ctaInner}><div><h2>Follow a question where the evidence leads.</h2><p>Start with a claim, a link or an image.</p></div><Link href="/investigate" className="button button-primary">Start investigating <Arrow /></Link></div></section>
     <SiteFooter />
   </main>;
 }

@@ -1,19 +1,36 @@
 :root {
-  color-scheme: dark; --ink: #0b0d0e; --ink-raised: #111516; --paper: #f7f7f4; --paper-muted: #e9eae5;
-  --signal: #a3ff47; --slate: #6b7280; --muted: #a4aaa5; --line-dark: rgb(255 255 255 / 12%); --line-light: rgb(11 13 14 / 14%);
-  --status-unverified: #f5b942; --status-verified: #43c17a; --status-contradicted: #f16a62; --status-inconclusive: #aab1bd;
-  --font-sans: 'Avenir Next', Avenir, Inter, ui-sans-serif, system-ui, sans-serif; --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; --container: 1200px;
+  color-scheme: light;
+  --ink: #20231f;
+  --ink-raised: #ffffff;
+  --paper: #20231f;
+  --paper-muted: #e9ebe5;
+  --signal: #a3ff47;
+  --slate: #6b7269;
+  --muted: #687067;
+  --line-dark: #e2e6de;
+  --line-light: rgb(32 35 31 / 14%);
+  --status-unverified: #987126;
+  --status-verified: #287346;
+  --status-contradicted: #a53f38;
+  --status-inconclusive: #60666f;
+  --font-sans: Inter, 'Avenir Next', Avenir, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  --container: 1200px;
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
-body { margin: 0; background: var(--ink); color: var(--paper); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+body { margin: 0; background: #f8f8f4; color: var(--ink); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
 button, a { font: inherit; } a { color: inherit; text-decoration: none; } button { color: inherit; }
-::selection { color: var(--ink); background: var(--signal); } :focus-visible { outline: 2px solid var(--signal); outline-offset: 4px; }
+::selection { color: var(--ink); background: #c5e7a7; } :focus-visible { outline: 2px solid #5a8536; outline-offset: 4px; }
 .container { width: min(var(--container), calc(100% - 64px)); margin-inline: auto; }
+.agent-mark { position: relative; display: inline-flex; width: 116px; height: 38px; overflow: hidden; align-items: center; justify-content: center; border: 1px solid #29312a; border-radius: 6px; background: #0b0d0e; vertical-align: middle; }
+.agent-mark__image { display: block; width: 116px; height: 58px; flex: 0 0 auto; max-width: none; object-fit: cover; object-position: center; }
+.agent-mark--compact { width: 40px; height: 40px; border-radius: 8px; }
+.agent-mark--compact .agent-mark__image { width: 40px; height: 40px; object-fit: contain; }
 .eyebrow { margin: 0 0 16px; color: var(--signal); font: 500 11px/1.4 var(--font-mono); letter-spacing: .13em; text-transform: uppercase; }
-.button { display: inline-flex; min-height: 48px; align-items: center; justify-content: center; gap: 10px; border: 1px solid transparent; border-radius: 5px; padding: 0 20px; font-size: 13px; font-weight: 800; transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease; }
-.button:hover { transform: translateY(-1px); } .button-primary { color: var(--ink); background: var(--signal); } .button-primary:hover { background: #b8ff72; }
-.button-secondary { border-color: var(--line-dark); color: var(--paper); background: rgb(255 255 255 / 2%); } .button-secondary:hover { border-color: rgb(255 255 255 / 32%); background: rgb(255 255 255 / 6%); }
+.button { display: inline-flex; min-height: 46px; align-items: center; justify-content: center; gap: 10px; border: 1px solid transparent; border-radius: 8px; padding: 0 18px; font-size: 13px; font-weight: 650; transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, transform 140ms ease; }
+.button:hover { transform: translateY(-1px); } .button:active { transform: scale(.98); } .button-primary { color: var(--ink); background: #a3ff47; } .button-primary:hover { background: #b7ff79; }
+.button-secondary { border-color: #d9ddd5; color: var(--paper); background: #fff; } .button-secondary:hover { border-color: #aab59e; background: #f5f7f2; }
 .button-dark-secondary { border-color: var(--line-light); color: var(--ink); background: transparent; }
 @media (max-width: 700px) { .container { width: min(var(--container), calc(100% - 40px)); } .button { min-height: 46px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
