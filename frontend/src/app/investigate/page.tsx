@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentMark } from "@/components/AgentMark";
+import { WHATSAPP_CONTACT_URL } from "@/lib/contact";
 import {
   aiDeclarationCopy,
   findingEvidenceReferences,
@@ -336,6 +337,8 @@ export default function InvestigatePage() {
         {!investigation && <section className={styles.examples} aria-label="Examples">
           <p>Try asking</p>{EXAMPLES.map((example) => <button type="button" key={example} onClick={() => { setContent(example); selectFile(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}>{example}</button>)}
         </section>}
+
+        <p className={styles.contactPrompt}>Questions? <a href={WHATSAPP_CONTACT_URL} target="_blank" rel="noopener noreferrer">Message Agent 0 on WhatsApp ↗</a></p>
 
         {investigation && <section className={styles.results} aria-labelledby="result-title">
           <div className={styles.resultHeader}>

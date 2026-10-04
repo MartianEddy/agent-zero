@@ -2,6 +2,9 @@
 .header { display: flex; height: 72px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line-dark); padding: 0 max(24px, calc((100vw - var(--container)) / 2)); }
 .headerLabel { color: #a4aaa5; font: 10px var(--font-mono); letter-spacing: .12em; }
 .workspace { width: min(1060px, calc(100% - 48px)); margin: 0 auto; padding: 68px 0 110px; }
+.contactPrompt { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin: 26px 0 0; color: #a4aaa5; font-size: 12px; }
+.contactPrompt a { color: #a3ff47; text-underline-offset: 3px; }
+.contactPrompt a:hover { color: #c2ff89; }
 .intro { max-width: 700px; margin-bottom: 34px; }
 .intro h1 { margin: 0; font-size: clamp(38px, 5.7vw, 58px); letter-spacing: -.06em; line-height: 1.04; }
 .intro > p:last-child { max-width: 620px; margin: 18px 0 0; color: #c1c7c1; font-size: 15px; line-height: 1.7; }

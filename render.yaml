@@ -4,6 +4,7 @@
 services:
   - type: web
     name: agent-zero-web
+    autoDeployTrigger: commit
     runtime: node
     plan: free
     region: singapore
@@ -23,6 +24,7 @@ services:
 
   - type: web
     name: agent-zero-api
+    autoDeployTrigger: commit
     runtime: docker
     plan: starter
     region: singapore
@@ -69,6 +71,7 @@ services:
 
   - type: worker
     name: agent-zero-worker
+    autoDeployTrigger: commit
     runtime: docker
     plan: starter
     region: singapore

@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -8,6 +9,8 @@ from app.domain.investigation import InvestigationStatus
 from app.modules.investigations.models import AuditEvent, Investigation, OutboxEvent, ProcessingJob
 from app.modules.investigations.orchestrator import process_investigation as run_pipeline
 from app.worker import celery_app
+
+logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="agent_zero.dispatch_outbox")
@@ -33,6 +36,8 @@ def dispatch_outbox() -> int:
             event.dispatched_at = datetime.now(UTC)
             dispatched += 1
         session.commit()
+    if dispatched:
+        logger.info("Dispatched investigation jobs count=%s", dispatched)
     return dispatched
 
 
@@ -89,6 +94,8 @@ def recover_stalled_investigations() -> int:
             recovered += 1
         if recovered:
             session.commit()
+    if recovered:
+        logger.warning("Marked stalled investigations for retry count=%s", recovered)
     return recovered
 
 
@@ -100,5 +107,12 @@ def recover_stalled_investigations() -> int:
 )
 def process_investigation(_task, job_id: str) -> str:
     """Run the channel-neutral investigation workflow in the worker process."""
-    with SessionLocal() as session:
-        return run_pipeline(session, job_id=UUID(job_id))
+    logger.info("Starting investigation job job_id=%s", job_id)
+    try:
+        with SessionLocal() as session:
+            result = run_pipeline(session, job_id=UUID(job_id))
+    except Exception:
+        logger.exception("Investigation job failed job_id=%s", job_id)
+        raise
+    logger.info("Finished investigation job job_id=%s result=%s", job_id, result)
+    return result
