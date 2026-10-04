@@ -16,7 +16,7 @@ from app.domain.investigation import Channel, InputType, InvestigationStatus
 from app.modules.investigations.models import Finding, Investigation, Submission, VerificationBrief
 from app.modules.investigations.schemas import InvestigationResponse
 from app.modules.investigations.service import DEV_USER_ID, InvestigationService
-from app.modules.investigations.summary import journalist_assessment_summary
+from app.modules.investigations.summary import finding_result_summary
 
 router = APIRouter(prefix="/channels/clickcast", tags=["ClickCast WhatsApp"])
 
@@ -259,7 +259,7 @@ def get_result_from_clickcast(
         # the journalist-facing copy after this code is deployed; stored briefs
         # are immutable snapshots and may contain the older system-focused text.
         summary=(
-            journalist_assessment_summary(item.status for item in findings)[:1000]
+            finding_result_summary(findings, max_chars=1000)
             if brief
             else terminal_summary.get(investigation.status)
         ),

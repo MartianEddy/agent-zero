@@ -75,6 +75,8 @@
 .toneUNVERIFIED { color: #e5c574; }
 .toneINCONCLUSIVE { color: #c1c6cf; }
 .findingStatement { margin: 16px 0 8px; color: #e3e8e2; font-size: 14px; line-height: 1.65; }
+.findingConfidence { margin: 8px 0; color: #bbc5b5; font-size: 12px; line-height: 1.55; }
+.findingConfidence strong { color: #d6e7bc; text-transform: capitalize; }
 .findingLimitation, .caution { color: #aeb5ae; font-size: 11px; line-height: 1.6; }
 .citationLinks { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .citationLinks a, .citationLinks span { border: 1px solid var(--line-dark); border-radius: 3px; padding: 7px 9px; color: #c3d7ba; font-size: 10px; }
@@ -239,6 +241,8 @@
 .page .toneUNVERIFIED { color: #85601c; }
 .page .toneINCONCLUSIVE { color: #60666f; }
 .page .findingStatement { color: #343832; }
+.page .findingConfidence { color: #596250; }
+.page .findingConfidence strong { color: #425c2a; }
 .page .citationLinks a, .page .citationLinks span, .page .role, .page .relationshipList li { border-color: #e5e7e1; color: #50574d; }
 .page .atAGlance dt, .page .metadataList dt, .page .atAGlance dd, .page .metadataList dd { color: #454b43; }
 .page .unknowns, .page .limitations, .page .nextSteps { border-color: #e5e7e1; border-radius: 10px; background: #fff; }

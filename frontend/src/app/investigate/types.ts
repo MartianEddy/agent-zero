@@ -96,6 +96,8 @@ export type Finding = {
   claim_id: string;
   status: FindingStatus;
   statement: string;
+  evidence_confidence?: "UNASSESSED" | "LOW" | "MODERATE" | "HIGH";
+  confidence_rationale?: string;
   limitations?: string | null;
   evidence_ids: string[];
 };

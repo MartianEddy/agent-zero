@@ -320,6 +320,8 @@ class Finding(Base):
     )
     status: Mapped[str] = mapped_column(String(30))
     statement: Mapped[str] = mapped_column(Text)
+    evidence_confidence: Mapped[str] = mapped_column(String(12), default="UNASSESSED")
+    confidence_rationale: Mapped[str] = mapped_column(Text, default="")
     limitations: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

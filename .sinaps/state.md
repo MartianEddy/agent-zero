@@ -1,10 +1,10 @@
 ---
 project: agent-zero
 current_stage: OPERATE
-tier: small
-tier_reason: Bound Celery investigation task runtime so one stuck task cannot starve dispatch and recovery; worker configuration only, no schema change.
-last_updated: 2026-10-04T08:56:00Z
-current_session_deliverable: Diagnose the stalled Render investigations and prepare a bounded-runtime worker configuration; deploy remains pending.
+tier: major
+tier_reason: Finding schema migration and user-facing AI assessment confidence contract
+last_updated: 2026-10-04T09:36:54Z
+current_session_deliverable: Upgrade finding answers and qualitative evidence-confidence presentation for web and ClickCast; migration/deployment pending.
 ---
 
 ## Current feature
@@ -27,6 +27,8 @@ Agent 0 cost-controlled evidence-first investigation pipeline, URL Source Intell
 - The ClickCast payload schema and dynamic outbound reply mechanism are undocumented publicly; confirm with a test event before live webhook traffic or WhatsApp result replies.
 
 ## Last session summary
+Evidence-grounded answers and confidence presentation (2026-10-04): updated the Luna evidence-reasoning output to draft direct user-facing finding statements and qualitative LOW/MODERATE/HIGH evidence-confidence explanations grounded in source quality, independence, relevance, and disagreement. Persisted confidence fields on findings with migration `0010`; legacy findings are explicitly `UNASSESSED`. Application validation downgrades unresolved/conflicting/high-confidence findings and preserves stricter media-specific confidence rules. The web result displays the answer and confidence rationale; the ClickCast result summary is composed from the same persisted finding fields. Product and architecture docs now distinguish qualitative evidence sufficiency from calibrated truth probability. `git diff --check` passed; tests and deployment were not run. The change remains local and is not pushed. Existing unrelated frontend CSS/media artifacts were left untouched.
+
 Worker runtime guard prepared (2026-10-04): Render worker command changed from `solo` to `prefork` with one child, an 8-minute soft limit, and a 9-minute hard limit. The one-child cap addresses prior uncapped-prefork OOM risk while enabling Celery-supported task timeouts; the soft timeout should flow through the existing pipeline exception handler to NEEDS_REVIEW, and the hard limit terminates a child if it cannot unwind. Blueprint sync and live deployment are not yet verified. No tests were run. Before rollout, note Starter 512 MB may still OOM with a prefork child; monitor worker memory after deployment and increase plan/optimize if needed. Immediate production recovery requires deploying this config/restarting the worker so the currently wedged task is released; with late ack/reject-on-worker-lost, monitor for redelivery and completion/failure.
 
 Root cause narrowed by RUNNING-job query (2026-10-04): the database has job `6676f4c5-d48b-4e3e-885a-72800c0de2cf`, investigation `AZ-261004-E84ACB`, status RUNNING, stage ANALYZING, created `06:17:06Z`, last updated `06:17:07Z`. This aligns with the worker's `dispatch_outbox` task returning 1 at `06:17:07Z`. The target investigation was created at `08:23:26Z` and its outbox remained undispatched. Since Render worker uses solo pool with concurrency 1 and embedded Beat, the long-running analysis task likely occupies the only task slot while Beat can continue scheduling; this explains stalled dispatch and recovery. The precise blocking operation still requires the worker log for this job (`Starting investigation job` with no corresponding `Finished`/failure). Operational recovery may require restarting only the worker, then observing whether the late-acked task is redelivered or fails; do not alter DB rows manually.

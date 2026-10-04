@@ -62,6 +62,13 @@ Agent 0 is an evidence-verification platform. Web, WhatsApp and future integrati
 - Use ClickCast Test & Verify to confirm the available message, sender and event ID variables, and response mappings before live traffic.
 - This authorizes local implementation and sandboxed integration only. Production multi-user use remains blocked until authentication/tenant ownership, retention/deletion, provider handling and deployment decisions are resolved.
 
+### Evidence answer and confidence presentation
+
+- For every claim finding, OpenAI Luna drafts a concise, direct answer grounded in the evidence packet, along with the finding status, traceable evidence links, limitations, and a confidence rationale.
+- Show evidence confidence as LOW, MODERATE, or HIGH with its rationale. This is a qualitative assessment of evidence sufficiency, not a calibrated probability that the claim is true. Do not expose a numeric confidence percentage until calibration is supported by a labelled evaluation set.
+- HIGH requires multiple relevant, independent, authoritative sources and no material contradiction. UNVERIFIED and INCONCLUSIVE findings cannot receive HIGH confidence. If application validation downgrades a finding, the persisted confidence must also be downgraded.
+- The web result and WhatsApp result message use the same persisted answer and confidence rationale; channel formatting must not add new factual conclusions.
+
 ## Status semantics
 
 Lifecycle: `RECEIVED → PROCESSING → ANALYZING → RESEARCHING → CORROBORATING → GENERATING_BRIEF → COMPLETE`, with explicit `NEEDS_REVIEW`, `FAILED` and `CANCELLED` paths. A completed investigation may have an inconclusive finding. `COMPLETE` means processing finished, not that claims were established as true.

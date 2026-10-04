@@ -389,6 +389,7 @@ export default function InvestigatePage() {
                         <p>{presentation?.explanation}</p>
                       </div>
                       <p className={styles.findingStatement}>{safeEvidenceText(finding.statement)}</p>
+                      {finding.evidence_confidence && <p className={styles.findingConfidence}><strong>Evidence confidence: {finding.evidence_confidence === "UNASSESSED" ? "not assessed" : finding.evidence_confidence.toLowerCase()}</strong> {finding.evidence_confidence === "UNASSESSED" ? <span>(earlier result)</span> : <span>(qualitative, not a probability)</span>}{finding.confidence_rationale && <> · {safeEvidenceText(finding.confidence_rationale)}</>}</p>}
                       {finding.limitations && <p className={styles.findingLimitation}>{safeEvidenceText(finding.limitations)}</p>}
                       <div className={styles.citationLinks}>
                         {cited.map(({ item, relationship }) => <a key={item.id} href={`#evidence-${item.id}`}>
@@ -506,7 +507,7 @@ export default function InvestigatePage() {
                 {claims.map((claim) => {
                   const finding = results.findings.find((item) => item.claim_id === claim.id);
                   const view = finding ? statusPresentation(finding.status) : null;
-                  return <article className={styles.briefClaim} key={claim.id}><h4>Claim</h4><p>{safeEvidenceText(claim.text)}</p>{finding && <><h4>Status</h4><p>{view?.label} — {safeEvidenceText(finding.statement)}</p><h4>Key evidence</h4>{findingRelationship(finding, evidence).map(({ item, relationship }) => <a key={item.id} href={`#evidence-${item.id}`}>{relationshipPresentation(relationship)} · View cited evidence</a>)}</>}</article>;
+                  return <article className={styles.briefClaim} key={claim.id}><h4>Claim</h4><p>{safeEvidenceText(claim.text)}</p>{finding && <><h4>Status</h4><p>{view?.label} — {safeEvidenceText(finding.statement)}</p>{finding.evidence_confidence && <><h4>Evidence confidence <small>{finding.evidence_confidence === "UNASSESSED" ? "(earlier result)" : "(qualitative, not a probability)"}</small></h4><p>{finding.evidence_confidence === "UNASSESSED" ? "Not assessed" : finding.evidence_confidence.toLowerCase()}{finding.confidence_rationale ? ` — ${safeEvidenceText(finding.confidence_rationale)}` : ""}</p></>}<h4>Key evidence</h4>{findingRelationship(finding, evidence).map(({ item, relationship }) => <a key={item.id} href={`#evidence-${item.id}`}>{relationshipPresentation(relationship)} · View cited evidence</a>)}</>}</article>;
                 })}
                 {claims.length === 0 && <article className={styles.briefClaim}><h4>{originalMedia && !content.trim() ? "Image review" : "Submitted question"}</h4><p>{content.trim() ? safeEvidenceText(content.trim()) : originalMedia ? "No claim or context is available for this image review. Available image signals do not establish where or when the depicted event occurred." : "No verifiable claim was extracted from this request."}</p><p>No factual finding was produced from the question alone.</p></article>}
                 {originalMedia && <><h4>Image origin &amp; history</h4><p>{provenance ? `${provenancePresentation(provenance.status).label}. ${provenancePresentation(provenance.status).limitation}` : "An image was submitted; no origin information is available."}</p></>}

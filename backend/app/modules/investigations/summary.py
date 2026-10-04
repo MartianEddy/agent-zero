@@ -2,6 +2,26 @@
 
 from collections.abc import Iterable
 
+from app.modules.investigations.models import Finding
+
+
+def finding_result_summary(findings: Iterable[Finding], *, max_chars: int = 3000) -> str:
+    items = list(findings)
+    sections = [journalist_assessment_summary(item.status for item in items)]
+    answer_limit = 100 if len(items) > 1 else 700
+    rationale_limit = 40 if len(items) > 1 else 300
+    for item in items:
+        if item.evidence_confidence == "UNASSESSED":
+            confidence = "Evidence confidence was not assessed for this earlier result."
+        else:
+            confidence = (
+                "Evidence confidence (qualitative, not a probability): "
+                f"{item.evidence_confidence.title()}. "
+                f"{item.confidence_rationale[:rationale_limit]}"
+            )
+        sections.append(f"{item.statement[:answer_limit]}\n{confidence}")
+    return "\n\n".join(sections)[:max_chars]
+
 
 def journalist_assessment_summary(
     statuses: Iterable[str], *, media_reviews: Iterable[str] = ()

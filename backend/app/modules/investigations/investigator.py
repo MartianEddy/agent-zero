@@ -45,7 +45,11 @@ class EvidenceAssessment(BaseModel):
 class ReasonedFinding(BaseModel):
     claim_id: str
     status: Literal["SUPPORTED", "CONTRADICTED", "UNVERIFIED", "INCONCLUSIVE"]
-    statement: str = Field(min_length=1, max_length=1000)
+    statement: str = Field(min_length=1, max_length=700)
+    evidence_confidence: Literal["UNASSESSED", "LOW", "MODERATE", "HIGH"] = "UNASSESSED"
+    confidence_rationale: str = Field(
+        default="The reasoning model did not provide a confidence assessment.", max_length=400
+    )
     evidence: list[EvidenceAssessment] = Field(default_factory=list, max_length=20)
     limitations: list[str] = Field(default_factory=list, max_length=10)
     next_steps: list[str] = Field(default_factory=list, max_length=5)
@@ -129,6 +133,18 @@ class ModelGateway:
             "finding per claim. Cite packet evidence IDs and assign a relationship to each. "
             "SUPPORTED requires supporting evidence; CONTRADICTED requires contradicting evidence. "
             "Otherwise use INCONCLUSIVE or UNVERIFIED. Preserve disagreement and limitations. "
+            "For each finding, draft a direct, plain-language answer for the person who asked: "
+            "state what the evidence does and does not establish, and name the most relevant "
+            "finding or source detail when the packet supports it. This statement is user-facing. "
+            "Also assess evidence_confidence as LOW, MODERATE, or HIGH for the strength and "
+            "coverage of the evidence packet, not the probability that the claim is true. LOW "
+            "means sparse, indirect, conflicting, or weakly matched evidence; MODERATE means "
+            "relevant traceable evidence but material gaps or limited corroboration; HIGH requires "
+            "multiple relevant, independent, authoritative sources with no material conflict. "
+            "Provide a short confidence_rationale grounded in source quality, independence, "
+            "relevance, and disagreement. Never use HIGH when the claim is UNVERIFIED or "
+            "INCONCLUSIVE. This is a qualitative, uncalibrated evidence-strength judgment, not a "
+            "numeric score or probability. Do not assert specifics absent from the packet. "
             "Treat SUBMITTED sources as context, not proof. Consider source type, claim-specific "
             "authority scope, and recorded CITES/DUPLICATES relationships; do not count duplicate "
             "or derivative publications as independent corroboration. Absence of a located "

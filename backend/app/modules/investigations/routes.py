@@ -404,6 +404,8 @@ def get_investigation_results(investigation_id: UUID, session: DbSession) -> dic
                 "claim_id": str(item.claim_id),
                 "status": item.status,
                 "statement": item.statement,
+                "evidence_confidence": item.evidence_confidence,
+                "confidence_rationale": item.confidence_rationale,
                 "limitations": item.limitations,
                 "evidence_ids": [str(evidence_id) for evidence_id in linked_ids],
             }

@@ -41,7 +41,7 @@ from app.modules.investigations.models import (
     utcnow,
 )
 from app.modules.investigations.provider_errors import FailureCategory
-from app.modules.investigations.summary import journalist_assessment_summary
+from app.modules.investigations.summary import finding_result_summary
 from app.modules.investigations.usage import (
     ModelCallBudgetExceeded,
     add_limitation,
@@ -1303,16 +1303,31 @@ def _persist_findings(
         if candidate is not None and status != "INCONCLUSIVE":
             statement = candidate.statement.strip()
             limitations = candidate.limitations
+            evidence_confidence = candidate.evidence_confidence
+            confidence_rationale = candidate.confidence_rationale.strip()
         elif conflicting:
             statement = (
                 "Retrieved evidence supports and contradicts this claim; it remains inconclusive."
             )
             limitations = candidate.limitations if candidate else []
+            evidence_confidence = "LOW"
+            confidence_rationale = (
+                "Retrieved evidence conflicts, so the available record cannot resolve the claim."
+            )
         else:
             statement = "There is not enough traceable evidence to assess this claim."
             limitations = [
                 "No accepted evidence with a matching relationship supports a factual conclusion."
             ]
+            evidence_confidence = "LOW"
+            confidence_rationale = (
+                "The available evidence is insufficient or not traceably linked to this claim."
+            )
+        if status in {"INCONCLUSIVE", "UNVERIFIED"} and evidence_confidence == "HIGH":
+            evidence_confidence = "LOW"
+            confidence_rationale = (
+                "The evidence does not resolve the claim, so confidence in this assessment is low."
+            )
         if status == "SUPPORTED":
             supporting_methods = {
                 accepted_methods[evidence_id]
@@ -1340,6 +1355,11 @@ def _persist_findings(
                     "Content Credentials are provenance assertions and do not establish the "
                     "truth of depicted events. Local remote-manifest and OCSP checks were disabled."
                 ]
+                evidence_confidence = "MODERATE"
+                confidence_rationale = (
+                    "Local credentials were validated, but they describe provenance and do not "
+                    "verify the depicted event."
+                )
             elif supporting_methods == {"MEDIA_VISUAL_OBSERVATION"}:
                 statement = (
                     "A visual observation in the uploaded image is consistent with this claim; "
@@ -1349,11 +1369,17 @@ def _persist_findings(
                     "Visual observations may be mistaken and do not independently establish the "
                     "truth of the depicted event."
                 ]
+                evidence_confidence = "LOW"
+                confidence_rationale = (
+                    "This is a fallible visual observation and is not independent verification."
+                )
         finding = Finding(
             investigation_id=investigation.id,
             claim_id=claim.id,
             status=status,
             statement=statement,
+            evidence_confidence=evidence_confidence,
+            confidence_rationale=confidence_rationale[:1000],
             limitations="; ".join(limitations)[:2000] or None,
         )
         session.add(finding)
@@ -1384,6 +1410,10 @@ def _create_inconclusive_findings(session: Session, investigation: Investigation
                     claim_id=claim.id,
                     status="INCONCLUSIVE",
                     statement="There is not enough traceable evidence to assess this claim.",
+                    evidence_confidence="LOW",
+                    confidence_rationale=(
+                        "The available evidence is insufficient or not traceably linked to this claim."
+                    ),
                     limitations="No retrieved source excerpt was available for assessment.",
                 )
             )
@@ -1422,9 +1452,9 @@ def _build_brief(session: Session, investigation: Investigation) -> None:
         "MEDIA_VISUAL_OBSERVATION": "visible image content",
     }
     present_media = [media_labels[name] for name, count in media_counts.items() if count]
-    summary = journalist_assessment_summary(
-        (item.status for item in findings), media_reviews=present_media
-    )
+    summary = finding_result_summary(findings)
+    if present_media:
+        summary += "\n\nMedia reviewed: " + ", ".join(present_media) + "."
     limitations = list(usage.limitations)
     if not findings and claims:
         limitations.append("Findings are unavailable because evidence reasoning did not complete.")
