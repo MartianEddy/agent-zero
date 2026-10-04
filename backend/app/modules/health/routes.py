@@ -38,6 +38,14 @@ def readiness() -> dict[str, str]:
         settings.openai_api_key and settings.openai_api_key.get_secret_value().strip()
     )
     search_ready = bool(settings.exa_api_key and settings.exa_api_key.get_secret_value().strip())
+    if not openai_configured:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "REQUIRED_DEPENDENCY_UNAVAILABLE",
+                "dependency": "investigation_engine",
+            },
+        )
     redis_client = Redis.from_url(settings.redis_url, socket_connect_timeout=1)
     try:
         def check_database() -> None:

@@ -58,6 +58,13 @@ test("unified input infers web links without asking for a mode", () => {
   assert.equal(inferInputType("www.example.org/story"), "TEXT");
 });
 
+test("required backend configuration errors explain that investigation is temporarily unavailable", () => {
+  assert.match(
+    uploadErrorMessage({ code: "REQUIRED_DEPENDENCY_UNAVAILABLE", dependency: "investigation_engine" }),
+    /temporarily unavailable/i,
+  );
+});
+
 test("processing and evidence relationships use reader-facing language", () => {
   assert.equal(stagePresentation("CORROBORATING"), "Comparing what the evidence says");
   assert.equal(relationshipPresentation("SUPPORTS"), "Supports this");

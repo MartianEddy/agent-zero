@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 
+from fastapi import HTTPException
 from pydantic import SecretStr
 
 from app.core.config import Settings
@@ -38,3 +39,15 @@ def test_readiness_checks_configuration_without_calling_a_model() -> None:
     assert result["model_provider"] == "openai"
     assert result["investigation_engine"] == "configured"
     assert "configured_model_providers" not in result
+
+
+def test_readiness_fails_when_required_investigation_engine_is_unconfigured() -> None:
+    settings = Settings(openai_api_key=None)
+    with patch("app.modules.health.routes.get_settings", return_value=settings):
+        try:
+            readiness()
+        except HTTPException as error:
+            assert error.status_code == 503
+            assert error.detail["dependency"] == "investigation_engine"
+        else:
+            raise AssertionError("readiness must fail when OpenAI is not configured")

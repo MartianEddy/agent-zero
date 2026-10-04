@@ -283,6 +283,7 @@ export function uploadErrorMessage(error) {
   const value = typeof error === "object" && error !== null ? error : {};
   const code = "code" in value && typeof value.code === "string" ? value.code : "";
   const messages = {
+    REQUIRED_DEPENDENCY_UNAVAILABLE: "Agent 0’s investigation service is temporarily unavailable. Try again shortly.",
     UPLOAD_TOO_LARGE: "This image exceeds the 25 MB upload limit.",
     UNSUPPORTED_MEDIA_TYPE: "Agent 0 currently supports JPEG, PNG and WebP images.",
     IMAGE_PIXEL_LIMIT_EXCEEDED: "This image is too large to process safely.",

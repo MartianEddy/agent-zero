@@ -204,12 +204,22 @@ export default function InvestigatePage() {
 
   useEffect(() => {
     if (!investigation?.id || !ACTIVE.has(investigation.status)) return;
-    const timer = window.setInterval(() => {
-      void refresh(investigation.id).catch((reason: unknown) => {
+    let stopped = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const current = await refresh(investigation.id);
+        if (!ACTIVE.has(current.status)) return;
+      } catch (reason: unknown) {
         setError(reason instanceof Error ? reason.message : "Could not refresh this investigation.");
-      });
-    }, 2500);
-    return () => window.clearInterval(timer);
+      }
+      if (!stopped) timer = window.setTimeout(() => void poll(), 5000);
+    };
+    timer = window.setTimeout(() => void poll(), 5000);
+    return () => {
+      stopped = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [investigation?.id, investigation?.status, refresh]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
