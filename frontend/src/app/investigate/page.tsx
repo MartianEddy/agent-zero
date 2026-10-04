@@ -11,6 +11,7 @@ import {
   inferInputType,
   presentedLimitations,
   provenancePresentation,
+  progressStepForStage,
   recommendedNextSteps,
   relationshipPresentation,
   safeEvidenceText,
@@ -42,6 +43,7 @@ const EXAMPLES = [
   "Has this claim been reported elsewhere?",
   "Where did this information come from?",
 ];
+const REVIEW_STEPS = ["Understand the claim", "Find sources", "Compare evidence", "Prepare the brief"];
 
 async function readError(response: Response) {
   try {
@@ -276,6 +278,7 @@ export default function InvestigatePage() {
 
   const finished = investigation !== null && !ACTIVE.has(investigation.status);
   const completed = investigation?.status === "COMPLETE";
+  const activeProgressStep = investigation ? progressStepForStage(investigation.current_stage) : 0;
   const claims = results?.claims ?? [];
   const evidence = (results?.evidence ?? []).filter((item) => item.method !== "MEDIA_FINGERPRINT");
   const mediaEvidence = evidence.filter((item) => Boolean(item.media_asset));
@@ -285,8 +288,8 @@ export default function InvestigatePage() {
   const provenance = provenanceEvidence?.provenance;
   const visualEvidence = mediaEvidence.filter((item) => item.method === "MEDIA_VISUAL_OBSERVATION");
   const metadataEvidence = mediaEvidence.filter((item) => item.method === "MEDIA_TECHNICAL_METADATA" || item.method === "MEDIA_METADATA");
-  const unknowns = useMemo(() => results ? unknownsFromResults(results) : [], [results]);
-  const nextSteps = useMemo(() => results ? recommendedNextSteps(results) : [], [results]);
+  const unknowns = useMemo(() => results ? unknownsFromResults(results, finished) : [], [results, finished]);
+  const nextSteps = useMemo(() => results ? recommendedNextSteps(results, finished) : [], [results, finished]);
   const mediaNotice = results ? visualAnalysisNotice(results) : null;
   const filteringEvidence = evidence.filter((item) => {
     if (evidenceFilter === "ALL") return true;
@@ -338,18 +341,25 @@ export default function InvestigatePage() {
           <p>Try asking</p>{EXAMPLES.map((example) => <button type="button" key={example} onClick={() => { setContent(example); selectFile(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}>{example}</button>)}
         </section>}
 
-        <p className={styles.contactPrompt}>Questions? <a href={WHATSAPP_CONTACT_URL} target="_blank" rel="noopener noreferrer">Message Agent 0 on WhatsApp ↗</a></p>
-
         {investigation && <section className={styles.results} aria-labelledby="result-title">
           <div className={styles.resultHeader}>
             <div><p className="eyebrow">Investigation {investigation.reference}</p><h2 id="result-title">{completed ? "What Agent 0 found" : investigation.status === "FAILED" || investigation.status === "NEEDS_REVIEW" ? "Investigation paused" : investigation.status === "CANCELLED" ? "Investigation cancelled" : "Investigating…"}</h2></div>
-            <div className={styles.checked}>Last checked <time dateTime={lastChecked}>{lastChecked ? new Date(lastChecked).toLocaleTimeString() : "just now"}</time></div>
+            <div className={styles.resultTools}><a className={styles.whatsappLink} href={WHATSAPP_CONTACT_URL} target="_blank" rel="noopener noreferrer">WhatsApp help <span aria-hidden="true">↗</span></a><div className={styles.checked}>Last checked <time dateTime={lastChecked}>{lastChecked ? new Date(lastChecked).toLocaleTimeString() : "just now"}</time></div></div>
           </div>
 
           <div className={styles.stagePanel}>
             <span className={`${styles.stageMark}${finished ? "" : ` ${styles.stageActive}`}`} aria-hidden="true">{finished ? "✓" : "…"}</span>
             <div><strong>{stagePresentation(investigation.current_stage)}</strong><span role="status" aria-live="polite">{investigation.status === "NEEDS_REVIEW" ? "Review needed" : investigation.status === "FAILED" ? "Couldn’t complete" : investigation.status === "CANCELLED" ? "Cancelled" : completed ? "Complete" : "In progress"}</span></div>
             {!finished && <p className={styles.processingNote}>This can take a little while. You can stay here while Agent 0 checks the available evidence.</p>}
+            {!finished && <div className={styles.progressDetails}>
+              <ol className={styles.progressSteps} aria-label="Investigation checkpoints">
+                {REVIEW_STEPS.map((step, index) => <li key={step} data-state={index < activeProgressStep ? "complete" : index === activeProgressStep ? "active" : "upcoming"} aria-current={index === activeProgressStep ? "step" : undefined}>
+                  <span className={styles.progressMarker} aria-hidden="true">{index < activeProgressStep ? "✓" : index + 1}</span><span>{step}</span>
+                </li>)}
+              </ol>
+              <div className={styles.progressTrack} role="progressbar" aria-label="Investigation progress" aria-valuemin={0} aria-valuemax={100} aria-valuetext={stagePresentation(investigation.current_stage)}><span /></div>
+              <p className={styles.progressHint}>Checkpoints update as the review advances. This indicator does not estimate completion time.</p>
+            </div>}
           </div>
           {investigation.failure_reason && <div className={styles.failure} role="alert"><strong>Agent 0 stopped before completing the review</strong><p>{safeEvidenceText(investigation.failure_reason)} Review any evidence already collected before drawing a conclusion.</p></div>}
           {results?.retry_allowed && <button type="button" className="button button-secondary" disabled={retryBusy} onClick={() => void retryInvestigation()}>{retryBusy ? "Retrying…" : "Retry investigation"}</button>}
@@ -360,7 +370,7 @@ export default function InvestigatePage() {
               <a href="#overview">Overview</a>
               <a href="#evidence">Evidence</a>
               {originalMedia && <a href="#media">Media</a>}
-              {results.brief && <a href="#brief">Brief</a>}
+              {finished && results.brief && <a href="#brief">Brief</a>}
             </nav>
 
             <section id="overview" className={styles.overview}>
@@ -491,7 +501,7 @@ export default function InvestigatePage() {
 
             <section id="brief" className={styles.brief} aria-labelledby="brief-title">
               <div className={styles.sectionHeading}><div><p className={styles.sectionKicker}>A newsroom-ready summary</p><h3 id="brief-title">Verification brief</h3></div></div>
-              {results.brief ? <>
+              {results.brief && finished ? <>
                 {claims.map((claim) => {
                   const finding = results.findings.find((item) => item.claim_id === claim.id);
                   const view = finding ? statusPresentation(finding.status) : null;

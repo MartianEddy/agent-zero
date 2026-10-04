@@ -82,6 +82,15 @@ const STAGE_COPY = {
   CANCELLED: "Investigation stopped",
 };
 
+const PROGRESS_STEP_BY_STAGE = {
+  RECEIVED: 0,
+  PROCESSING: 0,
+  ANALYZING: 0,
+  RESEARCHING: 1,
+  CORROBORATING: 2,
+  GENERATING_BRIEF: 3,
+};
+
 const PRIVATE_TEXT_PATTERNS = [
   /-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/gi,
   /(?:https?:\/\/|www\.)\S+/gi,
@@ -131,8 +140,9 @@ export function findingEvidenceReferences(finding, evidence) {
   });
 }
 
-/** @param {import('./types').Results} results */
-export function unknownsFromResults(results) {
+/** @param {import('./types').Results} results @param {boolean} reviewComplete */
+export function unknownsFromResults(results, reviewComplete = true) {
+  if (!reviewComplete) return [];
   const unknowns = [];
   if (results.claims.length === 0) {
     unknowns.push("No verifiable claim was extracted from the submitted request.");
@@ -156,8 +166,9 @@ export function unknownsFromResults(results) {
   return [...new Set(unknowns)];
 }
 
-/** @param {import('./types').Results} results */
-export function recommendedNextSteps(results) {
+/** @param {import('./types').Results} results @param {boolean} reviewComplete */
+export function recommendedNextSteps(results, reviewComplete = true) {
+  if (!reviewComplete) return [];
   if (results.claims.length === 0) {
     const steps = ["Add a specific, verifiable claim or question to investigate."];
     if (results.media_assets?.some((asset) => asset.media_type === "IMAGE" && asset.role.toUpperCase() === "ORIGINAL")) {
@@ -189,6 +200,11 @@ export function visualAnalysisNotice(results) {
 /** @param {string} stage */
 export function stagePresentation(stage) {
   return STAGE_COPY[stage] ?? "Preparing investigation";
+}
+
+/** @param {string} stage */
+export function progressStepForStage(stage) {
+  return PROGRESS_STEP_BY_STAGE[stage] ?? 0;
 }
 
 /** @param {string} relationship */

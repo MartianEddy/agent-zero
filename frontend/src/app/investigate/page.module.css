@@ -2,9 +2,6 @@
 .header { display: flex; height: 72px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line-dark); padding: 0 max(24px, calc((100vw - var(--container)) / 2)); }
 .headerLabel { color: #a4aaa5; font: 10px var(--font-mono); letter-spacing: .12em; }
 .workspace { width: min(1060px, calc(100% - 48px)); margin: 0 auto; padding: 68px 0 110px; }
-.contactPrompt { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin: 26px 0 0; color: #a4aaa5; font-size: 12px; }
-.contactPrompt a { color: #a3ff47; text-underline-offset: 3px; }
-.contactPrompt a:hover { color: #c2ff89; }
 .intro { max-width: 700px; margin-bottom: 34px; }
 .intro h1 { margin: 0; font-size: clamp(38px, 5.7vw, 58px); letter-spacing: -.06em; line-height: 1.04; }
 .intro > p:last-child { max-width: 620px; margin: 18px 0 0; color: #c1c7c1; font-size: 15px; line-height: 1.7; }
@@ -37,12 +34,27 @@
 .resultHeader .eyebrow { margin-bottom: 9px; }
 .checked { display: grid; gap: 4px; color: #9da69f; font-size: 10px; text-align: right; }
 .checked time { color: var(--paper); font: 11px var(--font-mono); }
+.resultTools { display: flex; align-items: flex-end; gap: 20px; }
+.whatsappLink { display: inline-flex; min-height: 36px; align-items: center; gap: 7px; border: 1px solid #d9ddd5; border-radius: 8px; padding: 0 11px; color: #466b27; font-size: 12px; white-space: nowrap; }
+.whatsappLink:hover { border-color: #74ad36; background: #f4f8ef; }
 .stagePanel { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 12px; margin-top: 23px; padding: 15px; border: 1px solid var(--line-dark); border-radius: 5px; background: #111516; }
 .stageMark { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 50%; color: var(--signal); background: rgb(163 255 71 / 10%); font-size: 18px; }
 .stagePanel > div:nth-child(2) { display: grid; gap: 4px; }
 .stagePanel strong { font-size: 13px; }
 .stagePanel > div > span { color: #9da69f; font: 10px var(--font-mono); }
 .stageSteps { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 7px; padding-top: 8px; }
+.progressDetails { grid-column: 1 / -1; display: grid; gap: 12px; padding-top: 7px; }
+.progressSteps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+.progressSteps li { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: 8px; color: #7a8178; font-size: 11px; line-height: 1.4; }
+.progressSteps li[data-state="active"] { color: #355b1a; font-weight: 650; }
+.progressSteps li[data-state="complete"] { color: #466b27; }
+.progressMarker { display: grid; width: 24px; height: 24px; place-items: center; border: 1px solid #d9ddd5; border-radius: 50%; color: #70776e; background: #fff; font: 10px var(--font-mono); }
+.progressSteps li[data-state="active"] .progressMarker { border-color: #74ad36; color: #355b1a; background: #eff6e7; }
+.progressSteps li[data-state="complete"] .progressMarker { border-color: #b6d39b; color: #355b1a; background: #eff6e7; }
+.progressTrack { height: 4px; overflow: hidden; border-radius: 4px; background: #edf0ea; }
+.progressTrack > span { display: block; width: 28%; height: 100%; border-radius: inherit; background: #8abd57; animation: progressSweep 1.8s ease-in-out infinite alternate; }
+.progressHint { margin: 0; color: #687067; font-size: 11px; line-height: 1.5; }
+@keyframes progressSweep { from { transform: translateX(-35%); } to { transform: translateX(285%); } }
 .stageSteps span { border: 1px solid var(--line-dark); border-radius: 3px; padding: 6px 8px; color: #7f8780; font-size: 10px; }
 .stageSteps .stageDone { color: #c1e7a6; border-color: rgb(163 255 71 / 35%); }
 .failure, .partialNotice { margin-top: 18px; border-left: 2px solid #e8b858; padding: 12px 14px; color: #e0d4b2; background: rgb(232 184 88 / 7%); font-size: 12px; line-height: 1.6; }
@@ -154,6 +166,8 @@
   .uploadPreview { grid-template-columns: minmax(0, 120px) 1fr; }
   .uploadPreview img { height: 86px; }
   .resultHeader, .sectionHeading { align-items: flex-start; flex-direction: column; }
+  .resultTools { width: 100%; align-items: center; justify-content: space-between; }
+  .progressSteps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .checked { text-align: left; }
   .sectionNav { gap: 16px; }
   .stageSteps span { font-size: 9px; }
@@ -274,4 +288,7 @@
   .page .inputActions { align-items: flex-start; flex-direction: column; }
   .page .processingNote { grid-column: 1 / -1; }
   .page .examples { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .page .stageActive, .progressTrack > span { animation: none; }
 }

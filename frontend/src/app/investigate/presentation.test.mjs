@@ -6,6 +6,7 @@ import {
   inferInputType,
   provenancePresentation,
   presentedLimitations,
+  progressStepForStage,
   recommendedNextSteps,
   safeEvidenceText,
   stagePresentation,
@@ -70,6 +71,18 @@ test("processing and evidence relationships use reader-facing language", () => {
   assert.equal(relationshipPresentation("SUPPORTS"), "Supports this");
   assert.equal(relationshipPresentation("CONTRADICTS"), "Challenges this");
   assert.equal(relationshipPresentation("CONTEXTUALIZES"), "Adds context");
+});
+
+test("active investigation stages map to honest review checkpoints", () => {
+  assert.equal(progressStepForStage("ANALYZING"), 0);
+  assert.equal(progressStepForStage("RESEARCHING"), 1);
+  assert.equal(progressStepForStage("CORROBORATING"), 2);
+  assert.equal(progressStepForStage("GENERATING_BRIEF"), 3);
+});
+
+test("partial API results do not show final unknowns or next steps", () => {
+  assert.deepEqual(unknownsFromResults(baseResults, false), []);
+  assert.deepEqual(recommendedNextSteps(baseResults, false), []);
 });
 
 test("content credential states explain what was found without authenticity verdicts", () => {
