@@ -9,7 +9,8 @@ services:
     region: singapore
     rootDir: ./frontend
     buildCommand: npm ci && npm run build
-    startCommand: npm run start -- --hostname 0.0.0.0
+    # Pass Render's assigned listener port explicitly as well as its public bind address.
+    startCommand: npm run start -- --hostname 0.0.0.0 --port ${PORT:-10000}
     healthCheckPath: /
     envVars:
       - key: AGENT_ZERO_API_URL
