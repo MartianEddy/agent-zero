@@ -230,6 +230,8 @@
 .page .failure, .page .partialNotice { color: #704c14; border-color: #d2a047; background: #fff8e9; }
 .page .sectionNav { border-color: #e5e7e1; background: rgb(246 246 242 / 94%); }
 .page .sectionNav a { color: #52594f; font-size: 13px; }
+.page .sectionNav .whatsappSectionLink { display: inline-flex; min-height: 34px; align-items: center; margin-left: auto; border: 1px solid #b6d39b; border-radius: 7px; padding: 0 11px; color: #355b1a; font-size: 12px; font-weight: 650; white-space: nowrap; }
+.page .sectionNav .whatsappSectionLink:hover { border-color: #74ad36; background: #f1f7e9; }
 .page .finding { border-color: #e5e7e1; }
 .page .findingStatus { color: #43533d; }
 .page .toneSUPPORTED { color: #267347; }

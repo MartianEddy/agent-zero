@@ -371,6 +371,7 @@ export default function InvestigatePage() {
               <a href="#evidence">Evidence</a>
               {originalMedia && <a href="#media">Media</a>}
               {finished && results.brief && <a href="#brief">Brief</a>}
+              <a className={styles.whatsappSectionLink} href={WHATSAPP_CONTACT_URL} target="_blank" rel="noopener noreferrer">WhatsApp help ↗</a>
             </nav>
 
             <section id="overview" className={styles.overview}>
