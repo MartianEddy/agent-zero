@@ -33,12 +33,12 @@ def _mapping(value: Any) -> dict[str, Any]:
     return {}
 
 
-def search_openai_web(*, api_key: str, model: str, query: str) -> OpenAIWebSearchResponse:
+def search_openai_web(*, api_key: str, model: str, query: str, timeout_seconds: float = 30.0) -> OpenAIWebSearchResponse:
     """Run required hosted web search and preserve its source list and citations."""
     try:
         from openai import OpenAI
 
-        response = OpenAI(api_key=api_key, timeout=30.0).responses.create(
+        response = OpenAI(api_key=api_key, timeout=max(0.1, min(30.0, timeout_seconds))).responses.create(
             model=model,
             input=(
                 "Search the web for sources relevant to this investigation query. Prioritize the "

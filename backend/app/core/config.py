@@ -26,7 +26,8 @@ class Settings(BaseSettings):
     exa_api_key: SecretStr | None = None
     max_media_bytes: int = 25_000_000
     max_image_pixels: int = 20_000_000
-    source_reader_provider: Literal["disabled", "jina_reader"] = "disabled"
+    source_reader_provider: Literal["disabled", "jina_reader"] = "jina_reader"
+    jina_api_key: SecretStr | None = None
     max_model_calls_per_investigation: int = 4
     max_claims_per_investigation: int = 3
     max_search_queries: int = 5
@@ -45,6 +46,7 @@ class Settings(BaseSettings):
     max_provider_retries: int = 1
     max_retry_after_seconds: float = 5.0
     model_request_timeout_seconds: float = 45.0
+    investigation_deadline_seconds: float = 120.0
     max_model_input_chars: int = 12_000
     clickcast_api_token: SecretStr | None = None
     clickcast_identity_key: SecretStr | None = None

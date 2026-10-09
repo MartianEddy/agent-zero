@@ -14,6 +14,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from app.core.config import get_settings
+
 MAX_PAGE_BYTES = 300_000
 MAX_PAGE_CHARS = 60_000
 READ_TIMEOUT_SECONDS = 15
@@ -145,26 +147,30 @@ class _NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def read_public_page(url: str) -> RetrievedPage:
+def read_public_page(url: str, *, timeout_seconds: float = READ_TIMEOUT_SECONDS) -> RetrievedPage:
     """Read a public page using Jina Reader, returning bounded plain text only.
 
     The target URL is sent to the configured upstream reader. No user media,
-    cookies, or account credentials are sent. Retrieval is opt-in at application
-    configuration level; the caller should only invoke this when enabled.
+    cookies, or account credentials are sent. Application configuration controls
+    whether this adapter is enabled; callers must invoke it only when configured.
     """
     target = validate_public_http_url(url)
     reader_url = f"https://{READER_HOST}/" + quote(target, safe=":/")
+    headers = {
+        "Accept": "text/plain",
+        "User-Agent": "AgentZero/0.1 source-reader",
+        "X-Return-Format": "text",
+    }
+    api_key = get_settings().jina_api_key
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key.get_secret_value()}"
     request = Request(
         reader_url,
-        headers={
-            "Accept": "text/plain",
-            "User-Agent": "AgentZero/0.1 source-reader",
-            "X-Return-Format": "text",
-        },
+        headers=headers,
     )
     try:
         opener = build_opener(_NoRedirect)
-        with opener.open(request, timeout=READ_TIMEOUT_SECONDS) as response:
+        with opener.open(request, timeout=max(0.1, min(READ_TIMEOUT_SECONDS, timeout_seconds))) as response:
             if response.status != 200:
                 raise SourceRetrievalError(f"Source reader returned HTTP {response.status}")
             content_type = response.headers.get_content_type()

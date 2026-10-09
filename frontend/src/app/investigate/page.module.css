@@ -119,6 +119,10 @@
 .relationshipList { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; padding: 0; list-style: none; }
 .relationshipList li { border: 1px solid var(--line-dark); border-radius: 3px; padding: 5px 7px; color: #b9c4b9; font-size: 10px; }
 .evidenceCard { padding: 13px; }
+.ledgerMeta { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px 12px; margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--line-dark); }
+.ledgerMeta div { min-width: 0; }
+.ledgerMeta dt { color: #9aa59e; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.ledgerMeta dd { margin: 3px 0 0; color: #e0e5e1; font-size: 11px; overflow-wrap: anywhere; }
 .evidenceCardHeader { display: flex; justify-content: space-between; gap: 10px; }
 .evidenceFamily { color: #a3c88c; font: 9px var(--font-mono); letter-spacing: .06em; }
 .relationship { color: #bdc6bd; font-size: 10px; }

@@ -11,7 +11,7 @@ The current Agent 0 worker runs server-side. It cannot safely assume access to a
 ## Decision
 
 - Keep Agent 0's `SourceReader` as an application-owned provider seam.
-- Provide an opt-in Jina Reader adapter aligned with Agent Reach's documented public web-reading route. `SOURCE_READER_PROVIDER=disabled` remains the default; `jina_reader` explicitly enables external page retrieval.
+- Provide the Jina Reader adapter aligned with its documented public web-reading route. Slice 2 enables `jina_reader` by default; `SOURCE_READER_PROVIDER=disabled` explicitly turns off external page retrieval.
 - Keep hosted web search as candidate discovery. Store source retrieval status, provider and retrieved-content SHA-256 separately from the source URL.
 - Admit model-proposed excerpts as evidence only when the source was retrieved and the normalized quotation appears verbatim in that retrieved text. Findings without such linked evidence become `INCONCLUSIVE`.
 - Never execute Agent Reach or upstream commands from the model/tool loop. Do not install cookie/browser-session channels in the server. A later social integration requires an explicit per-platform API/consent/security decision and a narrow adapter.
@@ -20,7 +20,7 @@ The current Agent 0 worker runs server-side. It cannot safely assume access to a
 ## Consequences
 
 - The worker can retrieve public pages without coupling domain logic to Agent Reach's CLI or its rotating backend choices.
-- Enabling the adapter sends the source URL to Jina Reader. It is disabled by default, and credential-bearing URLs must not be submitted for retrieval.
+- The default adapter sends selected public source URLs to Jina Reader. Credential-bearing URLs must not be submitted for retrieval. An optional `JINA_API_KEY` is sent as a Bearer token for authenticated quota/rate-limit handling; it is stored only in environment configuration.
 - Retrieval is bounded to five candidate source URLs per investigation (plus a submitted URL already fetched for context); excess candidates remain unattempted.
 - A matching quotation establishes that the passage appears in the retrieved page; it does not establish that the claim itself is true or the source is reliable.
 - Social search/read, source lineage and independence analysis remain out of scope for this integration.

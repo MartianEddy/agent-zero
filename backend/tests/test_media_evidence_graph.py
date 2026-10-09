@@ -11,6 +11,7 @@ from app.db.base import Base
 from app.domain.investigation import InputType
 from app.modules.investigations.investigator import (
     EvidenceReasoning,
+    ExplanationSentence,
     ReasonedFinding,
     VisualAnalysis,
     VisualObservation,
@@ -440,6 +441,7 @@ class MediaEvidenceGraphTests(unittest.TestCase):
                         claim_id=str(self.claim.id),
                         status=status,
                         statement="Model proposed assessment.",
+                        explanation=[ExplanationSentence(sentence="The evidence is relevant to this claim.", evidence_ids=[evidence_id])],
                         evidence=[{"evidence_id": evidence_id, "relationship": relationship}],
                                 evidence_confidence="MEDIUM",
             confidence_rationale="Mock finding includes its fixture evidence for contract testing.",

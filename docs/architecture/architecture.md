@@ -119,7 +119,7 @@ The result endpoint accepts a sender identifier and an optional investigation re
 
 - Private-by-default investigations; authorization enforced at each API operation. For the first release, explicitly decide single-user vs newsroom tenancy before designing authorization keys or data partitioning.
 - Validate URL schemes and destinations; block private/link-local IPs and revalidate redirects to reduce SSRF risk. Enforce content-type, file-size, duration and decompression limits before processing.
-- Page reading is disabled by default. When enabled, only public HTTP(S) source URLs are sent to the configured reader; keep credentials/query secrets out of submitted URLs and enforce deployment egress restrictions.
+- Jina Reader page reading is enabled by default and can be disabled with `SOURCE_READER_PROVIDER=disabled`. Only selected public HTTP(S) source URLs are sent to the configured reader; keep credentials/query secrets out of submitted URLs and enforce deployment egress restrictions. `JINA_API_KEY` is optional and sent only as a Bearer token to Reader.
 - Keep originals in private object storage with short-lived signed access. Separate originals from derived artifacts; define deletion and retention behavior before accepting sensitive production submissions.
 - Minimize sender identifiers passed to downstream analysis. Encrypt transport and stored data using platform controls. Keep secrets in managed configuration, never logs or source.
 - Treat retrieved pages, documents, prompts and media text as untrusted data, not instructions. Constrain model outputs to schemas and validate all evidence references before brief publication.
@@ -147,7 +147,7 @@ Request context includes `user_id`/tenant context when approved and `trace_id`; 
 ## Phased delivery
 
 1. **Foundation:** FastAPI, PostgreSQL/SQLAlchemy/Alembic, Redis/Celery, S3-compatible storage, configuration, logging, health checks, initial domain entities, lifecycle, audit and API contracts.
-2. **Shared text/URL/image/video slice:** one Lead Investigator through the OpenAI Agents SDK, structured claims/source/evidence/finding/brief records, hosted web search, optional Agent Reach-aligned Jina Reader retrieval, private media upload and bounded video keyframes. Search excerpts remain candidates; only exact quotations matched against a retrieved source can support a finding.
+2. **Shared text/URL/image/video slice:** one Lead Investigator through the OpenAI Agents SDK, structured claims/source/evidence/finding/brief records, hosted web search, default-on Agent Reach-aligned Jina Reader retrieval (explicit opt-out), private media upload and bounded video keyframes. Search excerpts remain candidates; only exact quotations matched against a retrieved source can support a finding.
 3. **Trust and operations:** production authentication/access policy, retention/deletion, rate limits, observability, source lineage and human review controls.
 4. **Media depth:** C2PA, audio transcription, OCR, visual similarity and evaluated forensic tools; each signal stays distinct from the truth assessment.
 5. **Messaging channel:** WhatsApp webhook adapter and brief renderer over shared investigation interfaces.

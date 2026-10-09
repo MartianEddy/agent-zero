@@ -71,6 +71,12 @@ from app.modules.investigations.verdict_policy import (
     assess_verdict,
     build_independence_groups,
 )
+from app.modules.investigations.evidence_ledger import (
+    independence_groups as ledger_independence_groups,
+    staleness_flag,
+    validate_excerpt,
+    validate_sentence_citations,
+)
 from app.storage.s3 import get_private_object, put_private_object
 
 logger = logging.getLogger(__name__)
@@ -271,6 +277,8 @@ def _save_retrieved_source(
     session: Session,
     investigation: Investigation,
     source: Source,
+    *,
+    timeout_seconds: float | None = None,
 ) -> str | None:
     settings = get_settings()
     if source.retrieval_status == "RETRIEVED" and source.content_storage_key:
@@ -308,10 +316,18 @@ def _save_retrieved_source(
         add_limitation(session, investigation.id, "Source retrieval limit reached.")
         return None
     try:
-        page = read_public_page(source.url)
-    except SourceRetrievalError:
+        page = read_public_page(source.url, timeout_seconds=timeout_seconds or 12.0)
+    except SourceRetrievalError as exc:
         source.retrieval_status = "FAILED"
-        source.retrieval_failure_reason = "PUBLIC_PAGE_UNAVAILABLE"
+        error_text = str(exc)
+        if "HTTP 429" in error_text:
+            source.retrieval_failure_reason = "JINA_RATE_LIMITED"
+        elif "HTTP 402" in error_text:
+            source.retrieval_failure_reason = "JINA_QUOTA_EXHAUSTED"
+        elif "HTTP 401" in error_text or "HTTP 403" in error_text:
+            source.retrieval_failure_reason = "JINA_AUTHENTICATION_FAILED"
+        else:
+            source.retrieval_failure_reason = "PUBLIC_PAGE_UNAVAILABLE"
         session.commit()
         message = (
             "Agent 0 could not independently retrieve the submitted page."
@@ -903,6 +919,7 @@ def _execute_searches(
     *,
     source_lanes: set[str] | None = None,
     claim_indices: set[int] | None = None,
+    case_deadline: float | None = None,
 ) -> None:
     settings = get_settings()
     key = settings.exa_api_key.get_secret_value().strip() if settings.exa_api_key else ""
@@ -934,6 +951,12 @@ def _execute_searches(
     )
     max_calls = settings.max_search_queries * 2
     for trace in traces[:max_calls]:
+        remaining_seconds = case_deadline - monotonic() if case_deadline is not None else 30.0
+        if remaining_seconds <= 0:
+            trace.action = "deadline_exceeded"
+            session.commit()
+            add_limitation(session, investigation.id, "Case deadline reached; remaining search steps were cut.")
+            continue
         provider = trace.provider or "EXA"
         lane = str((trace.route_metadata or {}).get("source_lane", "PRIMARY"))
         if lane == "SOCIAL":
@@ -990,6 +1013,7 @@ def _execute_searches(
                     api_key=key,
                     query=query_context,
                     num_results=settings.max_search_results_per_query,
+                    timeout_seconds=remaining_seconds,
                     **date_filters,
                 )
                 provider_results = response.results
@@ -1000,6 +1024,7 @@ def _execute_searches(
                     api_key=openai_key,
                     model=settings.openai_model,
                     query=query_context,
+                    timeout_seconds=remaining_seconds,
                 )
                 provider_results = response.results
                 provider_citations = response.citations
@@ -1066,6 +1091,7 @@ def _retrieve_candidates(
     *,
     source_lanes: set[str] | None = None,
     retrieval_cap: int | None = None,
+    case_deadline: float | None = None,
 ) -> dict[UUID, str]:
     settings = get_settings()
     sources = list(
@@ -1114,6 +1140,12 @@ def _retrieve_candidates(
     sources = prioritize_sources(sources, claims, context_by_source=context_by_source)
     retrieved: dict[UUID, str] = {}
     for source in sources:
+        remaining_seconds = case_deadline - monotonic() if case_deadline is not None else 12.0
+        if remaining_seconds <= 0:
+            source.retrieval_status = "NOT_ATTEMPTED_DEADLINE"
+            session.commit()
+            add_limitation(session, investigation.id, "Case deadline reached; remaining source retrieval steps were cut.")
+            continue
         if source_lanes is not None and source.discovery_trace_id:
             if lane_by_trace.get(source.discovery_trace_id, "PRIMARY") not in source_lanes:
                 continue
@@ -1141,7 +1173,11 @@ def _retrieve_candidates(
             session.commit()
             add_limitation(session, investigation.id, "Source retrieval limit reached.")
             continue
-        text = _save_retrieved_source(session, investigation, source)
+        text = (
+            _save_retrieved_source(session, investigation, source, timeout_seconds=remaining_seconds)
+            if case_deadline is not None
+            else _save_retrieved_source(session, investigation, source)
+        )
         if text is not None:
             retrieved[source.id] = text[: getattr(settings, "max_retrieved_document_chars", 60_000)]
     return retrieved
@@ -1176,6 +1212,7 @@ def _persist_evidence(
     )
     remaining = max(0, settings.max_total_evidence_chars - current_chars)
     claim_pairs = [(str(claim.id), claim.text) for claim in claims]
+    claim_by_uuid = {str(claim.id): claim for claim in claims}
     max_windows = getattr(settings, "max_evidence_windows_per_source_per_claim", 2)
     added = 0
     for source_id, text in retrieved_pages.items():
@@ -1226,6 +1263,18 @@ def _persist_evidence(
                 source_id=source_id,
                 content=candidate.excerpt,
                 method="CLAIM_ANCHOR_MATCH",
+                source_tier=source_tier_for_domain(source.domain),
+                stance="UNKNOWN",
+                independence_group_id="unknown",
+                published_date=source.published_at,
+                is_stale=staleness_flag(
+                    source.published_at,
+                    claim_by_uuid[claim_id].claim_type if claim_id in claim_by_uuid else "",
+                    reference_date=investigation.created_at.date(),
+                ),
+                retrieval_timestamp=source.retrieved_at,
+                run_id=investigation.id,
+                excerpt_validated=False,
                 limitations=(
                     "Deterministically selected claim-relevant passage; relevance and meaning "
                     "still require review. Localization does not establish factual support."
@@ -1233,6 +1282,14 @@ def _persist_evidence(
             )
             session.add(evidence)
             session.flush()
+            is_valid, excerpt_start, excerpt_end = validate_excerpt(candidate.excerpt, text)
+            if not is_valid:
+                session.delete(evidence)
+                continue
+            evidence.excerpt_start = excerpt_start
+            evidence.excerpt_end = excerpt_end
+            evidence.content = text[excerpt_start:excerpt_end]
+            evidence.excerpt_validated = True
             session.add(
                 ClaimEvidence(claim_id=claim_id, evidence_id=evidence.id, relationship="UNKNOWN")
             )
@@ -1242,6 +1299,16 @@ def _persist_evidence(
             remaining -= len(candidate.excerpt)
         session.commit()
     if added:
+        ledger_items = []
+        for evidence in session.scalars(
+            select(Evidence).where(Evidence.investigation_id == investigation.id, Evidence.source_id.is_not(None))
+        ):
+            source = session.get(Source, evidence.source_id)
+            if source:
+                ledger_items.append({"id": str(evidence.id), "url": source.url, "publisher": source.publisher, "title": source.title, "excerpt": evidence.content})
+        groups = ledger_independence_groups(ledger_items)
+        for evidence in session.scalars(select(Evidence).where(Evidence.investigation_id == investigation.id, Evidence.source_id.is_not(None))):
+            evidence.independence_group_id = groups.get(str(evidence.id), "unknown")
         _audit(session, investigation.id, "EVIDENCE_ACCEPTED", {"count": added})
         session.commit()
     if remaining <= 0:
@@ -1251,7 +1318,7 @@ def _persist_evidence(
 def _claims_needing_independent_sources(
     session: Session, investigation: Investigation
 ) -> set[int]:
-    """Return zero-based claim indexes with fewer than two retrieved source domains."""
+    """Return zero-based claim indexes with fewer than two independent evidence groups."""
     claims = list(
         session.scalars(
             select(Claim)
@@ -1261,20 +1328,23 @@ def _claims_needing_independent_sources(
     )
     indexes: set[int] = set()
     for index, claim in enumerate(claims):
-        domains = set(
+        groups = set(
             session.scalars(
-                select(Source.domain)
-                .join(Evidence, Evidence.source_id == Source.id)
-                .join(ClaimEvidence, ClaimEvidence.evidence_id == Evidence.id)
+                select(Evidence.independence_group_id)
+                .select_from(ClaimEvidence)
+                .join(Evidence, ClaimEvidence.evidence_id == Evidence.id)
+                .join(Source, Evidence.source_id == Source.id)
                 .where(
                     ClaimEvidence.claim_id == claim.id,
                     Evidence.investigation_id == investigation.id,
-                    Source.domain.is_not(None),
+                    Evidence.independence_group_id != "unknown",
+                    Evidence.excerpt_validated.is_(True),
+                    Source.retrieval_status == "RETRIEVED",
                     Source.source_role != "DERIVATIVE",
                 )
             )
         )
-        if len(domains) < 2:
+        if len(groups) < 2:
             indexes.add(index)
     return indexes
 
@@ -1596,6 +1666,14 @@ def _evidence_packet(session: Session, investigation: Investigation) -> str:
             "kind": evidence.method,
             "excerpt": excerpt,
             "relationship": link.relationship,
+            "stance": evidence.stance,
+            "excerpt_validated": evidence.excerpt_validated,
+            "excerpt_location": {"start": evidence.excerpt_start, "end": evidence.excerpt_end},
+            "run_id": str(evidence.run_id) if evidence.run_id else None,
+            "retrieval_timestamp": evidence.retrieval_timestamp.isoformat() if evidence.retrieval_timestamp else None,
+            "published_date": evidence.published_date,
+            "is_stale": evidence.is_stale,
+            "independence_group_id": evidence.independence_group_id,
             "limitations": evidence.limitations,
         }
         if source:
@@ -1608,7 +1686,7 @@ def _evidence_packet(session: Session, investigation: Investigation) -> str:
                     "url": source.url[:1000],
                     "source_type": source.source_type,
                     "source_tier": source_tier_for_domain(source.domain),
-                    "independence_group_id": independence_groups.get(str(source.id)),
+                    "independence_group_id": evidence.independence_group_id,
                     "authoritative_for": list(source_registry.authoritative_for),
                     "role": (
                         source.source_role
@@ -1717,6 +1795,13 @@ def _persist_findings(
                 if evidence is None:
                     continue
                 link.relationship = assessment.relationship
+                evidence.stance = {
+                    "SUPPORTS": "SUPPORTS",
+                    "CONTRADICTS": "CONTRADICTS",
+                    "CONTEXTUALIZES": "CONTEXT",
+                    "MENTIONS": "CONTEXT",
+                    "UNKNOWN": "UNKNOWN",
+                }[assessment.relationship]
                 accepted.append((evidence_id, assessment.relationship))
                 accepted_methods[evidence_id] = evidence.method
         proposed_status = candidate.status if candidate is not None else "INSUFFICIENT_EVIDENCE"
@@ -1724,12 +1809,20 @@ def _persist_findings(
         for evidence_id, relationship in accepted:
             evidence = session.get(Evidence, evidence_id)
             source = source_by_id.get(evidence.source_id) if evidence and evidence.source_id else None
-            if source is None or source.retrieval_status != "RETRIEVED":
+            if (
+                source is None
+                or source.retrieval_status != "RETRIEVED"
+                or not evidence
+                or not evidence.excerpt_validated
+                or evidence.run_id != investigation.id
+            ):
                 continue
             if relationship not in {"SUPPORTS", "CONTRADICTS"}:
                 continue
             tier = source_tier_for_domain(source.domain)
-            group_id = independence_groups.get(str(source.id), "")
+            group_id = evidence.independence_group_id
+            if not group_id or group_id == "unknown":
+                group_id = independence_groups.get(str(source.id), "")
             if tier == "SECONDARY_AGGREGATOR" and source.source_type == "UNKNOWN":
                 continue
             signals.append(
@@ -1742,12 +1835,46 @@ def _persist_findings(
                 )
             )
         assessment = assess_verdict(claim.claim_type, proposed_status, signals)
+        evidence_by_id: dict[str, dict[str, object]] = {}
+        for evidence_id, _relationship in accepted:
+            evidence = session.get(Evidence, evidence_id)
+            source = source_by_id.get(evidence.source_id) if evidence and evidence.source_id else None
+            if evidence and (source or evidence.media_asset_id):
+                if evidence.media_asset_id:
+                    # Media observations are stored evidence produced in this run; they are
+                    # cited as observations, not as quotations from a source URL.
+                    evidence.run_id = investigation.id
+                    evidence.excerpt_validated = True
+                evidence_by_id[str(evidence_id)] = {
+                    "retrieved_url": source.url if source and source.retrieval_status == "RETRIEVED" else None,
+                    "is_media": bool(evidence.media_asset_id),
+                    "excerpt_validated": evidence.excerpt_validated,
+                    "run_id": str(evidence.run_id) if evidence.run_id else None,
+                }
+        checked_sentences, unsupported_removed = validate_sentence_citations(
+            [sentence.model_dump() for sentence in (candidate.explanation if candidate else [])],
+            evidence_by_id,
+            run_id=str(investigation.id),
+        )
+        if candidate is not None and not candidate.explanation:
+            unsupported_removed = True
+        cited_ids = {
+            str(evidence_id)
+            for sentence in checked_sentences
+            for evidence_id in sentence["evidence_ids"]
+        }
+        citation_signals = [signal for signal in signals if signal.evidence_id in cited_ids]
+        if candidate is not None:
+            assessment = assess_verdict(claim.claim_type, candidate.status, citation_signals)
         status = assessment.verdict
         conflicting = status == "PARTLY_TRUE"
-        if candidate is not None and status == candidate.status and not conflicting:
+        if checked_sentences:
+            statement = " ".join(str(item["sentence"]) for item in checked_sentences)
+            limitations = candidate.limitations if candidate is not None else []
+        elif candidate is not None and status == candidate.status and not conflicting and checked_sentences:
             statement = candidate.statement.strip()
             limitations = candidate.limitations
-        elif conflicting and candidate is not None and candidate.status == "PARTLY_TRUE":
+        elif conflicting and candidate is not None and candidate.status == "PARTLY_TRUE" and checked_sentences:
             statement = candidate.statement.strip()
             limitations = candidate.limitations
         elif conflicting:
@@ -1838,6 +1965,8 @@ def _persist_findings(
             statement=statement,
             evidence_confidence=evidence_confidence,
             confidence_rationale=confidence_rationale[:1000],
+            explanation_json=checked_sentences,
+            unsupported_statements_removed=unsupported_removed,
             limitations="; ".join(limitations)[:2000] or None,
         )
         session.add(finding)
@@ -1929,6 +2058,15 @@ def _persist_settled_reference_evidence(
             source_id=source.id,
             content=item.excerpt[: get_settings().max_source_chars_per_source],
             method="REFERENCE_API_EXCERPT",
+            source_tier="AUTHORITATIVE_REFERENCE",
+            stance="UNKNOWN",
+            excerpt_start=0,
+            excerpt_end=len(item.excerpt[: get_settings().max_source_chars_per_source]),
+            independence_group_id=f"source-group:{source.id}",
+            published_date=source.published_at,
+            retrieval_timestamp=source.retrieved_at,
+            run_id=investigation.id,
+            excerpt_validated=bool(item.excerpt.strip()),
             limitations=(
                 "Retrieved through the provider's public API. Wikipedia is a secondary reference; "
                 "Wikidata entity descriptions are context only and do not establish the claim."
@@ -2334,6 +2472,7 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
         job.status = "COMPLETE"
         session.commit()
         return "complete"
+    case_deadline = monotonic() + getattr(get_settings(), "investigation_deadline_seconds", 120.0)
     try:
         if investigation.status == InvestigationStatus.RECEIVED:
             _stage(session, investigation, InvestigationStatus.PROCESSING)
@@ -2351,7 +2490,12 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
         images = _load_or_inspect_media(session, investigation, assets)
         url_source = _ensure_submitted_url_source(session, investigation, submitted_url)
         url_text = (
-            _save_retrieved_source(session, investigation, url_source) if url_source else None
+            _save_retrieved_source(
+                session,
+                investigation,
+                url_source,
+                timeout_seconds=max(0.1, case_deadline - monotonic()),
+            ) if url_source else None
         )
         model_input = text
         if url_text:
@@ -2441,9 +2585,9 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
         if images and investigation.input_type != InputType.URL:
             _persist_visual_observations(session, investigation, images, ModelGateway())
 
-        case_deadline = monotonic() + 5.0
+        fast_path_deadline = min(case_deadline, monotonic() + 5.0)
         fast_path_indices = _run_fast_path_claims(
-            session, investigation, case_deadline=case_deadline
+            session, investigation, case_deadline=fast_path_deadline
         )
         searchable_indices = {
             index
@@ -2462,6 +2606,7 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
             investigation,
             source_lanes={"PRIMARY"},
             claim_indices=searchable_indices,
+            case_deadline=case_deadline,
         )
         _stage(session, investigation, InvestigationStatus.CORROBORATING)
         settings = get_settings()
@@ -2471,6 +2616,7 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
             investigation,
             source_lanes={"PRIMARY"},
             retrieval_cap=primary_retrieval_cap,
+            case_deadline=case_deadline,
         )
         _persist_evidence(session, investigation, retrieved)
         _detect_source_relationships(session, investigation, retrieved)
@@ -2494,12 +2640,14 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
                 investigation,
                 source_lanes={"REFERENCE_REPORTING"},
                 claim_indices=claims_needing_widening,
+                case_deadline=case_deadline,
             )
             retrieved.update(
                 _retrieve_candidates(
                     session,
                     investigation,
                     source_lanes={"REFERENCE_REPORTING"},
+                    case_deadline=case_deadline,
                 )
             )
             _persist_evidence(session, investigation, retrieved)
@@ -2518,12 +2666,14 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
                 investigation,
                 source_lanes={"FACT_CHECK"},
                 claim_indices=claims_needing_widening,
+                case_deadline=case_deadline,
             )
             retrieved.update(
                 _retrieve_candidates(
                     session,
                     investigation,
                     source_lanes={"FACT_CHECK"},
+                    case_deadline=case_deadline,
                 )
             )
             _persist_evidence(session, investigation, retrieved)
@@ -2540,8 +2690,9 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
             investigation,
             source_lanes={"SOCIAL"},
             claim_indices=searchable_indices,
+            case_deadline=case_deadline,
         )
-        retrieved.update(_retrieve_candidates(session, investigation))
+        retrieved.update(_retrieve_candidates(session, investigation, case_deadline=case_deadline))
         _detect_source_relationships(session, investigation, retrieved)
         claims = list(
             session.scalars(select(Claim).where(Claim.investigation_id == investigation.id))
@@ -2555,12 +2706,18 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
             )
             if has_missing_findings:
                 _stage(session, investigation, InvestigationStatus.GENERATING_BRIEF)
-                result = ModelGateway().reason_about_evidence(
-                    evidence_packet=_evidence_packet(session, investigation),
-                    session=session,
-                    investigation_id=investigation.id,
-                )
-                _persist_findings(session, investigation, result.output)
+                remaining_seconds = case_deadline - monotonic()
+                if remaining_seconds <= 0:
+                    add_limitation(session, investigation.id, "Case deadline reached; evidence reasoning was cut.")
+                    _create_unverified_findings(session, investigation)
+                else:
+                    result = ModelGateway().reason_about_evidence(
+                        evidence_packet=_evidence_packet(session, investigation),
+                        session=session,
+                        investigation_id=investigation.id,
+                        timeout_seconds=remaining_seconds,
+                    )
+                    _persist_findings(session, investigation, result.output)
         else:
             _create_unverified_findings(session, investigation)
             ai_origin_question = re.search(

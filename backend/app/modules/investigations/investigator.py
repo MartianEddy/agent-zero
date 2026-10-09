@@ -60,6 +60,11 @@ class EvidenceAssessment(BaseModel):
     relationship: Literal["SUPPORTS", "CONTRADICTS", "CONTEXTUALIZES", "MENTIONS", "UNKNOWN"]
 
 
+class ExplanationSentence(BaseModel):
+    sentence: str = Field(min_length=1, max_length=700)
+    evidence_ids: list[str] = Field(min_length=1, max_length=10)
+
+
 class ReasonedFinding(BaseModel):
     claim_id: str
     status: Literal[
@@ -72,6 +77,7 @@ class ReasonedFinding(BaseModel):
     statement: str = Field(min_length=1, max_length=700)
     evidence_confidence: Literal["HIGH", "MEDIUM", "LOW"]
     confidence_rationale: str = Field(min_length=1, max_length=400)
+    explanation: list[ExplanationSentence] = Field(default_factory=list, max_length=12)
     evidence: list[EvidenceAssessment] = Field(default_factory=list, max_length=20)
     limitations: list[str] = Field(default_factory=list, max_length=10)
     next_steps: list[str] = Field(default_factory=list, max_length=5)
@@ -223,6 +229,11 @@ class ModelGateway:
             "packet supports both meanings. "
             "INSUFFICIENT_EVIDENCE when evidence does not meet the threshold. Use NOT_VERIFIABLE "
             "for opinions/predictions or propositions not checkable as framed. Preserve conflicts. "
+            "For each finding, draft a direct, plain-language answer for the person who asked as "
+            "an explanation array of sentences, each with one or more evidence_ids from the packet. "
+            "Every factual sentence must cite evidence that directly supports that sentence. Do not "
+            "put uncited assertions in the explanation. "
+            "Do not use any candidate ID or any evidence ID not supplied in the packet. "
             "For each finding, draft a direct, plain-language answer for the person who asked: "
             "state what the evidence does and does not establish, and name the most relevant "
             "finding or source detail when the packet supports it. This statement is user-facing. "
@@ -383,6 +394,7 @@ class ModelGateway:
         )
         set_tracing_disabled(True)
         retry_count = 0
+        schema_retry_count = 0
         budget = ModelCallBudget(session, investigation_id)
         try:
             while True:
@@ -432,7 +444,8 @@ class ModelGateway:
                         getattr(error, "status_code", None),
                         getattr(error, "request_id", None),
                     )
-                    if (
+                    schema_retry = category == FailureCategory.INVALID_MODEL_OUTPUT and schema_retry_count < 1
+                    if not schema_retry and (
                         not is_retryable(category)
                         or retry_count >= self.settings.max_provider_retries
                     ):
@@ -441,7 +454,10 @@ class ModelGateway:
                             model=model_name,
                             category=category,
                         ) from error
-                    if category == FailureCategory.RATE_LIMITED:
+                    if schema_retry:
+                        schema_retry_count += 1
+                        delay = 0
+                    elif category == FailureCategory.RATE_LIMITED:
                         delay = retry_after_seconds(error)
                         if delay is None or delay > self.settings.max_retry_after_seconds:
                             raise ModelInvocationFailed(

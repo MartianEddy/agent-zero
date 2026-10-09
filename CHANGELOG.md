@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-10-09 — Slice 2 evidence ledger and citation validation
+
+- Added migration `0014_evidence_ledger` with conservative legacy values and a rollback note. Evidence now stores source tier, stance, excerpt offsets/validation, independence group, publication date/staleness, retrieval timestamp, and case run ID.
+- Added deterministic independence grouping for publisher/domain, AP/Associated Press/Reuters/AFP markers, and near-identical excerpts. Verdict sufficiency now uses only cited, retrieved, validated evidence.
+- Added sentence-level `{sentence, evidence_ids}` output, one structured-output retry, invalid-citation removal, verdict/confidence re-evaluation, and an unsupported-statement notice in the UI.
+- Added evidence ledger details and citation links to the verdict view, shared case deadlines across retrieval/search/model steps, stored-result citation scoring, and claim-type test fixtures.
+- Enabled Jina Reader by default for selected public candidate URLs, added optional `JINA_API_KEY` Bearer authentication, and documented opt-out and failure states. Reader failures remain incomplete checks.
+- No new package dependency. See `docs/DESIGN.md` and `docs/TEST-TRIAGE.md` for assumptions and measured verification.
+
+### Still not implemented or verified
+
+- No live provider evaluation; the golden-set runner has no captured real predictions, so scores remain unmeasured.
+- The Next.js production build still exits in its TypeScript config parsing step after compilation; standalone `tsc --noEmit` passes.
+- Human decision panel, append-only reviewer override, and JSON export remain for Slice 3.
+
 ## 2026-10-09 — Audit and claim triage foundation
 
 - Added `docs/AUDIT.md` with the repository map, current claim flow, service/data boundaries, coverage, constraints, and prioritized gaps against the requested product brief.

@@ -66,6 +66,15 @@ function formatBytes(value: number) {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function citationLabel(evidence: Evidence | undefined, fallback: number) {
+  if (!evidence?.source?.url) return fallback;
+  try {
+    return new URL(evidence.source.url).hostname;
+  } catch {
+    return fallback;
+  }
+}
+
 function sourceRoleLabel(role: string) {
   const labels: Record<string, string> = {
     PRIMARY: "Official or original source",
@@ -109,6 +118,13 @@ function EvidenceCard({ item, relationship, showSourceAction = true }: { item: E
         : item.method === "MEDIA_VISUAL_OBSERVATION" ? observations.length > 0 ? observations.map((observation, index) => <p key={`${observation.observation}-${index}`}>{observation.observation}</p>) : <p>No visual notes were recorded.</p>
           : provenanceCopy ? <p>{provenanceCopy.explanation}{aiDeclarationCopy(item.provenance?.ai_disclosures ?? []) && ` ${aiDeclarationCopy(item.provenance?.ai_disclosures ?? [])}`}</p>
             : <p>{safeEvidenceText(item.content)}</p>}
+      {item.source && <dl className={styles.ledgerMeta} aria-label="Evidence ledger details">
+        <div><dt>Tier</dt><dd>{(item.source_tier || "UNKNOWN").replaceAll("_", " ")}</dd></div>
+        <div><dt>Stance</dt><dd>{relationshipPresentation(item.stance || relationship || "UNKNOWN")}</dd></div>
+        <div><dt>Published</dt><dd>{item.published_date ? publicationDateLabel(item.published_date) || item.published_date : "Date unavailable"}{item.is_stale === true ? " · may be outdated" : ""}</dd></div>
+        <div><dt>Source group</dt><dd>{item.independence_group_id || "unknown"}</dd></div>
+        <div><dt>Excerpt</dt><dd>{item.excerpt_validated ? `Validated at characters ${item.excerpt_location?.start ?? "?"}–${item.excerpt_location?.end ?? "?"}` : "Quote validation unavailable"}</dd></div>
+      </dl>}
       {item.limitations && <small className={styles.muted}>{safeEvidenceText(item.limitations)}</small>}
       {showSourceAction && item.source && <a className={styles.textLink} href={item.source.url} target="_blank" rel="noreferrer">Open source ↗</a>}
     </article>
@@ -350,6 +366,14 @@ export default function InvestigatePage() {
   const dateReferenceText = [content, ...(results?.claims ?? []).map((claim) => claim.text)].join(" ");
   const dateBasis = investigation ? relativeDateBasis(dateReferenceText, investigation.created_at) : null;
   const retrievalDisabled = Boolean(results?.usage_summary?.limitations.some((item) => item.includes("Source retrieval is disabled")));
+  const readerFailureReason = results?.sources.find((source) => source.retrieval_failure_reason)?.retrieval_failure_reason;
+  const readerFailureCopy = readerFailureReason === "JINA_RATE_LIMITED"
+    ? "Jina Reader rate limit reached. Source pages were not retrieved; search candidates remain unchecked. Add or refresh JINA_API_KEY, then retry when the key can make Reader requests."
+    : readerFailureReason === "JINA_QUOTA_EXHAUSTED"
+      ? "Jina Reader reports that its token quota is exhausted. Source pages were not retrieved; search candidates remain unchecked. Configure a Jina key with available Reader quota, then retry."
+      : readerFailureReason === "JINA_AUTHENTICATION_FAILED"
+        ? "Jina Reader rejected its API key. Source pages were not retrieved; search candidates remain unchecked. Check JINA_API_KEY, then retry."
+        : null;
   const failedSearchProviders = [...new Set((results?.search_traces ?? [])
     .filter((trace) => ["unavailable", "error", "budget_exceeded"].includes(trace.action))
     .map((trace) => trace.provider.replaceAll("_", " ").toLowerCase()))];
@@ -501,7 +525,12 @@ export default function InvestigatePage() {
                         <span aria-hidden="true">{presentation?.icon}</span><strong>{presentation?.label}</strong>
                         <p>{presentation?.explanation}</p>
                       </div>
-                      <p className={styles.findingStatement}>{safeEvidenceText(finding.statement)}</p>
+                      {finding.explanation?.length ? <div className={styles.findingStatement}>
+                        {finding.explanation.map((item, index) => <span key={`${finding.id}-${index}`}>
+                          {safeEvidenceText(item.sentence)} {item.evidence_ids.map((id, citationIndex) => <a key={id} href={`#evidence-${id}`} aria-label="View cited evidence">[{citationLabel(evidence.find((entry) => entry.id === id), citationIndex + 1)}]</a>)}{" "}
+                        </span>)}
+                      </div> : <p className={styles.findingStatement}>{safeEvidenceText(finding.statement)}</p>}
+                      {finding.unsupported_statements_removed && <p className={styles.resultCaveat} role="status">Unsupported statements removed after citation checks.</p>}
                       {finding.evidence_confidence && <p className={styles.findingConfidence}><strong>Evidence confidence: {finding.evidence_confidence.toLowerCase()}</strong> <span>(qualitative, not a probability)</span>{finding.confidence_rationale && <> · {safeEvidenceText(finding.confidence_rationale)}</>}</p>}
                       {finding.limitations && <p className={styles.findingLimitation}>{safeEvidenceText(finding.limitations)}</p>}
                       <div className={styles.citationLinks}>
@@ -554,6 +583,7 @@ export default function InvestigatePage() {
                 </div>
               </div>
               <p className={styles.searchScopeNote}>{searchedProviders.length ? `Search providers used: ${searchedProviders.join(" and ")}.` : "Search providers have not returned results yet."} Route: {routeLaneNames.length ? routeLaneNames.join(" → ") : "primary records first"}. Secondary lanes run only when an earlier pass finds fewer than two distinct retrieved source domains for a claim. Search results remain candidates until their pages are retrieved. Agent 0 does not search logged-in pages or direct social-platform feeds.</p>
+              {readerFailureCopy && <p className={styles.partialNotice} role="status">{readerFailureCopy}</p>}
               {failedSearchProviders.length > 0 && results.sources.length > 0 && <p className={styles.partialNotice}>Could not search {failedSearchProviders.join(" and ")}; results from {searchedProviders.join(" and ") || "the available providers"} may be incomplete.</p>}
               {results.sources.length > 0 ? <div className={styles.sourceList}>
                 <h4>{results.sources.every((source) => source.retrieval_status === "RETRIEVED") ? "Sources reviewed" : "Sources found"}</h4>

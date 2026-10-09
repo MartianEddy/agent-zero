@@ -67,7 +67,9 @@ services:
       - key: CLICKCAST_IDENTITY_KEY
         sync: false
       - key: SOURCE_READER_PROVIDER
-        value: disabled
+        value: jina_reader
+      - key: JINA_API_KEY
+        sync: false
 
   - type: worker
     name: agent-zero-worker

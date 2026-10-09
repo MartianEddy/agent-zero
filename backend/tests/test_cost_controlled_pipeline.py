@@ -12,6 +12,7 @@ from app.db.base import Base
 from app.domain.investigation import InputType
 from app.modules.investigations.investigator import (
     EvidenceReasoning,
+    ExplanationSentence,
     ModelGateway,
     ModelInvocationFailed,
     ModelRun,
@@ -147,7 +148,7 @@ class CostControlledPipelineTests(unittest.TestCase):
                 self.gateway_call_count += 1
                 return ModelRun(output=plan, provider="openai", model="mock-model")
 
-            def reason_about_evidence(inner, *, evidence_packet, session, investigation_id):
+            def reason_about_evidence(inner, *, evidence_packet, session, investigation_id, **_kwargs):
                 self.gateway_call_count += 1
                 if final_error:
                     raise ModelInvocationFailed(
@@ -171,6 +172,7 @@ class CostControlledPipelineTests(unittest.TestCase):
                                 claim_id=str(claim.id),
                                 status="SUPPORTED",
                                 statement="The retrieved passage supports the claim.",
+                                explanation=[ExplanationSentence(sentence="The retrieved passage supports the claim.", evidence_ids=[str(evidence.id)])],
                                 evidence=[
                                     {"evidence_id": str(evidence.id), "relationship": "SUPPORTS"}
                                 ],
@@ -217,7 +219,7 @@ class CostControlledPipelineTests(unittest.TestCase):
                 ],
             )
 
-        def retrieve(_url):
+        def retrieve(_url, **_kwargs):
             return RetrievedPage(
                 requested_url="https://news.example/story/1",
                 text=(

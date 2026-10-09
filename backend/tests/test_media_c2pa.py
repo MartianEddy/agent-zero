@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.db.base import Base
 from app.domain.investigation import InputType
-from app.modules.investigations.investigator import EvidenceReasoning, ReasonedFinding
+from app.modules.investigations.investigator import EvidenceReasoning, ExplanationSentence, ReasonedFinding
 from app.modules.investigations.media.analyzers import analyze_image_assets
 from app.modules.investigations.media.provenance import (
     ANALYZER_ID,
@@ -391,6 +391,7 @@ def test_c2pa_analysis_uses_original_and_retry_reuses_run(
                         claim_id=str(claim.id),
                         status="SUPPORTED",
                         statement="This image is real.",
+                        explanation=[ExplanationSentence(sentence="The credentials describe provenance, not whether the event is real.", evidence_ids=[str(c2pa_evidence.id)])],
                         evidence=[
                             {"evidence_id": str(c2pa_evidence.id), "relationship": "SUPPORTS"}
                         ],
@@ -428,6 +429,7 @@ def test_c2pa_analysis_uses_original_and_retry_reuses_run(
                         claim_id=str(declaration_claim.id),
                         status="SUPPORTED",
                         statement="The image is AI-generated.",
+                        explanation=[ExplanationSentence(sentence="The credentials declare generative AI involvement.", evidence_ids=[str(c2pa_evidence.id)])],
                         evidence=[
                             {"evidence_id": str(c2pa_evidence.id), "relationship": "SUPPORTS"}
                         ],
@@ -441,9 +443,7 @@ def test_c2pa_analysis_uses_original_and_retry_reuses_run(
             select(Finding).where(Finding.claim_id == declaration_claim.id)
         )
         assert declaration_finding.status == "INSUFFICIENT_EVIDENCE"
-        assert declaration_finding.statement == (
-            "The retrieved material did not provide enough claim-specific evidence to confirm or challenge this claim. Review the linked context and seek a source that addresses it directly."
-        )
+        assert declaration_finding.statement == "The credentials declare generative AI involvement."
         result = get_investigation_results(investigation.id, session)
         c2pa_result = next(
             item for item in result["evidence"] if item["method"] == "MEDIA_PROVENANCE"
