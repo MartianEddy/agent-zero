@@ -37,7 +37,7 @@ const baseResults = {
 };
 
 test("all claim finding statuses have readable labels and explanations", () => {
-  for (const status of ["SUPPORTED", "CONTRADICTED", "UNVERIFIED", "INCONCLUSIVE"]) {
+  for (const status of ["SUPPORTED", "CONTRADICTED", "PARTLY_TRUE", "INSUFFICIENT_EVIDENCE", "NOT_VERIFIABLE"]) {
     const copy = statusPresentation(status);
     assert.ok(copy.icon);
     assert.ok(copy.label);
@@ -46,11 +46,11 @@ test("all claim finding statuses have readable labels and explanations", () => {
 });
 
 test("backend verdicts map to calm, non-binary language", () => {
-  assert.equal(statusPresentation("SUPPORTED").label, "Supported by evidence");
-  assert.equal(statusPresentation("CONTRADICTED").label, "Contradicted by evidence");
-  assert.equal(statusPresentation("UNVERIFIED").label, "Not verified");
-  assert.equal(statusPresentation("INCONCLUSIVE").label, "Inconclusive");
-  assert.equal(statusPresentation("UNVERIFIED").explanation, "There isn’t enough reliable evidence to confirm this yet.");
+  assert.equal(statusPresentation("SUPPORTED").label, "Evidence supports this claim");
+  assert.equal(statusPresentation("CONTRADICTED").label, "Evidence challenges this claim");
+  assert.equal(statusPresentation("INSUFFICIENT_EVIDENCE").label, "Not enough evidence yet");
+  assert.equal(statusPresentation("PARTLY_TRUE").label, "Some parts or meanings are supported");
+  assert.match(statusPresentation("INSUFFICIENT_EVIDENCE").explanation, /does not mean the claim is false/i);
 });
 
 test("unified input infers web links without asking for a mode", () => {
@@ -111,7 +111,7 @@ test("unknowns, limitations, next steps, and partial-analysis notice are availab
     ...baseResults,
     claims: [{ id: "claim-1", text: "The event occurred." }],
     evidence: [{ id: "e1", provenance: { status: "NOT_PRESENT" } }],
-    findings: [{ status: "INCONCLUSIVE" }],
+    findings: [{ status: "PARTLY_TRUE", evidence_ids: [] }],
     usage_summary: { limitations: ["Visual interpretation was unavailable after provider failure."] },
   };
   const unknowns = unknownsFromResults(results);
@@ -126,7 +126,7 @@ test("a question without an extracted claim remains visible as an unknown with u
     ...baseResults,
     media_assets: [{ media_type: "IMAGE", role: "ORIGINAL" }],
   };
-  assert.ok(unknownsFromResults(results).some((item) => item.includes("No verifiable claim was extracted")));
+  assert.ok(unknownsFromResults(results).some((item) => item.includes("specific, checkable claim")));
   assert.ok(recommendedNextSteps(results).some((item) => item.includes("original post or source page")));
 });
 
@@ -147,9 +147,9 @@ test("technical metadata is allowlisted and upload errors are journalist-friendl
     'Safe decoded fields: {"format":"jpeg","width":800,"height":600,"gps_present":true,"serial":"private"}. Analyzed asset',
   );
   assert.deepEqual(fields.map(([label]) => label), ["Format", "Dimensions"]);
-  assert.equal(uploadErrorMessage({ code: "UPLOAD_TOO_LARGE" }), "This image exceeds the 25 MB upload limit.");
+  assert.equal(uploadErrorMessage({ code: "UPLOAD_TOO_LARGE" }), "This file exceeds the 25 MB upload limit.");
   assert.match(uploadErrorMessage({ code: "IMAGE_PIXEL_LIMIT_EXCEEDED" }), /too large to process safely/);
-  assert.match(uploadErrorMessage({ code: "UNSUPPORTED_MEDIA_TYPE" }), /JPEG, PNG and WebP/);
+  assert.match(uploadErrorMessage({ code: "UNSUPPORTED_MEDIA_TYPE" }), /JPEG, PNG or WebP.*MP4 or WebM/);
   assert.match(uploadErrorMessage({ code: "IMAGE_DECODE_FAILED" }), /could not safely decode/);
 });
 

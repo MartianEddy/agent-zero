@@ -1,38 +1,28 @@
 const STATUS_COPY = {
   SUPPORTED: {
     icon: "✓",
-    label: "Supported by evidence",
+    label: "Evidence supports this claim",
     explanation: "Available reliable evidence supports this claim.",
   },
   CONTRADICTED: {
     icon: "×",
-    label: "Contradicted by evidence",
+    label: "Evidence challenges this claim",
     explanation: "Reliable evidence conflicts with this claim.",
   },
-  UNVERIFIED: {
+  INSUFFICIENT_EVIDENCE: {
     icon: "○",
-    label: "Not verified",
-    explanation: "The evidence reviewed did not establish whether this claim is accurate.",
+    label: "Not enough evidence yet",
+    explanation: "We couldn’t confirm or challenge this claim from the material we were able to review. That does not mean the claim is false.",
   },
-  INCONCLUSIVE: {
+  PARTLY_TRUE: {
     icon: "?",
-    label: "Inconclusive",
-    explanation: "Retrieved evidence conflicts or cannot be reconciled into a clear conclusion.",
+    label: "Some parts or meanings are supported",
+    explanation: "The evidence supports some parts or interpretations of the claim, while others need context or differ.",
   },
-  MISLEADING_CONTEXT: {
-    icon: "!",
-    label: "Misleading context",
-    explanation: "The evidence indicates that context may be misleading.",
-  },
-  ALTERED_MEDIA: {
-    icon: "!",
-    label: "Altered media",
-    explanation: "Evidence indicates that the media may have been altered.",
-  },
-  OUTDATED_CONTEXT: {
-    icon: "↻",
-    label: "Outdated context",
-    explanation: "The evidence indicates that the context may be outdated.",
+  NOT_VERIFIABLE: {
+    icon: "—",
+    label: "Not verifiable as a factual claim",
+    explanation: "This is an opinion, prediction or claim that cannot be checked as framed.",
   },
 };
 
@@ -74,7 +64,7 @@ const STAGE_COPY = {
   PROCESSING: "Preparing the investigation",
   ANALYZING: "Examining what you shared",
   RESEARCHING: "Searching for sources",
-  CORROBORATING: "Comparing retrieved pages",
+  CORROBORATING: "Comparing what the evidence says",
   GENERATING_BRIEF: "Preparing the result",
   COMPLETE: "Review complete",
   NEEDS_REVIEW: "Part of the investigation needs review",
@@ -159,10 +149,11 @@ export function unknownsFromResults(results, reviewComplete = true) {
   if (!reviewComplete) return [];
   const unknowns = [];
   if (results.claims.length === 0) {
-    unknowns.push("No verifiable claim was extracted from the submitted request.");
+    unknowns.push("We couldn’t identify a specific, checkable claim in the submitted request yet.");
   }
-  if (results.evidence_coverage.claims_without_linked_evidence > 0) {
-    unknowns.push("No retrieved evidence excerpt is linked to one or more claims, so those claims could not be assessed from source content.");
+  const findingsWithoutEvidence = results.findings.some((finding) => (finding.evidence_ids ?? []).length === 0);
+  if (results.evidence_coverage.claims_without_linked_evidence > 0 || findingsWithoutEvidence) {
+    unknowns.push("No evidence is linked to one or more claims, so those claims could not be assessed from source content.");
   }
   if (results.sources.length > 0 && results.evidence_coverage.sources_retrieved === 0) {
     unknowns.push(`${results.sources.length} source candidate${results.sources.length === 1 ? " was" : "s were"} found, but no page content could be retrieved. Candidate titles are leads, not evidence.`);
@@ -171,7 +162,7 @@ export function unknownsFromResults(results, reviewComplete = true) {
   if (provenance?.status === "NOT_PRESENT") {
     unknowns.push("No supported Content Credentials were present; this does not indicate synthetic or manipulated media.");
   }
-  if (results.findings.some((item) => item.status === "INCONCLUSIVE")) {
+  if (results.findings.some((item) => item.status === "PARTLY_TRUE")) {
     unknowns.push("Retrieved evidence conflicts or leaves a material question unresolved.");
   }
   if (unknowns.length === 0 && results.findings.length > 0) {
@@ -183,13 +174,15 @@ export function unknownsFromResults(results, reviewComplete = true) {
 /** @param {import('./types').Results} results @param {boolean} reviewComplete */
 export function recommendedNextSteps(results, reviewComplete = true) {
   if (!reviewComplete) return [];
+  const hasImageContext = results.media_assets?.some((asset) => asset.media_type === "IMAGE")
+    || results.evidence.some((item) => Boolean(item.provenance));
   if (results.claims.length === 0) {
     const steps = [];
-    if (results.media_assets?.some((asset) => asset.media_type === "IMAGE" && asset.role.toUpperCase() === "ORIGINAL")) {
+    if (hasImageContext) {
       steps.push("Share the original post or source page where you found the image.");
       steps.push("An external reverse-image search may help trace earlier appearances; Agent 0 did not perform one.");
     } else {
-      steps.push("Add a specific, verifiable claim or context to investigate.");
+      steps.push("Share the exact statement you want checked, including who or what it concerns and any relevant date or place.");
     }
     return steps;
   }
@@ -201,8 +194,8 @@ export function recommendedNextSteps(results, reviewComplete = true) {
     steps.push("Open a source candidate and provide an accessible primary source or article with the relevant passage.");
   }
   steps.push("Check for an official statement and compare it with an independent source.");
-  if (results.media_assets?.some((asset) => asset.media_type === "IMAGE" && asset.role.toUpperCase() === "ORIGINAL")) {
-    steps.push("Locate the original upload and consider an external reverse-image search; Agent 0 did not perform one.");
+  if (hasImageContext) {
+    steps.push("Share the original media upload and consider an external reverse-image search; Agent 0 did not perform one.");
   }
   return steps;
 }
@@ -379,10 +372,10 @@ export function uploadErrorMessage(error) {
   const code = "code" in value && typeof value.code === "string" ? value.code : "";
   const messages = {
     REQUIRED_DEPENDENCY_UNAVAILABLE: "Agent 0’s investigation service is temporarily unavailable. Try again shortly.",
-    UPLOAD_TOO_LARGE: "This image exceeds the 25 MB upload limit.",
-    UNSUPPORTED_MEDIA_TYPE: "Agent 0 currently supports JPEG, PNG and WebP images.",
+    UPLOAD_TOO_LARGE: "This file exceeds the 25 MB upload limit.",
+    UNSUPPORTED_MEDIA_TYPE: "Choose a JPEG, PNG or WebP image, or an MP4 or WebM video.",
     IMAGE_PIXEL_LIMIT_EXCEEDED: "This image is too large to process safely.",
-    INVALID_MEDIA: "Agent 0 could not safely decode this image.",
+    INVALID_MEDIA: "Agent 0 could not read this media file.",
     IMAGE_DECODE_FAILED: "Agent 0 could not safely decode this image.",
   };
   if (messages[code]) return messages[code];

@@ -36,6 +36,7 @@ from app.modules.investigations.models import (
 )
 from app.modules.investigations.orchestrator import (
     _persist_findings,
+    _persist_plan,
     _query_for_freshness,
     process_investigation,
 )
@@ -44,6 +45,7 @@ from app.modules.investigations.routes import retry_investigation
 from app.modules.investigations.service import InvestigationService
 from app.modules.investigations.usage import fail_model_call
 from app.modules.sources.exa_search import ExaSearchResponse
+from app.modules.sources.openai_web_search import OpenAIWebSearchResponse
 from app.modules.sources.retrieval import RetrievedPage
 
 OWNER_ID = UUID("00000000-0000-4000-8000-000000000001")
@@ -133,7 +135,8 @@ class CostControlledPipelineTests(unittest.TestCase):
                 PlannedClaim(
                     text="Schools in Nyeri County will remain closed tomorrow.",
                     normalized_text="schools in nyeri county will remain closed tomorrow",
-                    claim_type="GENERAL",
+                    claim_type="CHECKABLE_EVENT",
+                    needs_deep_investigation=True,
                 )
             ],
             queries=queries or ["Nyeri County schools closure official notice"],
@@ -171,7 +174,9 @@ class CostControlledPipelineTests(unittest.TestCase):
                                 evidence=[
                                     {"evidence_id": str(evidence.id), "relationship": "SUPPORTS"}
                                 ],
-                            )
+                                        evidence_confidence="MEDIUM",
+            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
+)
                         ]
                     ),
                     provider="openai",
@@ -193,6 +198,25 @@ class CostControlledPipelineTests(unittest.TestCase):
             ]
             return ExaSearchResponse(request_id="mock-request", results=results)
 
+        def search_openai(**kwargs):
+            return OpenAIWebSearchResponse(
+                request_id="mock-openai-request",
+                results=[
+                    {
+                        "url": f"https://news.example/story/{search_counter}?utm_source=test#top",
+                        "title": f"Nyeri County school notice {search_counter}",
+                        "author": "County Desk",
+                        "publishedDate": "2026-10-03T08:00:00Z",
+                    }
+                ],
+                citations=[
+                    {
+                        "url": f"https://news.example/story/{search_counter}?utm_source=test#top",
+                        "title": f"Nyeri County school notice {search_counter}",
+                    }
+                ],
+            )
+
         def retrieve(_url):
             return RetrievedPage(
                 requested_url="https://news.example/story/1",
@@ -208,6 +232,10 @@ class CostControlledPipelineTests(unittest.TestCase):
             ),
             patch("app.modules.investigations.orchestrator.ModelGateway", FakeInvestigator),
             patch("app.modules.investigations.orchestrator.search_exa", side_effect=search),
+            patch(
+                "app.modules.investigations.orchestrator.search_openai_web",
+                side_effect=search_openai,
+            ),
             patch("app.modules.investigations.orchestrator.read_public_page", side_effect=retrieve),
             patch(
                 "app.modules.investigations.orchestrator.put_private_object",
@@ -336,16 +364,55 @@ class CostControlledPipelineTests(unittest.TestCase):
         patches = self._provider_patches(final_error=True, queries=["query one", "query two"])
         result = self._run_with_patches(patches)
         self.assertEqual(result, "needs_review")
-        self.assertEqual(self.session.scalar(select(func.count()).select_from(SearchTrace)), 1)
+        self.assertEqual(self.session.scalar(select(func.count()).select_from(SearchTrace)), 2)
         self.assertEqual(
             self.session.scalar(
                 select(InvestigationUsage).where(
                     InvestigationUsage.investigation_id == self.investigation.id
                 )
             ).search_calls,
-            1,
+            2,
         )
         self.assertEqual(self.session.scalar(select(func.count()).select_from(Source)), 1)
+
+    def test_planned_route_is_persisted_for_both_search_providers(self) -> None:
+        plan = ResearchPlan(
+            claims=[
+                PlannedClaim(
+                    text="Kenya gained independence in 1963.",
+                    normalized_text="kenya gained independence in 1963",
+                    claim_type="SETTLED_FACT",
+                    needs_deep_investigation=False,
+                )
+            ],
+            queries=[
+                PlannedQuery(
+                    text="Kenya independence 1963 primary records",
+                    freshness="HISTORICAL",
+                    claim_index=0,
+                    topic="history",
+                    jurisdiction=["Kenya"],
+                    source_lane="PRIMARY",
+                    widening_reason="Start with primary historical records.",
+                )
+            ],
+        )
+        with patch(
+            "app.modules.investigations.orchestrator.get_settings", return_value=self.settings
+        ):
+            _persist_plan(self.session, self.investigation, plan)
+
+        traces = list(
+            self.session.scalars(
+                select(SearchTrace).where(
+                    SearchTrace.investigation_id == self.investigation.id
+                )
+            )
+        )
+        self.assertEqual({trace.provider for trace in traces}, {"EXA", "OPENAI_WEB_SEARCH"})
+        self.assertTrue(all(trace.route_metadata["source_lane"] == "PRIMARY" for trace in traces))
+        self.assertTrue(all(trace.route_metadata["topic"] == "history" for trace in traces))
+        self.assertTrue(all(trace.route_metadata["jurisdiction"] == ["Kenya"] for trace in traces))
 
     def test_retrieval_budget_limits_pages(self) -> None:
         self.settings.max_retrieved_sources = 1
@@ -423,7 +490,7 @@ class CostControlledPipelineTests(unittest.TestCase):
                 investigation_id=self.investigation.id,
                 text="A specific testable claim.",
                 normalized_text="a specific testable claim",
-                claim_type="GENERAL",
+                claim_type="CHECKABLE_EVENT",
             )
             self.session.add(claim)
             self.session.commit()
@@ -437,12 +504,14 @@ class CostControlledPipelineTests(unittest.TestCase):
                         status="SUPPORTED",
                         statement="Unsupported assertion.",
                         evidence=[],
-                    )
+                                evidence_confidence="MEDIUM",
+            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
+)
                 ]
             ),
         )
         finding = self.session.scalar(select(Finding).where(Finding.claim_id == claim.id))
-        self.assertEqual(finding.status, "UNVERIFIED")
+        self.assertEqual(finding.status, "INSUFFICIENT_EVIDENCE")
         self.assertEqual(self.session.scalar(select(func.count()).select_from(FindingEvidence)), 0)
 
     def test_contradicted_finding_requires_contradicting_evidence(self) -> None:
@@ -450,7 +519,7 @@ class CostControlledPipelineTests(unittest.TestCase):
             investigation_id=self.investigation.id,
             text="A specific testable claim.",
             normalized_text="a specific testable claim",
-            claim_type="GENERAL",
+            claim_type="CHECKABLE_EVENT",
         )
         source = Source(
             investigation_id=self.investigation.id,
@@ -482,12 +551,14 @@ class CostControlledPipelineTests(unittest.TestCase):
                         status="CONTRADICTED",
                         statement="Unsupported contradiction.",
                         evidence=[{"evidence_id": str(evidence.id), "relationship": "SUPPORTS"}],
-                    )
+                                evidence_confidence="MEDIUM",
+            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
+)
                 ]
             ),
         )
         finding = self.session.scalar(select(Finding).where(Finding.claim_id == claim.id))
-        self.assertEqual(finding.status, "UNVERIFIED")
+        self.assertEqual(finding.status, "INSUFFICIENT_EVIDENCE")
 
 
 if __name__ == "__main__":

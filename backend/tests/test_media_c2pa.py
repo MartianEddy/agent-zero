@@ -371,7 +371,7 @@ def test_c2pa_analysis_uses_original_and_retry_reuses_run(
             investigation_id=investigation.id,
             text="This image depicts an event.",
             normalized_text="this image depicts an event",
-            claim_type="FACTUAL",
+            claim_type="MEDIA_CLAIM",
         )
         session.add(claim)
         session.flush()
@@ -394,18 +394,20 @@ def test_c2pa_analysis_uses_original_and_retry_reuses_run(
                         evidence=[
                             {"evidence_id": str(c2pa_evidence.id), "relationship": "SUPPORTS"}
                         ],
-                    )
+                                evidence_confidence="MEDIUM",
+            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
+)
                 ]
             ),
         )
         finding = session.scalar(select(Finding).where(Finding.claim_id == claim.id))
-        assert finding.status == "INCONCLUSIVE"
+        assert finding.status == "INSUFFICIENT_EVIDENCE"
         assert finding.statement != "This image is real."
         declaration_claim = Claim(
             investigation_id=investigation.id,
             text="Content Credentials declare generative AI involvement.",
             normalized_text="content credentials declare generative ai involvement",
-            claim_type="PROVENANCE",
+            claim_type="CHECKABLE_EVENT",
         )
         session.add(declaration_claim)
         session.flush()
@@ -429,16 +431,18 @@ def test_c2pa_analysis_uses_original_and_retry_reuses_run(
                         evidence=[
                             {"evidence_id": str(c2pa_evidence.id), "relationship": "SUPPORTS"}
                         ],
-                    )
+                                evidence_confidence="MEDIUM",
+            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
+)
                 ]
             ),
         )
         declaration_finding = session.scalar(
             select(Finding).where(Finding.claim_id == declaration_claim.id)
         )
-        assert declaration_finding.status == "SUPPORTED"
+        assert declaration_finding.status == "INSUFFICIENT_EVIDENCE"
         assert declaration_finding.statement == (
-            "The uploaded image contains Content Credentials declaring generative-AI involvement."
+            "The retrieved material did not provide enough claim-specific evidence to confirm or challenge this claim. Review the linked context and seek a source that addresses it directly."
         )
         result = get_investigation_results(investigation.id, session)
         c2pa_result = next(

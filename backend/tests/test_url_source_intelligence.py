@@ -124,7 +124,8 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
                                 normalized_text=(
                                     "schools in nyeri county will remain closed tomorrow"
                                 ),
-                                claim_type="FACTUAL",
+                                claim_type="CHECKABLE_EVENT",
+                                needs_deep_investigation=True,
                             )
                         ],
                         queries=["Nyeri school closure official notice"],
@@ -296,7 +297,7 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
             investigation_id=investigation.id,
             text="Schools in Nyeri County will remain closed tomorrow.",
             normalized_text="schools in nyeri county will remain closed tomorrow",
-            claim_type="FACTUAL",
+            claim_type="CHECKABLE_EVENT",
         )
         first = Source(
             investigation_id=investigation.id,
@@ -383,8 +384,8 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
                 findings=[
                     ReasonedFinding(
                         claim_id=str(claim.id),
-                        status="INCONCLUSIVE",
-                        statement="The sources disagree.",
+                        status="PARTLY_TRUE",
+                        statement="Evidence supports and contradicts different interpretations.",
                         evidence=[
                             {
                                 "evidence_id": str(evidence_items[0].id),
@@ -395,12 +396,14 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
                                 "relationship": "CONTRADICTS",
                             },
                         ],
-                    )
+                                evidence_confidence="MEDIUM",
+            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
+)
                 ]
             ),
         )
         finding = session.scalar(select(Finding).where(Finding.claim_id == claim.id))
-        self.assertEqual(finding.status, "INCONCLUSIVE")
+        self.assertEqual(finding.status, "PARTLY_TRUE")
         self.assertIn("supports and contradicts", finding.statement)
         self.assertEqual(
             {
@@ -447,12 +450,14 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
                         claim_id=str(claim.id),
                         status="SUPPORTED",
                         statement="A trusted registry domain says it is true.",
-                    )
+                                evidence_confidence="MEDIUM",
+            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
+)
                 ]
             ),
         )
         finding = session.scalar(select(Finding).where(Finding.claim_id == claim.id))
-        self.assertEqual(finding.status, "UNVERIFIED")
+        self.assertEqual(finding.status, "INSUFFICIENT_EVIDENCE")
         self.assertEqual(
             session.scalar(
                 select(func.count())
@@ -557,7 +562,7 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
             investigation_id=investigation.id,
             text="Schools in Nyeri County will remain closed tomorrow.",
             normalized_text="schools in nyeri county will remain closed tomorrow",
-            claim_type="FACTUAL",
+            claim_type="CHECKABLE_EVENT",
         )
         session.add_all([submitted, candidate, claim])
         session.flush()

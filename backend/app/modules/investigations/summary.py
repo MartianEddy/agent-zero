@@ -28,7 +28,13 @@ def journalist_assessment_summary(
 ) -> str:
     counts = {
         status: 0
-        for status in ("SUPPORTED", "CONTRADICTED", "UNVERIFIED", "INCONCLUSIVE")
+        for status in (
+            "SUPPORTED",
+            "CONTRADICTED",
+            "PARTLY_TRUE",
+            "INSUFFICIENT_EVIDENCE",
+            "NOT_VERIFIABLE",
+        )
     }
     for status in statuses:
         if status in counts:
@@ -40,15 +46,16 @@ def journalist_assessment_summary(
             "No assessment is available. The review did not produce a claim-level finding. "
             "Please review the cited sources directly; no conclusion has been reached."
         )
-    elif present == {"INCONCLUSIVE"}:
+    elif present == {"PARTLY_TRUE"}:
         summary = (
-            "Assessment: Inconclusive. Retrieved evidence conflicts or cannot be reconciled."
+            "Assessment: Partly true. The evidence supports some parts or interpretations and challenges others."
         )
-    elif present == {"UNVERIFIED"}:
+    elif present == {"INSUFFICIENT_EVIDENCE"}:
         summary = (
-            "Assessment: Not verified. The available record does not establish whether the claim "
-            "is accurate."
+            "Assessment: Not enough evidence yet. The retrieved sources do not establish whether the claim is accurate."
         )
+    elif present == {"NOT_VERIFIABLE"}:
+        summary = "Assessment: Not verifiable. The request is an opinion or prediction, not a checkable factual claim."
     elif present == {"SUPPORTED"}:
         summary = (
             "Assessment: The evidence supports the claim. Review the linked sources and context "
@@ -63,8 +70,9 @@ def journalist_assessment_summary(
         count_phrases = {
             "SUPPORTED": ("supports the claim", "support the claim"),
             "CONTRADICTED": ("challenges the claim", "challenge the claim"),
-            "UNVERIFIED": ("is unverified", "are unverified"),
-            "INCONCLUSIVE": ("is inconclusive", "are inconclusive"),
+            "PARTLY_TRUE": ("is partly true", "are partly true"),
+            "INSUFFICIENT_EVIDENCE": ("needs more evidence", "need more evidence"),
+            "NOT_VERIFIABLE": ("is not verifiable", "are not verifiable"),
         }
         findings = []
         for status, (singular, plural) in count_phrases.items():

@@ -7,6 +7,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Integer,
+    Boolean,
     String,
     Text,
     UniqueConstraint,
@@ -123,7 +124,8 @@ class Claim(Base):
     )
     text: Mapped[str] = mapped_column(Text)
     normalized_text: Mapped[str] = mapped_column(Text)
-    claim_type: Mapped[str] = mapped_column(String(40), default="GENERAL")
+    claim_type: Mapped[str] = mapped_column(String(40), default="CHECKABLE_EVENT")
+    needs_deep_investigation: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -226,6 +228,7 @@ class SearchTrace(Base):
     action: Mapped[str] = mapped_column(String(40), default="search")
     call_reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
     query: Mapped[str | None] = mapped_column(Text, nullable=True)
+    route_metadata: Mapped[dict[str, object]] = mapped_column(JSON_DOCUMENT, default=dict)
     url: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Provider-returned source list and citation annotations (not model-authored proposals).
     sources: Mapped[list[dict[str, object]]] = mapped_column(JSON_DOCUMENT, default=list)
@@ -320,7 +323,7 @@ class Finding(Base):
     )
     status: Mapped[str] = mapped_column(String(30))
     statement: Mapped[str] = mapped_column(Text)
-    evidence_confidence: Mapped[str] = mapped_column(String(12), default="UNASSESSED")
+    evidence_confidence: Mapped[str] = mapped_column(String(12), default="LOW")
     confidence_rationale: Mapped[str] = mapped_column(Text, default="")
     limitations: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

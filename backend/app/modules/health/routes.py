@@ -32,12 +32,14 @@ def health() -> dict[str, str]:
 
 
 @router.get("/ready")
-def readiness() -> dict[str, str]:
+def readiness() -> dict[str, object]:
     settings = get_settings()
     openai_configured = bool(
         settings.openai_api_key and settings.openai_api_key.get_secret_value().strip()
     )
-    search_ready = bool(settings.exa_api_key and settings.exa_api_key.get_secret_value().strip())
+    exa_search_ready = bool(
+        settings.exa_api_key and settings.exa_api_key.get_secret_value().strip()
+    )
     if not openai_configured:
         raise HTTPException(
             status_code=503,
@@ -64,5 +66,9 @@ def readiness() -> dict[str, str]:
         "object_storage": "ok",
         "investigation_engine": "configured" if openai_configured else "missing_openai_api_key",
         "model_provider": "openai",
-        "web_search": "configured" if search_ready else "missing_exa_api_key",
+        "web_search": "configured" if exa_search_ready else "partial",
+        "search_providers": {
+            "exa": "configured" if exa_search_ready else "missing_api_key",
+            "openai_web_search": "configured" if openai_configured else "missing_api_key",
+        },
     }

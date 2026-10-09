@@ -1,0 +1,296 @@
+[
+  {
+    "id": "GC-001",
+    "group": "settled_true",
+    "claim_text": "Mango is a fruit.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "SUPPORTED"
+  },
+  {
+    "id": "GC-002",
+    "group": "settled_true",
+    "claim_text": "Nairobi is the capital of Kenya.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "SUPPORTED"
+  },
+  {
+    "id": "GC-003",
+    "group": "settled_true",
+    "claim_text": "Water freezes at 0 degrees Celsius at standard atmospheric pressure.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "SUPPORTED"
+  },
+  {
+    "id": "GC-004",
+    "group": "settled_true",
+    "claim_text": "Earth orbits the Sun.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "SUPPORTED"
+  },
+  {
+    "id": "GC-005",
+    "group": "settled_true",
+    "claim_text": "The Pacific Ocean is larger than the Atlantic Ocean.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "SUPPORTED"
+  },
+  {
+    "id": "GC-006",
+    "group": "settled_true",
+    "claim_text": "A triangle has three sides.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "SUPPORTED"
+  },
+  {
+    "id": "GC-007",
+    "group": "settled_true",
+    "claim_text": "The chemical symbol for gold is Au.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "SUPPORTED"
+  },
+  {
+    "id": "GC-008",
+    "group": "settled_true",
+    "claim_text": "Mount Kilimanjaro is in Tanzania.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "SUPPORTED"
+  },
+  {
+    "id": "GC-009",
+    "group": "settled_false",
+    "claim_text": "The Great Wall of China is visible from the Moon with the naked eye.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "CONTRADICTED"
+  },
+  {
+    "id": "GC-010",
+    "group": "settled_false",
+    "claim_text": "The Sun orbits the Earth.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "CONTRADICTED"
+  },
+  {
+    "id": "GC-011",
+    "group": "settled_false",
+    "claim_text": "Humans have four lungs.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "CONTRADICTED"
+  },
+  {
+    "id": "GC-012",
+    "group": "settled_false",
+    "claim_text": "Nairobi is the capital of Uganda.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "CONTRADICTED"
+  },
+  {
+    "id": "GC-013",
+    "group": "settled_false",
+    "claim_text": "The chemical symbol for oxygen is Ox.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "CONTRADICTED"
+  },
+  {
+    "id": "GC-014",
+    "group": "settled_false",
+    "claim_text": "A square has five sides.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "CONTRADICTED"
+  },
+  {
+    "id": "GC-015",
+    "group": "settled_false",
+    "claim_text": "Mount Everest is in South Africa.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "CONTRADICTED"
+  },
+  {
+    "id": "GC-016",
+    "group": "settled_false",
+    "claim_text": "The Pacific Ocean is smaller than Lake Victoria.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "CONTRADICTED"
+  },
+  {
+    "id": "GC-017",
+    "group": "nuanced",
+    "claim_text": "A tomato is a fruit.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "PARTLY_TRUE"
+  },
+  {
+    "id": "GC-018",
+    "group": "nuanced",
+    "claim_text": "A tomato is a vegetable.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "PARTLY_TRUE"
+  },
+  {
+    "id": "GC-019",
+    "group": "nuanced",
+    "claim_text": "A peanut is a nut.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "PARTLY_TRUE"
+  },
+  {
+    "id": "GC-020",
+    "group": "nuanced",
+    "claim_text": "A whale is a fish.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "CONTRADICTED"
+  },
+  {
+    "id": "GC-021",
+    "group": "nuanced",
+    "claim_text": "Pluto is a planet.",
+    "expected_claim_type": "CONTESTED",
+    "expected_verdict": "PARTLY_TRUE"
+  },
+  {
+    "id": "GC-022",
+    "group": "nuanced",
+    "claim_text": "Coffee is healthy.",
+    "expected_claim_type": "CONTESTED",
+    "expected_verdict": "PARTLY_TRUE"
+  },
+  {
+    "id": "GC-023",
+    "group": "nuanced",
+    "claim_text": "The color white is a color.",
+    "expected_claim_type": "CONTESTED",
+    "expected_verdict": "PARTLY_TRUE"
+  },
+  {
+    "id": "GC-024",
+    "group": "nuanced",
+    "claim_text": "A day is exactly 24 hours.",
+    "expected_claim_type": "SETTLED_FACT",
+    "expected_verdict": "PARTLY_TRUE"
+  },
+  {
+    "id": "GC-025",
+    "group": "opinion_prediction",
+    "claim_text": "This policy is unfair.",
+    "expected_claim_type": "OPINION_OR_PREDICTION",
+    "expected_verdict": "NOT_VERIFIABLE"
+  },
+  {
+    "id": "GC-026",
+    "group": "opinion_prediction",
+    "claim_text": "The national team will win its next match.",
+    "expected_claim_type": "OPINION_OR_PREDICTION",
+    "expected_verdict": "NOT_VERIFIABLE"
+  },
+  {
+    "id": "GC-027",
+    "group": "opinion_prediction",
+    "claim_text": "This is the best city in the world.",
+    "expected_claim_type": "OPINION_OR_PREDICTION",
+    "expected_verdict": "NOT_VERIFIABLE"
+  },
+  {
+    "id": "GC-028",
+    "group": "opinion_prediction",
+    "claim_text": "The new law will improve every household's life.",
+    "expected_claim_type": "OPINION_OR_PREDICTION",
+    "expected_verdict": "NOT_VERIFIABLE"
+  },
+  {
+    "id": "GC-029",
+    "group": "opinion_prediction",
+    "claim_text": "The company is destined to become the market leader.",
+    "expected_claim_type": "OPINION_OR_PREDICTION",
+    "expected_verdict": "NOT_VERIFIABLE"
+  },
+  {
+    "id": "GC-030",
+    "group": "opinion_prediction",
+    "claim_text": "That was the most inspiring speech ever given.",
+    "expected_claim_type": "OPINION_OR_PREDICTION",
+    "expected_verdict": "NOT_VERIFIABLE"
+  },
+  {
+    "id": "GC-031",
+    "group": "contested",
+    "claim_text": "The COVID-19 pandemic began with a laboratory accident.",
+    "expected_claim_type": "CONTESTED",
+    "expected_verdict": "INSUFFICIENT_EVIDENCE"
+  },
+  {
+    "id": "GC-032",
+    "group": "contested",
+    "claim_text": "The fire was intentionally set by the named suspect.",
+    "expected_claim_type": "CONTESTED",
+    "expected_verdict": "INSUFFICIENT_EVIDENCE"
+  },
+  {
+    "id": "GC-033",
+    "group": "contested",
+    "claim_text": "The election was affected by widespread vote manipulation.",
+    "expected_claim_type": "CONTESTED",
+    "expected_verdict": "INSUFFICIENT_EVIDENCE"
+  },
+  {
+    "id": "GC-034",
+    "group": "contested",
+    "claim_text": "The protest was attended by more than 100,000 people.",
+    "expected_claim_type": "CONTESTED",
+    "expected_verdict": "INSUFFICIENT_EVIDENCE"
+  },
+  {
+    "id": "GC-035",
+    "group": "contested",
+    "claim_text": "The minister's statement accurately describes the agreement.",
+    "expected_claim_type": "CONTESTED",
+    "expected_verdict": "PARTLY_TRUE"
+  },
+  {
+    "id": "GC-036",
+    "group": "contested",
+    "claim_text": "The new treatment is more effective than the existing standard treatment.",
+    "expected_claim_type": "CONTESTED",
+    "expected_verdict": "INSUFFICIENT_EVIDENCE"
+  },
+  {
+    "id": "GC-037",
+    "group": "statistical",
+    "claim_text": "Kenya's population is 60 million people.",
+    "expected_claim_type": "STATISTICAL",
+    "expected_verdict": "INSUFFICIENT_EVIDENCE"
+  },
+  {
+    "id": "GC-038",
+    "group": "statistical",
+    "claim_text": "Inflation fell by 12 percent last year.",
+    "expected_claim_type": "STATISTICAL",
+    "expected_verdict": "INSUFFICIENT_EVIDENCE"
+  },
+  {
+    "id": "GC-039",
+    "group": "statistical",
+    "claim_text": "The city has the highest crime rate in the country.",
+    "expected_claim_type": "STATISTICAL",
+    "expected_verdict": "INSUFFICIENT_EVIDENCE"
+  },
+  {
+    "id": "GC-040",
+    "group": "statistical",
+    "claim_text": "More than half of adults in the country use mobile money.",
+    "expected_claim_type": "STATISTICAL",
+    "expected_verdict": "INSUFFICIENT_EVIDENCE"
+  },
+  {
+    "id": "GC-041",
+    "group": "statistical",
+    "claim_text": "Unemployment increased by 4 percentage points this quarter.",
+    "expected_claim_type": "STATISTICAL",
+    "expected_verdict": "INSUFFICIENT_EVIDENCE"
+  },
+  {
+    "id": "GC-042",
+    "group": "statistical",
+    "claim_text": "This product is 30 percent more efficient than the competitor.",
+    "expected_claim_type": "STATISTICAL",
+    "expected_verdict": "INSUFFICIENT_EVIDENCE"
+  }
+]

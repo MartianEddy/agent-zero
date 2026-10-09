@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en" data-resolution="landscape">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent 0 — Follow the evidence</title>
+    <script src="assets/js/gsap.min.js"></script>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #0b0d0e; }
+      body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+      .mono { font-family: ui-monospace, monospace; }
+      #root { position: relative; width: 100%; height: 100%; overflow: hidden; color: #f7f7f4; background: #0b0d0e; }
+      .scene { position: absolute; inset: 0; overflow: hidden; padding: 72px 118px; background: #0b0d0e; }
+      .scene::before { position: absolute; inset: 0; z-index: 0; background: radial-gradient(ellipse at 78% 42%, rgba(163,255,71,.12), transparent 34%), #0b0d0e; content: ""; }
+      .scene > * { position: relative; z-index: 1; }
+      .topline { display: flex; align-items: center; justify-content: space-between; color: #8d968b; font-size: 17px; letter-spacing: .13em; text-transform: uppercase; }
+      .topline strong { color: #a3ff47; font-size: 15px; font-weight: 600; }
+      .hairline { width: 100%; height: 1px; margin-top: 22px; background: rgba(247,247,244,.2); }
+      .kicker { margin: 0; color: #a3ff47; font-size: 19px; font-weight: 600; letter-spacing: .15em; text-transform: uppercase; }
+      h1, h2, p { margin-top: 0; }
+      .s1 { padding-top: 64px; }
+      .s1 .headline { position: absolute; top: 277px; left: 118px; width: 1060px; font-size: 100px; font-weight: 680; letter-spacing: -.065em; line-height: .99; }
+      .s1 .headline em { color: #a3ff47; font-style: normal; }
+      .s1 .subline { position: absolute; top: 518px; left: 126px; color: #c5cbc2; font-size: 30px; letter-spacing: .01em; }
+      .s1 .edition { position: absolute; bottom: 68px; left: 126px; color: #818980; font-size: 18px; letter-spacing: .13em; text-transform: uppercase; }
+      .orbit-wrap { position: absolute; top: 215px; right: 92px; width: 420px; height: 540px; display: grid; place-items: center; }
+      .orbit { width: 310px; height: 470px; overflow: visible; }
+      .orbit-glow { position: absolute; width: 410px; height: 470px; border-radius: 50%; background: radial-gradient(ellipse, rgba(163,255,71,.19), transparent 64%); opacity: var(--audio-energy, .18); }
+      .s2, .s3, .s4 { padding-top: 66px; }
+      .s2 .left-copy { position: absolute; top: 270px; left: 118px; width: 390px; }
+      .s2 .left-copy h2 { margin: 20px 0 0; color: #f7f7f4; font-size: 62px; font-weight: 650; letter-spacing: -.055em; line-height: 1.04; }
+      .claim-card { position: absolute; top: 234px; right: 122px; width: 1018px; min-height: 430px; border: 2px solid #e5e9e1; border-radius: 10px; padding: 42px 48px; color: #20231f; background: #f7f7f4; box-shadow: 0 25px 100px rgba(0,0,0,.28); }
+      .sample-tag { display: inline-flex; align-items: center; gap: 12px; border: 1px solid #bfcead; border-radius: 3px; padding: 11px 14px; color: #49692a; background: #edf5e4; font-size: 17px; font-weight: 700; letter-spacing: .08em; }
+      .sample-tag .dot { width: 10px; height: 10px; border-radius: 50%; background: #a3ff47; }
+      .card-label { margin: 42px 0 14px; color: #687067; font-size: 17px; font-weight: 600; letter-spacing: .13em; text-transform: uppercase; }
+      .claim-card blockquote { margin: 0; max-width: 880px; color: #20231f; font-size: 47px; font-weight: 650; letter-spacing: -.042em; line-height: 1.17; }
+      .claim-card .card-foot { position: absolute; right: 48px; bottom: 30px; left: 48px; display: flex; justify-content: space-between; border-top: 1px solid #daddd4; padding-top: 17px; color: #687067; font-size: 16px; }
+      .card-foot b { color: #537d2f; font-weight: 650; }
+      .s3 { padding-top: 54px; }
+      .s3 .s3-head { display: flex; align-items: flex-end; justify-content: space-between; border-bottom: 1px solid rgba(247,247,244,.2); padding-bottom: 25px; }
+      .s3 .s3-head h2 { margin: 13px 0 0; font-size: 57px; font-weight: 650; letter-spacing: -.05em; }
+      .s3 .demo-note { border: 1px solid rgba(163,255,71,.48); border-radius: 3px; padding: 11px 14px; color: #c3e4a1; font-size: 15px; font-weight: 650; letter-spacing: .07em; }
+      .s3 .evidence-layout { display: grid; grid-template-columns: 500px 1fr; gap: 44px; margin-top: 40px; }
+      .claim-mini { min-height: 440px; border: 1px solid #434a40; border-radius: 8px; padding: 32px; background: #141816; }
+      .claim-mini .mini-label { color: #a3ff47; font-size: 15px; font-weight: 650; letter-spacing: .14em; text-transform: uppercase; }
+      .claim-mini h3 { margin: 38px 0 32px; color: #f7f7f4; font-size: 32px; font-weight: 600; letter-spacing: -.03em; line-height: 1.2; }
+      .mini-rule { height: 1px; background: #343b33; }
+      .claim-mini .mini-meta { display: flex; justify-content: space-between; margin-top: 22px; color: #8f978b; font-size: 15px; }
+      .claim-mini .mini-meta b { color: #c5cbc2; font-weight: 500; }
+      .findings { display: grid; align-content: start; gap: 14px; }
+      .finding { display: grid; grid-template-columns: 58px 1fr; align-items: start; gap: 21px; min-height: 128px; border: 1px solid #454b43; border-radius: 7px; padding: 22px 24px; background: #141816; }
+      .finding .node { display: grid; width: 46px; height: 46px; place-items: center; border: 2px solid #a3ff47; border-radius: 50%; color: #a3ff47; font-size: 19px; font-weight: 700; }
+      .finding .kind { margin: 0 0 7px; color: #a3ff47; font-size: 15px; font-weight: 650; letter-spacing: .11em; text-transform: uppercase; }
+      .finding .finding-copy { margin: 0; color: #f7f7f4; font-size: 25px; font-weight: 560; letter-spacing: -.015em; line-height: 1.25; }
+      .source-rail { position: absolute; top: 394px; left: 633px; z-index: 0 !important; width: 3px; height: 355px; background: linear-gradient(#a3ff47, rgba(163,255,71,.06)); opacity: .45; }
+      .s4 { display: grid; place-items: center; }
+      .s4::before { background: radial-gradient(ellipse at 50% 46%, rgba(245,158,11,.11), transparent 35%), #0b0d0e; }
+      .verdict { width: 1130px; border: 2px solid #55594d; border-radius: 8px; padding: 54px 66px 49px; background: #121513; text-align: center; }
+      .verdict-label { display: inline-flex; align-items: center; gap: 13px; border: 2px solid #a66f14; border-radius: 4px; padding: 12px 21px; color: #f8c45b; background: rgba(245,158,11,.12); font-size: 19px; font-weight: 750; letter-spacing: .13em; }
+      .verdict-label .status-dot { width: 11px; height: 11px; border-radius: 50%; background: #f59e0b; }
+      .verdict h2 { margin: 33px auto 0; max-width: 990px; color: #f7f7f4; font-size: 46px; font-weight: 570; letter-spacing: -.035em; line-height: 1.22; }
+      .verdict .caution { margin: 28px 0 0; color: #a3ff47; font-size: 22px; font-weight: 600; }
+      .s5 { padding-top: 69px; }
+      .s5 .closing-rule { position: absolute; top: 254px; right: 118px; left: 118px; height: 1px; background: rgba(247,247,244,.19); }
+      .s5 .closing-copy { position: absolute; top: 315px; left: 118px; max-width: 950px; }
+      .s5 .closing-copy h2 { margin: 0; color: #f7f7f4; font-size: 77px; font-weight: 650; letter-spacing: -.055em; line-height: 1.03; }
+      .s5 .closing-copy h2 span { color: #a3ff47; }
+      .s5 .closing-copy p { margin: 32px 0 0; color: #c5cbc2; font-size: 28px; }
+      .s5 .closing-logo { position: absolute; top: 309px; right: 95px; width: 560px; height: 280px; object-fit: contain; }
+      .s5 .cta { position: absolute; right: 120px; bottom: 76px; border: 1px solid #65843e; border-radius: 5px; padding: 15px 20px; color: #a3ff47; font-size: 19px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
+      .s5 .footer-line { position: absolute; right: 120px; bottom: 83px; left: 120px; height: 1px; z-index: 0; background: rgba(247,247,244,.2); }
+      @media (max-width: 1200px) {
+        .scene { padding-right: 70px; padding-left: 70px; }
+        .s1 .headline { left: 70px; font-size: 84px; }
+        .s1 .subline, .s1 .edition { left: 78px; }
+        .orbit-wrap { right: 20px; transform: scale(.82); }
+        .s2 .left-copy { left: 70px; width: 320px; }
+        .s2 .left-copy h2 { font-size: 52px; }
+        .claim-card { right: 70px; width: calc(100% - 500px); }
+        .s5 .closing-copy { left: 70px; max-width: 800px; }
+        .s5 .closing-logo { right: 50px; width: 470px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="23.4" data-width="1920" data-height="1080">
+      <section id="scene-hook" class="scene s1 clip" data-start="0" data-duration="3" data-track-index="1">
+        <div class="topline"><strong>AGENT 0</strong><span class="mono">Evidence-first investigation</span><span class="mono">01 / 05</span></div>
+        <div class="hairline"></div>
+        <p class="kicker" style="position:absolute;top:224px;left:126px">For the moment before you publish</p>
+        <h1 class="headline">Know what<br /><em>holds up</em></h1>
+        <p class="subline">before you publish.</p>
+        <p class="edition mono">Assume nothing. Follow the evidence.</p>
+        <div class="orbit-wrap" aria-hidden="true">
+          <div class="orbit-glow reactive-glow"></div>
+          <svg class="orbit" viewBox="0 0 310 470" fill="none" role="presentation">
+            <ellipse cx="155" cy="235" rx="112" ry="205" stroke="#F7F7F4" stroke-opacity=".42" stroke-width="2" stroke-dasharray="150 22 78 30" />
+            <path d="M155 30 A205 112 0 0 1 256 83" stroke="#A3FF47" stroke-width="5" stroke-linecap="round" />
+            <path d="M255 385 A205 112 0 0 1 154 440" stroke="#A3FF47" stroke-width="5" stroke-linecap="round" />
+            <circle cx="155" cy="30" r="8" fill="#A3FF47" />
+            <circle cx="267" cy="235" r="7" fill="#F7F7F4" />
+            <circle cx="155" cy="440" r="8" fill="#A3FF47" />
+            <circle cx="43" cy="235" r="7" fill="#F7F7F4" />
+            <circle cx="155" cy="235" r="4" fill="#A3FF47" fill-opacity=".7" />
+          </svg>
+        </div>
+      </section>
+
+      <section id="scene-claim" class="scene s2 clip" data-start="3" data-duration="4.2" data-track-index="2">
+        <div class="topline"><strong>AGENT 0</strong><span class="mono">A question worth checking</span><span class="mono">02 / 05</span></div>
+        <div class="hairline"></div>
+        <div class="left-copy">
+          <p class="kicker">Start with a claim</p>
+          <h2>Keep the question in view.</h2>
+        </div>
+        <article class="claim-card">
+          <div class="sample-tag"><span class="dot"></span> ILLUSTRATIVE EXAMPLE · NOT A LIVE CHECK</div>
+          <p class="card-label mono">Sample claim</p>
+          <blockquote>“Schools in Nyeri County will remain closed tomorrow.”</blockquote>
+          <div class="card-foot"><span>Question</span><b>Claim · Public site example</b></div>
+        </article>
+      </section>
+
+      <section id="scene-evidence" class="scene s3 clip" data-start="7.2" data-duration="6.3" data-track-index="3">
+        <div class="topline"><strong>AGENT 0</strong><span class="mono">Claim → source → evidence</span><span class="mono">03 / 05</span></div>
+        <div class="s3-head">
+          <div><p class="kicker">Follow the source</p><h2>Look at what turns up.</h2></div>
+          <p class="demo-note mono">ILLUSTRATIVE EXAMPLE · NOT A LIVE CHECK</p>
+        </div>
+        <div class="evidence-layout">
+          <article class="claim-mini">
+            <p class="mini-label mono">Claim in review</p>
+            <h3>Schools in Nyeri County will remain closed tomorrow.</h3>
+            <div class="mini-rule"></div>
+            <div class="mini-meta"><span>Investigation question</span><b>Nyeri County</b></div>
+          </article>
+          <div class="findings">
+            <article class="finding"><span class="node">01</span><div><p class="kind mono">Official sources</p><p class="finding-copy">No matching announcement found</p></div></article>
+            <article class="finding"><span class="node">02</span><div><p class="kind mono">Independent reporting</p><p class="finding-copy">Some reports repeat the same notice</p></div></article>
+            <article class="finding"><span class="node">03</span><div><p class="kind mono">Image origin</p><p class="finding-copy">Original publisher not established</p></div></article>
+          </div>
+        </div>
+      </section>
+
+      <section id="scene-verdict" class="scene s4 clip" data-start="13.5" data-duration="4.8" data-track-index="4">
+        <div class="topline" style="position:absolute;top:66px;right:118px;left:118px"><strong>AGENT 0</strong><span class="mono">04 / 05</span></div>
+        <article class="verdict">
+          <div class="verdict-label"><span class="status-dot"></span> NOT VERIFIED</div>
+          <h2>There isn’t enough reliable evidence to confirm this announcement.</h2>
+          <p class="caution">A missing source does not make a claim false.</p>
+        </article>
+      </section>
+
+      <section id="scene-close" class="scene s5 clip" data-start="18.3" data-duration="5.1" data-track-index="5">
+        <div class="topline"><strong>AGENT 0</strong><span class="mono">Evidence in view. Decisions in your hands.</span><span class="mono">05 / 05</span></div>
+        <div class="closing-rule"></div>
+        <div class="closing-copy"><h2>Assume nothing.<br /><span>Follow the evidence.</span></h2><p>AI investigates. Humans decide.</p></div>
+        <img class="closing-logo" src="assets/brand/agent-0-logo.png" width="560" height="280" alt="Agent 0" />
+        <p class="cta mono">Explore Agent 0</p>
+        <div class="footer-line"></div>
+      </section>
+
+      <audio id="hud-soundscape" src="assets/music/agent-0-hud-soundscape.wav" data-start="0" data-duration="23.4" data-track-index="10" data-volume="1"></audio>
+    </div>
+    <script src="audio-data.js"></script>
+    <script>
+      const tl = gsap.timeline({ paused: true });
+
+      // Fast entrance, then comfortable reading holds; cuts follow the storyboard's natural timing.
+      tl.fromTo("#scene-hook .kicker", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.38, ease: "power2.out" }, 0.18);
+      tl.fromTo("#scene-hook .headline", { opacity: 0, x: -50 }, { opacity: 1, x: 0, duration: 0.58, ease: "power3.out" }, 0.35);
+      tl.fromTo("#scene-hook .subline", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.42, ease: "power2.out" }, 1.0);
+      tl.fromTo("#scene-hook .edition", { opacity: 0 }, { opacity: 1, duration: 0.38, ease: "power1.out" }, 1.35);
+      tl.fromTo("#scene-hook .orbit", { rotation: -28, scale: 0.88, opacity: 0 }, { rotation: 0, scale: 1, opacity: 1, duration: 1.0, ease: "power3.out", transformOrigin: "50% 50%" }, 0.3);
+
+      tl.fromTo("#scene-claim .left-copy", { opacity: 0, x: -32 }, { opacity: 1, x: 0, duration: 0.46, ease: "power2.out" }, 3.14);
+      tl.fromTo("#scene-claim .claim-card", { opacity: 0, y: 42, scale: 0.985 }, { opacity: 1, y: 0, scale: 1, duration: 0.56, ease: "power3.out" }, 3.18);
+      tl.fromTo("#scene-claim .sample-tag", { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.34, ease: "power2.out" }, 3.5);
+
+      tl.fromTo("#scene-evidence .s3-head", { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.44, ease: "power2.out" }, 7.33);
+      tl.fromTo("#scene-evidence .claim-mini", { opacity: 0, x: -24 }, { opacity: 1, x: 0, duration: 0.48, ease: "power2.out" }, 7.65);
+      tl.fromTo("#scene-evidence .finding", { opacity: 0, x: 28 }, { opacity: 1, x: 0, duration: 0.42, stagger: 0.32, ease: "power2.out" }, 7.72);
+
+      tl.fromTo("#scene-verdict .verdict", { opacity: 0, y: 24, scale: 0.99 }, { opacity: 1, y: 0, scale: 1, duration: 0.52, ease: "power2.out" }, 13.66);
+      tl.fromTo("#scene-verdict .caution", { opacity: 0 }, { opacity: 1, duration: 0.36, ease: "power1.out" }, 14.52);
+
+      tl.fromTo("#scene-close .closing-copy", { opacity: 0, x: -28 }, { opacity: 1, x: 0, duration: 0.56, ease: "power2.out" }, 18.48);
+      tl.fromTo("#scene-close .closing-logo", { opacity: 0, scale: 0.96 }, { opacity: 1, scale: 1, duration: 0.72, ease: "power2.out" }, 18.68);
+      tl.fromTo("#scene-close .cta", { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.38, ease: "power2.out" }, 19.35);
+
+      // Natural timing is intentional: this effects-led track has no trustworthy beat grid.
+
+      // Sample pre-extracted audio RMS at 15 fps. It only modulates an existing brand ring glow.
+      const reactiveGlows = document.querySelectorAll(".reactive-glow");
+      if (window.AUDIO_DATA && window.AUDIO_DATA.frames) {
+        const samples = Math.min(Math.floor(23.4 * 15), Math.floor(window.AUDIO_DATA.duration * 15));
+        for (let frame = 0; frame < samples; frame += 1) {
+          const sample = window.AUDIO_DATA.frames[frame * 2];
+          const energy = 0.12 + Math.min(0.22, (sample.rms || 0) * 0.32);
+          tl.call(() => reactiveGlows.forEach((glow) => glow.style.setProperty("--audio-energy", energy.toFixed(3))), [], frame / 15);
+        }
+      }
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

@@ -53,7 +53,7 @@ class MediaEvidenceGraphTests(unittest.TestCase):
             investigation_id=self.investigation.id,
             text="The image shows a public demonstration.",
             normalized_text="the image shows a public demonstration",
-            claim_type="FACTUAL",
+            claim_type="MEDIA_CLAIM",
         )
         self.asset = MediaAsset(
             investigation_id=self.investigation.id,
@@ -120,7 +120,7 @@ class MediaEvidenceGraphTests(unittest.TestCase):
         evidence = self.add_evidence(source=False, media=True)
         self.persist_finding(evidence, "SUPPORTS", "SUPPORTED")
         finding = self.session.scalar(select(Finding).where(Finding.claim_id == self.claim.id))
-        self.assertEqual(finding.status, "INCONCLUSIVE")
+        self.assertEqual(finding.status, "INSUFFICIENT_EVIDENCE")
 
     def test_mixed_origin_evidence_serializes_both_origins(self) -> None:
         self.add_evidence(source=True, media=True)
@@ -380,12 +380,12 @@ class MediaEvidenceGraphTests(unittest.TestCase):
         evidence = self.add_evidence(source=False, media=True)
         self.persist_finding(evidence, "UNKNOWN", "SUPPORTED")
         finding = self.session.scalar(select(Finding).where(Finding.claim_id == self.claim.id))
-        self.assertEqual(finding.status, "INCONCLUSIVE")
+        self.assertEqual(finding.status, "INSUFFICIENT_EVIDENCE")
 
     def test_unknown_evidence_id_is_rejected(self) -> None:
         self.persist_finding_id(str(uuid4()), "SUPPORTS", "SUPPORTED")
         finding = self.session.scalar(select(Finding).where(Finding.claim_id == self.claim.id))
-        self.assertEqual(finding.status, "INCONCLUSIVE")
+        self.assertEqual(finding.status, "INSUFFICIENT_EVIDENCE")
         self.assertIsNone(self.session.scalar(select(FindingEvidence.id)))
 
     def test_evidence_from_another_investigation_is_rejected(self) -> None:
@@ -424,7 +424,7 @@ class MediaEvidenceGraphTests(unittest.TestCase):
         self.session.commit()
         self.persist_finding(other_evidence, "SUPPORTS", "SUPPORTED")
         finding = self.session.scalar(select(Finding).where(Finding.claim_id == self.claim.id))
-        self.assertEqual(finding.status, "INCONCLUSIVE")
+        self.assertEqual(finding.status, "INSUFFICIENT_EVIDENCE")
         self.assertIsNone(self.session.scalar(select(FindingEvidence.id)))
 
     def persist_finding(self, evidence: Evidence, relationship: str, status: str) -> None:
@@ -441,7 +441,9 @@ class MediaEvidenceGraphTests(unittest.TestCase):
                         status=status,
                         statement="Model proposed assessment.",
                         evidence=[{"evidence_id": evidence_id, "relationship": relationship}],
-                    )
+                                evidence_confidence="MEDIUM",
+            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
+)
                 ]
             ),
         )

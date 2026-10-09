@@ -10,25 +10,44 @@ export type InvestigationStatus =
   | "FAILED"
   | "CANCELLED";
 
+export type InputType = "TEXT" | "URL" | "IMAGE" | "VIDEO" | "AUDIO" | "DOCUMENT";
+
 export type FindingStatus =
   | "SUPPORTED"
   | "CONTRADICTED"
-  | "UNVERIFIED"
-  | "INCONCLUSIVE"
-  | "MISLEADING_CONTEXT"
-  | "ALTERED_MEDIA"
-  | "OUTDATED_CONTEXT";
+  | "PARTLY_TRUE"
+  | "INSUFFICIENT_EVIDENCE"
+  | "NOT_VERIFIABLE";
 
 export type Investigation = {
   id: string;
   reference: string;
   status: InvestigationStatus;
+  input_type: InputType;
   current_stage: string;
   created_at: string;
   failure_reason?: string | null;
 };
 
-export type Claim = { id: string; text: string; type: string };
+export type ClaimType = "SETTLED_FACT" | "CHECKABLE_EVENT" | "STATISTICAL" | "MEDIA_CLAIM" | "CONTESTED" | "OPINION_OR_PREDICTION";
+export type Claim = {
+  id: string;
+  text: string;
+  type: ClaimType;
+  needs_deep_investigation?: boolean;
+};
+export type TriageClaim = {
+  text: string;
+  claim_type: ClaimType;
+  needs_deep_investigation: boolean;
+};
+export type TriagePreview = {
+  draft_id: string | null;
+  claims: TriageClaim[];
+  clarification_question?: string | null;
+  triage_provider?: string;
+  triage_model?: string;
+};
 export type EvidenceRelationship = {
   claim_id: string;
   relationship: string;
@@ -97,7 +116,7 @@ export type Finding = {
   claim_id: string;
   status: FindingStatus;
   statement: string;
-  evidence_confidence?: "UNASSESSED" | "LOW" | "MODERATE" | "HIGH";
+  evidence_confidence?: "LOW" | "MEDIUM" | "HIGH";
   confidence_rationale?: string;
   limitations?: string | null;
   evidence_ids: string[];
@@ -121,6 +140,12 @@ export type Results = {
     provider: string;
     action: string;
     query?: string | null;
+    route?: {
+      topic?: string;
+      jurisdiction?: string[];
+      source_lane?: "PRIMARY" | "REFERENCE_REPORTING" | "FACT_CHECK" | "SOCIAL";
+      widening_reason?: string;
+    };
     url?: string | null;
     sources: { url: string; title: string }[];
     citations: { url: string; title: string }[];

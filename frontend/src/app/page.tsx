@@ -44,7 +44,7 @@ export default function HomePage() {
         <div className={styles.sampleLabel}>ILLUSTRATIVE EXAMPLE · NOT A LIVE CHECK</div>
         <p className={styles.sampleKicker}>Claim</p><h3>“Schools in Nyeri County will remain closed tomorrow.”</h3>
         <div className={styles.steps}>{steps.map((step, index) => <div key={step} className={styles.step}><span>{index + 1}</span><p>{step}</p></div>)}</div>
-        <div className={styles.sampleResult}><p className={styles.sampleKicker}>Result</p><strong>Not verified</strong><p>There isn’t enough reliable evidence to confirm this announcement.</p></div>
+        <div className={styles.sampleResult}><p className={styles.sampleKicker}>Result</p><strong>Not enough evidence yet</strong><p>We couldn’t confirm the announcement from the sources reviewed. That does not mean it didn’t happen.</p></div>
         <div className={styles.sampleEvidence}><h4>Why it isn’t verified</h4><ul><li>Official sources: no matching announcement found</li><li>Independent reporting: some reports repeat the same notice</li><li>Image origin: original publisher not established</li></ul></div>
         <div className={styles.sampleClose}><p className={styles.sampleUnknown}><strong>Still unknown</strong><br />Who first shared the notice, and whether the named authority issued it.</p><p className={styles.sampleNext}><strong>A useful next step</strong><br />Check with the county education office before sharing the notice.</p></div>
       </div>
