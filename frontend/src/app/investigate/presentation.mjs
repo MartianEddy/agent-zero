@@ -1,22 +1,22 @@
 const STATUS_COPY = {
   SUPPORTED: {
     icon: "✓",
-    label: "Supported by evidence",
+    label: "Evidence supports this claim",
     explanation: "Available reliable evidence supports this claim.",
   },
   CONTRADICTED: {
     icon: "×",
-    label: "Contradicted by evidence",
+    label: "Evidence challenges this claim",
     explanation: "Reliable evidence conflicts with this claim.",
   },
   UNVERIFIED: {
     icon: "○",
-    label: "Not verified",
-    explanation: "The evidence reviewed did not establish whether this claim is accurate.",
+    label: "Not enough evidence yet",
+    explanation: "We couldn’t confirm or challenge this claim from the material we were able to review. That does not mean the claim is false.",
   },
   INCONCLUSIVE: {
     icon: "?",
-    label: "Inconclusive",
+    label: "Evidence leaves this unresolved",
     explanation: "Retrieved evidence conflicts or cannot be reconciled into a clear conclusion.",
   },
   MISLEADING_CONTEXT: {
@@ -159,7 +159,7 @@ export function unknownsFromResults(results, reviewComplete = true) {
   if (!reviewComplete) return [];
   const unknowns = [];
   if (results.claims.length === 0) {
-    unknowns.push("No verifiable claim was extracted from the submitted request.");
+    unknowns.push("We couldn’t identify a specific, checkable claim in the submitted request yet.");
   }
   if (results.evidence_coverage.claims_without_linked_evidence > 0) {
     unknowns.push("No retrieved evidence excerpt is linked to one or more claims, so those claims could not be assessed from source content.");
@@ -189,7 +189,7 @@ export function recommendedNextSteps(results, reviewComplete = true) {
       steps.push("Share the original post or source page where you found the image.");
       steps.push("An external reverse-image search may help trace earlier appearances; Agent 0 did not perform one.");
     } else {
-      steps.push("Add a specific, verifiable claim or context to investigate.");
+      steps.push("Share the exact statement you want checked, including who or what it concerns and any relevant date or place.");
     }
     return steps;
   }
@@ -379,10 +379,10 @@ export function uploadErrorMessage(error) {
   const code = "code" in value && typeof value.code === "string" ? value.code : "";
   const messages = {
     REQUIRED_DEPENDENCY_UNAVAILABLE: "Agent 0’s investigation service is temporarily unavailable. Try again shortly.",
-    UPLOAD_TOO_LARGE: "This image exceeds the 25 MB upload limit.",
-    UNSUPPORTED_MEDIA_TYPE: "Agent 0 currently supports JPEG, PNG and WebP images.",
+    UPLOAD_TOO_LARGE: "This file exceeds the 25 MB upload limit.",
+    UNSUPPORTED_MEDIA_TYPE: "Choose a JPEG, PNG or WebP image, or an MP4 or WebM video.",
     IMAGE_PIXEL_LIMIT_EXCEEDED: "This image is too large to process safely.",
-    INVALID_MEDIA: "Agent 0 could not safely decode this image.",
+    INVALID_MEDIA: "Agent 0 could not read this media file.",
     IMAGE_DECODE_FAILED: "Agent 0 could not safely decode this image.",
   };
   if (messages[code]) return messages[code];

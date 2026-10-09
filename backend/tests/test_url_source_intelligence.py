@@ -124,7 +124,8 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
                                 normalized_text=(
                                     "schools in nyeri county will remain closed tomorrow"
                                 ),
-                                claim_type="FACTUAL",
+                                claim_type="CHECKABLE_EVENT",
+                                needs_deep_investigation=True,
                             )
                         ],
                         queries=["Nyeri school closure official notice"],

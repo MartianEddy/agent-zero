@@ -20,6 +20,7 @@
 .helper { margin: 8px 0 18px; }
 .uploadPreview { display: grid; grid-template-columns: minmax(0, 180px) 1fr; align-items: center; gap: 16px; margin: 15px 0 22px; padding: 10px; border: 1px solid var(--line-dark); border-radius: 5px; }
 .uploadPreview img { display: block; width: 100%; height: 112px; object-fit: contain; background: #080a0a; }
+.uploadPreview video { display: block; width: 100%; height: 112px; object-fit: contain; background: #080a0a; }
 .uploadPreview div { display: grid; gap: 5px; }
 .uploadPreview strong { font-size: 13px; }
 .uploadPreview span { color: #a4aaa5; font-size: 11px; overflow-wrap: anywhere; }
@@ -187,6 +188,7 @@
   .formFooter button { width: 100%; }
   .uploadPreview { grid-template-columns: minmax(0, 120px) 1fr; }
   .uploadPreview img { height: 86px; }
+  .uploadPreview video { height: 86px; }
   .resultHeader, .sectionHeading { align-items: flex-start; flex-direction: column; }
   .resultTools { width: 100%; align-items: center; justify-content: space-between; }
   .progressSteps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -234,6 +236,7 @@
 .page .form textarea { min-height: 148px; }
 .page .uploadPreview { border-color: #e5e7e1; border-radius: 9px; background: #fafbf8; }
 .page .uploadPreview img { border-radius: 6px; background: #eff1ec; }
+.page .uploadPreview video { border-radius: 6px; background: #eff1ec; }
 .page .uploadPreview strong, .page .uploadPreview span, .page .sourceHeading h4,
 .page .evidenceCard p, .page .mediaGroup > p:not(.sectionKicker), .page .observation p,
 .page .brief > p, .page .briefClaim p { color: #353a34; }

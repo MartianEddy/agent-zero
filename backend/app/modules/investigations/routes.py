@@ -14,7 +14,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -42,6 +42,7 @@ from app.modules.investigations.models import (
 )
 from app.modules.investigations.schemas import (
     CreateInvestigationRequest,
+    InvestigationHistoryResponse,
     InvestigationResponse,
 )
 from app.modules.investigations.service import DEV_USER_ID, InvestigationService
@@ -83,6 +84,58 @@ def list_investigations(session: DbSession) -> list[InvestigationResponse]:
     return [
         InvestigationResponse.model_validate(item)
         for item in InvestigationService(session).list_recent(owner_id=owner_id)
+    ]
+
+
+@router.get("/history", response_model=list[InvestigationHistoryResponse])
+def list_investigation_history(session: DbSession) -> list[InvestigationHistoryResponse]:
+    """Return one compact, bounded page for the workspace history view."""
+    owner_id = current_owner_id()
+    investigations = InvestigationService(session).list_recent(owner_id=owner_id, limit=50)
+    if not investigations:
+        return []
+    ids = [item.id for item in investigations]
+    first_claim: dict[UUID, str] = {}
+    for claim in session.scalars(
+        select(Claim)
+        .where(Claim.investigation_id.in_(ids))
+        .order_by(Claim.created_at, Claim.id)
+    ):
+        first_claim.setdefault(claim.investigation_id, claim.text)
+    first_finding: dict[UUID, str] = {}
+    for finding in session.scalars(
+        select(Finding)
+        .where(Finding.investigation_id.in_(ids))
+        .order_by(Finding.created_at, Finding.id)
+    ):
+        first_finding.setdefault(finding.investigation_id, finding.status)
+    source_counts = dict(
+        session.execute(
+            select(Source.investigation_id, func.count(Source.id))
+            .where(Source.investigation_id.in_(ids))
+            .group_by(Source.investigation_id)
+        ).all()
+    )
+    return [
+        InvestigationHistoryResponse(
+            id=item.id,
+            reference=item.reference,
+            status=item.status,
+            input_type=item.input_type,
+            current_stage=item.current_stage,
+            created_at=item.created_at,
+            title=(first_claim.get(item.id) or {
+                InputType.IMAGE: "Image investigation",
+                InputType.VIDEO: "Video investigation",
+                InputType.AUDIO: "Audio investigation",
+                InputType.DOCUMENT: "Document investigation",
+                InputType.URL: "Public source investigation",
+                InputType.TEXT: "Claim investigation",
+            }[item.input_type]),
+            finding_status=first_finding.get(item.id),
+            sources_count=int(source_counts.get(item.id, 0)),
+        )
+        for item in investigations
     ]
 
 
@@ -351,6 +404,15 @@ def get_investigation_results(investigation_id: UUID, session: DbSession) -> dic
     findings = list(
         session.scalars(select(Finding).where(Finding.investigation_id == investigation_id))
     )
+    finding_ids = [item.id for item in findings]
+    finding_evidence: dict[UUID, list[UUID]] = {}
+    if finding_ids:
+        for link in session.scalars(
+            select(FindingEvidence)
+            .where(FindingEvidence.finding_id.in_(finding_ids))
+            .order_by(FindingEvidence.id)
+        ):
+            finding_evidence.setdefault(link.finding_id, []).append(link.evidence_id)
     claim_evidence = list(
         session.scalars(
             select(ClaimEvidence)
@@ -386,17 +448,11 @@ def get_investigation_results(investigation_id: UUID, session: DbSession) -> dic
     media_asset_by_id = {item.id: item for item in media_assets}
     c2pa_run_by_id = {item.id: item for item in media_analysis_runs}
     registry_by_id = {item.id: classify_source(item.domain or "") for item in sources}
-    registry_by_id = {item.id: classify_source(item.domain or "") for item in sources}
     claim_ids_with_evidence = {link.claim_id for link in claim_evidence}
     findings_with_evidence = 0
     finding_payload = []
     for item in findings:
-        linked_ids = [
-            link.evidence_id
-            for link in session.scalars(
-                select(FindingEvidence).where(FindingEvidence.finding_id == item.id)
-            )
-        ]
+        linked_ids = finding_evidence.get(item.id, [])
         findings_with_evidence += bool(linked_ids)
         finding_payload.append(
             {
@@ -457,7 +513,13 @@ def get_investigation_results(investigation_id: UUID, session: DbSession) -> dic
             for item in media_assets
         ],
         "claims": [
-            {"id": str(item.id), "text": item.text, "type": item.claim_type} for item in claims
+            {
+                "id": str(item.id),
+                "text": item.text,
+                "type": item.claim_type,
+                "needs_deep_investigation": item.needs_deep_investigation,
+            }
+            for item in claims
         ],
         "sources": [
             {
@@ -502,6 +564,7 @@ def get_investigation_results(investigation_id: UUID, session: DbSession) -> dic
                 "action": item.action,
                 "call_reference": item.call_reference,
                 "query": item.query,
+                "route": item.route_metadata,
                 "url": item.url,
                 "sources": item.sources,
                 "citations": item.citations,

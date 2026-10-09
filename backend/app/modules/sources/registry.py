@@ -71,6 +71,14 @@ REGISTRY: tuple[SourceRegistryEntry, ...] = (
         ("law", "court", "judgment", "act", "legal"),
     ),
     SourceRegistryEntry(
+        "presidentiallibrary.go.ke",
+        "Kenya Presidential Library and Archives",
+        "PUBLIC_RECORD",
+        "Kenya",
+        ("Kenya's presidential, constitutional, and independence-era records",),
+        ("kenya", "historical", "history", "independence", "president", "constitution"),
+    ),
+    SourceRegistryEntry(
         "mck.or.ke",
         "Media Council of Kenya",
         "OFFICIAL",
@@ -94,7 +102,14 @@ REGISTRY: tuple[SourceRegistryEntry, ...] = (
     SourceRegistryEntry("ku.ac.ke", "Kenyatta University", "ACADEMIC", "Kenya"),
     SourceRegistryEntry("who.int", "World Health Organization", "OFFICIAL", "International"),
     SourceRegistryEntry("worldbank.org", "World Bank", "OFFICIAL", "International"),
-    SourceRegistryEntry("un.org", "United Nations", "OFFICIAL", "International"),
+    SourceRegistryEntry(
+        "un.org",
+        "United Nations",
+        "OFFICIAL",
+        "International",
+        ("UN membership, decolonization records, and UN proceedings",),
+        ("kenya", "independence", "decolonization", "united nations", "member state"),
+    ),
 )
 
 

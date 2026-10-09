@@ -181,13 +181,13 @@ export default function InvestigatePage() {
 
   function selectFile(file: File | null) {
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
-    const safeFile = file && ["image/jpeg", "image/png", "image/webp"].includes(file.type) ? file : null;
+    const safeFile = file && ["image/jpeg", "image/png", "image/webp", "video/mp4", "video/webm"].includes(file.type) ? file : null;
     previewUrlRef.current = safeFile ? URL.createObjectURL(safeFile) : null;
     setPreviewUrl(previewUrlRef.current ?? "");
     setSelectedFile(safeFile);
     setPreviewUnavailable(false);
     if (safeFile) setError("");
-    if (file && !safeFile) setError("Choose a JPEG, PNG or WebP image.");
+    if (file && !safeFile) setError("Choose a JPEG, PNG or WebP image, or an MP4 or WebM video.");
   }
 
   useEffect(() => () => {
@@ -297,6 +297,7 @@ export default function InvestigatePage() {
   const mediaEvidence = evidence.filter((item) => Boolean(item.media_asset));
   const mediaAssets = results?.media_assets ?? mediaEvidence.flatMap((item) => item.media_asset ? [item.media_asset] : []);
   const originalMedia = mediaAssets.find((asset) => asset.media_type === "IMAGE" && asset.role.toUpperCase() === "ORIGINAL");
+  const originalVideo = mediaAssets.find((asset) => asset.media_type === "VIDEO" && asset.role.toUpperCase() === "ORIGINAL");
   const provenanceEvidence = mediaEvidence.find((item) => item.provenance);
   const provenance = provenanceEvidence?.provenance;
   const imageAnswerFallback = originalMedia && content.trim()
@@ -309,6 +310,7 @@ export default function InvestigatePage() {
     ? ["Appearance and file metadata cannot establish whether an image was AI-generated.", "Reverse-image search was not performed."]
     : results ? presentedLimitations(results) : [];
   const visualEvidence = mediaEvidence.filter((item) => item.method === "MEDIA_VISUAL_OBSERVATION");
+  const videoLimitations = results?.usage_summary?.limitations.filter((item) => /video/i.test(item)) ?? [];
   const metadataEvidence = mediaEvidence.filter((item) => item.method === "MEDIA_TECHNICAL_METADATA" || item.method === "MEDIA_METADATA");
   const unknowns = useMemo(() => results ? unknownsFromResults(results, finished) : [], [results, finished]);
   const nextSteps = useMemo(() => results ? recommendedNextSteps(results, finished) : [], [results, finished]);
@@ -316,7 +318,23 @@ export default function InvestigatePage() {
   const dateReferenceText = [content, ...(results?.claims ?? []).map((claim) => claim.text)].join(" ");
   const dateBasis = investigation ? relativeDateBasis(dateReferenceText, investigation.created_at) : null;
   const retrievalDisabled = Boolean(results?.usage_summary?.limitations.some((item) => item.includes("Source retrieval is disabled")));
-  const searchUnavailable = Boolean(results?.search_traces.some((trace) => ["unavailable", "error", "budget_exceeded"].includes(trace.action)));
+  const failedSearchProviders = [...new Set((results?.search_traces ?? [])
+    .filter((trace) => ["unavailable", "error", "budget_exceeded"].includes(trace.action))
+    .map((trace) => trace.provider.replaceAll("_", " ").toLowerCase()))];
+  const searchedProviders = [...new Set((results?.search_traces ?? [])
+    .filter((trace) => ["search", "empty"].includes(trace.action))
+    .map((trace) => trace.provider.replaceAll("_", " ").toLowerCase()))];
+  const attemptedRouteLanes = [...new Set((results?.search_traces ?? [])
+    .filter((trace) => ["search", "empty"].includes(trace.action))
+    .map((trace) => trace.route?.source_lane)
+    .filter((lane): lane is "PRIMARY" | "REFERENCE_REPORTING" | "FACT_CHECK" | "SOCIAL" => Boolean(lane)))];
+  const routeLaneNames = attemptedRouteLanes.map((lane) => ({
+    PRIMARY: "primary records",
+    REFERENCE_REPORTING: "independent references and reporting",
+    FACT_CHECK: "published fact-check context",
+    SOCIAL: "social sources",
+  })[lane]);
+  const searchUnavailable = failedSearchProviders.length > 0 && searchedProviders.length === 0;
   const searchReturnedNoResults = Boolean(results?.search_traces.length && results.search_traces.every((trace) => trace.action === "empty"));
   const unretrievedSourceCount = results?.sources.filter((source) => source.retrieval_status !== "RETRIEVED").length ?? 0;
   const filteringEvidence = evidence.filter((item) => {
@@ -343,26 +361,28 @@ export default function InvestigatePage() {
       </header>
 
       <div className={styles.workspace}>
-        <p className={styles.processingNote}>Public demo: use public information only. Do not submit private or sensitive details.</p>
+        <p className={styles.processingNote}>Shared public demo: other visitors can view investigations. Use public information only; do not submit private or sensitive details.</p>
         <section className={styles.intro}>
           <p className="eyebrow">A clear place to start</p>
           <h1>What do you want to check?</h1>
-          <p>Paste a claim, link, or image. Agent 0 will examine the available evidence and show you what it can — and can’t — establish.</p>
+          <p>Ask about a specific factual claim, paste a public source, or add an image or short video. Agent 0 will identify what can be checked, review available evidence, and explain what remains uncertain.</p>
         </section>
 
-        <form className={styles.form} onSubmit={submit} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files?.[0]; if (file) selectFile(file); }} onPaste={(event) => { const file = Array.from(event.clipboardData.items).find((item) => item.type.startsWith("image/"))?.getAsFile(); if (file) { event.preventDefault(); selectFile(file); } }}>
-          <label htmlFor="investigation-input">Claim, link, or context</label>
+        <form className={styles.form} onSubmit={submit} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files?.[0]; if (file) selectFile(file); }} onPaste={(event) => { const file = Array.from(event.clipboardData.items).find((item) => item.type.startsWith("image/") || item.type.startsWith("video/"))?.getAsFile(); if (file) { event.preventDefault(); selectFile(file); } }}>
+          <label htmlFor="investigation-input">Question, claim, or public source</label>
           <textarea id="investigation-input" maxLength={20000} rows={5} placeholder="Paste a claim or link…" value={content} onChange={(event) => setContent(event.target.value)} aria-describedby="input-help" />
-          <p id="input-help" className={styles.helper}>You can also add an image or drop one here.</p>
-          <input ref={fileInputRef} id="image-upload" className={styles.fileInput} type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" aria-label="Choose an image" onChange={(event) => selectFile(event.target.files?.[0] ?? null)} />
+          <p id="input-help" className={styles.helper}>You can also add an image or a short video.</p>
+          <input ref={fileInputRef} id="image-upload" className={styles.fileInput} type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,.jpg,.jpeg,.png,.webp,.mp4,.webm" aria-label="Choose an image or video" onChange={(event) => selectFile(event.target.files?.[0] ?? null)} />
           {selectedFile && <div className={styles.uploadPreview}>
-            {previewUrl && <Image src={previewUrl} alt="Preview of the selected image" width={720} height={480} unoptimized />}
-            <div><strong>{selectedFile.name || "Selected image"}</strong><span>{selectedFile.type || "Image file"} · {formatBytes(selectedFile.size)}</span></div>
-            <button type="button" className={styles.removeFile} onClick={() => { selectFile(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}>Remove image</button>
+            {previewUrl && (selectedFile.type.startsWith("video/")
+              ? <video src={previewUrl} controls aria-label="Preview of the selected video" />
+              : <Image src={previewUrl} alt="Preview of the selected image" width={720} height={480} unoptimized />)}
+            <div><strong>{selectedFile.name || (selectedFile.type.startsWith("video/") ? "Selected video" : "Selected image")}</strong><span>{selectedFile.type || "Media file"} · {formatBytes(selectedFile.size)}</span></div>
+            <button type="button" className={styles.removeFile} onClick={() => { selectFile(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}>Remove file</button>
           </div>}
 
           <div className={styles.formFooter}>
-            <div className={styles.inputActions}><button type="button" className={styles.uploadButton} onClick={() => fileInputRef.current?.click()}>＋ Add image</button><p>Use public information only. Avoid private or credential-bearing details.</p></div>
+            <div className={styles.inputActions}><button type="button" className={styles.uploadButton} onClick={() => fileInputRef.current?.click()}>＋ Add image or video</button><p>Video audio is not transcribed in this version. Use public information only.</p></div>
             <button className="button button-primary" disabled={busy || (!selectedFile && !content.trim())}>
               {busy ? "Starting…" : "Investigate"}<span aria-hidden="true">→</span>
             </button>
@@ -403,20 +423,21 @@ export default function InvestigatePage() {
             <nav className={styles.sectionNav} aria-label="Investigation sections">
               <a href="#overview">Overview</a>
               <a href="#evidence">Evidence</a>
-              {originalMedia && <a href="#media">Media</a>}
+              {(originalMedia || originalVideo) && <a href="#media">Media</a>}
               {finished && results.brief && <a href="#brief">Brief</a>}
               <a className={styles.whatsappSectionLink} href={WHATSAPP_CONTACT_URL} target="_blank" rel="noopener noreferrer">WhatsApp help ↗</a>
             </nav>
 
             <section id="overview" className={styles.overview}>
               <div className={styles.overviewMain}>
-                <p className={styles.sectionKicker}>{originalMedia && !content.trim() ? "Image submitted" : "What we are investigating"}</p>
+                <p className={styles.sectionKicker}>{originalMedia && !content.trim() ? "Image submitted" : originalVideo && !content.trim() ? "Video submitted" : claims.length ? "Checkable claim" : "What we are investigating"}</p>
                 {claims.length > 0 ? <div className={styles.claimList}>{claims.map((claim) => {
                   const finding = results.findings.find((item) => item.claim_id === claim.id);
                   const presentation = finding ? statusPresentation(finding.status) : null;
                   const cited = finding ? findingRelationship(finding, evidence) : [];
                   return <article className={styles.finding} key={claim.id}>
                       <h3>{safeEvidenceText(claim.text)}</h3>
+                      <p className={styles.sectionKicker}>Triage · {claim.type.replaceAll("_", " ").toLowerCase()} · {claim.needs_deep_investigation === false ? "deep investigation not flagged" : "deep investigation flagged"}</p>
                       {dateBasis && <p className={styles.dateBasis}>{safeEvidenceText(dateBasis)}</p>}
                 {finding && <>
                       <div className={`${styles.findingStatus} ${styles[`tone${finding.status}`] ?? ""}`}>
@@ -437,7 +458,7 @@ export default function InvestigatePage() {
                 })}</div> : <article className={styles.finding}>
                   <p className={styles.sectionKicker}>Submitted question</p>
                   {content.trim() && <h3>{safeEvidenceText(content.trim())}</h3>}
-                  <p className={styles.empty}>{!finished ? "Agent 0 is examining the submission. Any claim or image observations will appear here when this step is complete." : imageAnswer ?? (originalMedia && !content.trim() ? "No claim or context is available for this image review. Available file and origin signals do not establish where or when the depicted event occurred." : "No verifiable claim was extracted from this request. The question is shown as submitted, not treated as a finding.")}</p>
+                  <p className={styles.empty}>{!finished ? "Agent 0 is examining the submission and identifying a checkable claim." : imageAnswer ?? results?.brief?.summary ?? (originalVideo ? "The video was examined using a small set of visual frames. Audio was not transcribed, so spoken claims were not checked." : originalMedia ? "The available image checks do not establish where or when the depicted event happened. Share the original post or a source page to investigate its context." : "I couldn’t identify a specific claim to check. Add the exact statement and any relevant person, place, or date; it hasn’t been assessed as true or false.")}</p>
                 </article>}
               </div>
               {claims.length > 0 && unretrievedSourceCount > 0 && <p className={styles.resultCaveat}>{retrievalDisabled && results.evidence_coverage.sources_retrieved === 0 ? "Search found candidates, but page retrieval is disabled for this run. No source text was reviewed; headlines cannot support a finding." : results.evidence_coverage.sources_retrieved === 0 ? "No source page was retrieved for this run. Search-result titles are leads only; source-based verification could not be completed." : `${unretrievedSourceCount} source candidate${unretrievedSourceCount === 1 ? " was" : "s were"} not retrieved. Only retrieved page content can support a source-based finding.`}</p>}
@@ -475,7 +496,8 @@ export default function InvestigatePage() {
                   {(["ALL", "SUPPORTS", "CONTRADICTS", "CONTEXT"] as const).map((filter) => <button type="button" key={filter} aria-pressed={evidenceFilter === filter} onClick={() => setEvidenceFilter(filter)}>{filter === "ALL" ? "All" : filter === "CONTEXT" ? "Context" : relationshipPresentation(filter)}</button>)}
                 </div>
               </div>
-              <p className={styles.searchScopeNote}>Agent 0 searches public web results. It does not search social platform feeds or logged-in pages directly.</p>
+              <p className={styles.searchScopeNote}>{searchedProviders.length ? `Search providers used: ${searchedProviders.join(" and ")}.` : "Search providers have not returned results yet."} Route: {routeLaneNames.length ? routeLaneNames.join(" → ") : "primary records first"}. Secondary lanes run only when an earlier pass finds fewer than two distinct retrieved source domains for a claim. Search results remain candidates until their pages are retrieved. Agent 0 does not search logged-in pages or direct social-platform feeds.</p>
+              {failedSearchProviders.length > 0 && results.sources.length > 0 && <p className={styles.partialNotice}>Could not search {failedSearchProviders.join(" and ")}; results from {searchedProviders.join(" and ") || "the available providers"} may be incomplete.</p>}
               {results.sources.length > 0 ? <div className={styles.sourceList}>
                 <h4>{results.sources.every((source) => source.retrieval_status === "RETRIEVED") ? "Sources reviewed" : "Sources found"}</h4>
                 {!retrievalDisabled && results.sources.some((source) => source.retrieval_status !== "RETRIEVED") && <p className={styles.partialNotice}>{results.evidence_coverage.sources_retrieved === 0 ? "No source pages were retrieved in this investigation. These are search candidates only; titles and publication dates are leads, not evidence." : "Some results are source candidates only. Their titles and publication dates are leads, not reviewed evidence, until page content is retrieved."}</p>}
@@ -484,7 +506,7 @@ export default function InvestigatePage() {
                   <h5>{group.title}</h5>
                   {group.sources.map((source) => <SourceCard key={source.id} source={source} evidence={filteredSourceEvidence} relationships={results.source_relationships} sources={results.sources} lane={group.lane} />)}
                 </div>)}
-              </div> : <p className={styles.empty}>{!finished ? "Source checks are still in progress. Results will appear here when available." : searchUnavailable ? "Web search could not complete, so no source candidates were collected. The result is not verified." : searchReturnedNoResults ? "Web search completed but returned no source candidates. No external page evidence was reviewed." : "No external sources were collected for this investigation."}</p>}
+              </div> : <p className={styles.empty}>{!finished ? "Source checks are still in progress. Results will appear here when available." : searchUnavailable ? `Search could not be completed by ${failedSearchProviders.join(" and ")}. No external source material was assessed; this does not tell us whether the claim is true or false.` : failedSearchProviders.length > 0 && searchedProviders.length > 0 ? `Search returned no source candidates. ${failedSearchProviders.join(" and ")} could not be searched, so coverage may be incomplete. This does not tell us whether the claim is true or false.` : searchReturnedNoResults ? "Search returned no source candidates. That alone does not tell us whether the claim is true or false." : "No external sources were collected for this investigation."}</p>}
               {otherEvidence.length > 0 && <div className={styles.otherEvidence}>
                 <h4>Other evidence checked</h4>
                 {otherFilteredEvidence.length ? otherFilteredEvidence.map((item) => <EvidenceCard key={item.id} item={item} relationship={item.claim_links[0]?.relationship} />) : <p className={styles.empty}>{finished ? "No additional evidence matches this filter." : "Evidence will appear here as Agent 0 reviews the submission and available sources."}</p>}
@@ -537,6 +559,15 @@ export default function InvestigatePage() {
               </details>
             </section>}
 
+            {originalVideo && <section id="media" className={styles.contentSection}>
+              <div className={styles.sectionHeading}><div><p className={styles.sectionKicker}>Video submitted</p><h3>Video review</h3></div><span className={styles.mediaState}>{visualEvidence.length ? "Frame observations available" : finished ? "No frame observations recorded" : "Analysis in progress"}</span></div>
+              <div className={styles.mediaCard}>
+                <div className={styles.previewFrame}><p className={styles.muted}>Agent 0 samples up to four frames from videos under 90 seconds to identify visible, checkable details. The original video is not played in the results view.</p></div>
+                <div className={styles.mediaDetails}><span>{originalVideo.mime_type}</span><span>{formatBytes(originalVideo.size_bytes)}</span><p>Audio was not transcribed or analyzed.</p>{videoLimitations.map((item) => <p key={item}>{safeEvidenceText(item)}</p>)}</div>
+              </div>
+              {mediaEvidence.length ? mediaEvidence.map((item) => <EvidenceCard key={item.id} item={item} relationship={item.claim_links[0]?.relationship} />) : <p className={styles.muted}>{finished ? "No video observations were recorded." : "Video observations are still being prepared."}</p>}
+            </section>}
+
             <details className={styles.limitations}>
               <summary>Additional limitations and review notes</summary>
               <ul>
@@ -554,7 +585,7 @@ export default function InvestigatePage() {
                   const view = finding ? statusPresentation(finding.status) : null;
                   return <article className={styles.briefClaim} key={claim.id}><h4>Claim</h4><p>{safeEvidenceText(claim.text)}</p>{finding && <><h4>Status</h4><p>{view?.label} — {safeEvidenceText(finding.statement)}</p>{finding.evidence_confidence && <><h4>Evidence confidence <small>{finding.evidence_confidence === "UNASSESSED" ? "(earlier result)" : "(qualitative, not a probability)"}</small></h4><p>{finding.evidence_confidence === "UNASSESSED" ? "Not assessed" : finding.evidence_confidence.toLowerCase()}{finding.confidence_rationale ? ` — ${safeEvidenceText(finding.confidence_rationale)}` : ""}</p></>}<h4>Key evidence</h4>{findingRelationship(finding, evidence).map(({ item, relationship }) => <a key={item.id} href={`#evidence-${item.id}`}>{relationshipPresentation(relationship)} · View cited evidence</a>)}</>}</article>;
                 })}
-                {claims.length === 0 && <article className={styles.briefClaim}><h4>{originalMedia ? "Image origin assessment" : "Submitted question"}</h4>{content.trim() && <p>{safeEvidenceText(content.trim())}</p>}<p>{imageAnswer ?? (originalMedia ? "No claim was extracted. The available image checks do not establish where or when the depicted event occurred." : "No factual finding was produced from the question alone.")}</p></article>}
+                {claims.length === 0 && <article className={styles.briefClaim}><h4>{originalMedia ? "Image review" : originalVideo ? "Video review" : "Your request"}</h4>{content.trim() && <p>{safeEvidenceText(content.trim())}</p>}<p>{imageAnswer ?? results.brief.summary}</p></article>}
                 {originalMedia && claims.length > 0 && <><h4>Image origin &amp; history</h4><p>{provenance ? `${provenancePresentation(provenance.status).label}. ${provenancePresentation(provenance.status).limitation}` : "An image was submitted; no origin information is available."}</p></>}
                 {claims.length > 0 && <><h4>Assessment summary</h4><p className={styles.briefSummary}>{safeEvidenceText(results.brief.summary)}</p>
                 <h4>Unknowns</h4><ul>{unknowns.map((item) => <li key={item}>{item}</li>)}</ul>

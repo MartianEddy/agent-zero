@@ -5,10 +5,20 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { AgentMark } from "@/components/AgentMark";
 import { statusPresentation, safeEvidenceText } from "@/app/investigate/presentation.mjs";
-import type { Investigation, Results } from "@/app/investigate/types";
+import type { InvestigationStatus, InputType, FindingStatus } from "@/app/investigate/types";
 import styles from "./history.module.css";
 
-type HistoryItem = { investigation: Investigation; results: Results | null };
+type HistoryItem = {
+  id: string;
+  reference: string;
+  status: InvestigationStatus;
+  input_type: InputType;
+  current_stage: string;
+  created_at: string;
+  title: string;
+  finding_status: FindingStatus | null;
+  sources_count: number;
+};
 type Filter = "ALL" | "SUPPORTED" | "CONTRADICTED" | "UNVERIFIED" | "INCONCLUSIVE";
 
 function relativeDate(value: string) {
@@ -37,16 +47,10 @@ export default function InvestigationsPage() {
       setLoading(true);
       setError("");
       try {
-        const response = await fetch("/api/investigations", { cache: "no-store" });
+        const response = await fetch("/api/investigations/history", { cache: "no-store" });
         if (!response.ok) throw new Error("Investigation history couldn’t be loaded. Try again shortly.");
-        const investigations = (await response.json()) as Investigation[];
-        const recent = investigations.slice(0, 20);
-        const values = await Promise.all(recent.map(async (investigation) => {
-          const resultResponse = await fetch(`/api/investigations/${investigation.id}/results`, { cache: "no-store" });
-          const results = resultResponse.ok ? (await resultResponse.json()) as Results : null;
-          return { investigation, results };
-        }));
-        if (!cancelled) setItems(values);
+        const history = (await response.json()) as HistoryItem[];
+        if (!cancelled) setItems(history);
       } catch (reason) {
         if (!cancelled) setError(reason instanceof Error ? reason.message : "Investigation history couldn’t be loaded.");
       } finally {
@@ -57,11 +61,9 @@ export default function InvestigationsPage() {
     return () => { cancelled = true; };
   }, []);
 
-  const filtered = useMemo(() => items.filter(({ investigation, results }) => {
-    const title = results?.claims[0]?.text ?? (results?.media_assets?.length ? "Image investigation" : "Investigation");
-    const status = results?.findings[0]?.status;
-    return (filter === "ALL" || status === filter) && `${title} ${investigation.reference}`.toLowerCase().includes(query.toLowerCase());
-  }), [items, query, filter]);
+  const filtered = useMemo(() => items.filter((item) =>
+    (filter === "ALL" || item.finding_status === filter) && `${item.title} ${item.reference}`.toLowerCase().includes(query.toLowerCase()),
+  ), [items, query, filter]);
 
   async function reopenByReference(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -85,8 +87,8 @@ export default function InvestigationsPage() {
   return <main className={styles.page}>
     <header className={styles.header}><Link href="/" aria-label="Agent 0 home"><AgentMark /></Link><nav aria-label="Main navigation"><Link href="/investigate">Investigate</Link><Link href="/investigations" aria-current="page">Investigations</Link><Link href="/how-it-works">How it works</Link></nav></header>
     <div className={styles.content}>
-      <p className={styles.demoNotice}>Public demo workspace. Use public information only; investigation history is shared.</p>
-      <div className={styles.titleRow}><div><p className={styles.eyebrow}>Your workspace</p><h1>Investigations</h1><p>Return to a claim, link or image you’ve already checked.</p></div><Link className="button button-primary" href="/investigate">New investigation <span aria-hidden="true">→</span></Link></div>
+      <p className={styles.demoNotice}>Shared public demo. Other visitors can view this investigation history. Use public information only.</p>
+      <div className={styles.titleRow}><div><p className={styles.eyebrow}>Public demo history</p><h1>Investigations</h1><p>Reopen a claim, source, image, or video checked in this demo.</p></div><Link className="button button-primary" href="/investigate">New investigation <span aria-hidden="true">→</span></Link></div>
 
       <form className={styles.referenceLookup} onSubmit={reopenByReference}>
         <div><h2>Reopen an investigation</h2><p>Enter the reference shown when you submitted it.</p></div>
@@ -95,23 +97,34 @@ export default function InvestigationsPage() {
         {referenceError && <p className={styles.referenceError} role="alert">{referenceError}</p>}
       </form>
 
-      <div className={styles.controls}><label className={styles.searchLabel} htmlFor="history-search">Search investigations</label><input id="history-search" type="search" placeholder="Search by claim or reference" value={query} onChange={(event) => setQuery(event.target.value)} /><div className={styles.filters} role="group" aria-label="Filter by result">{(["ALL", "SUPPORTED", "CONTRADICTED", "UNVERIFIED", "INCONCLUSIVE"] as const).map((item) => <button key={item} type="button" aria-pressed={filter === item} onClick={() => setFilter(item)}>{item === "ALL" ? "All results" : statusPresentation(item).label}</button>)}</div></div>
+      <div className={styles.controls}><label className={styles.searchLabel} htmlFor="history-search">Search recent investigations</label><input id="history-search" type="search" placeholder="Search by claim or reference" value={query} onChange={(event) => setQuery(event.target.value)} /><div className={styles.filters} role="group" aria-label="Filter by result">{(["ALL", "SUPPORTED", "CONTRADICTED", "UNVERIFIED", "INCONCLUSIVE"] as const).map((item) => <button key={item} type="button" aria-pressed={filter === item} onClick={() => setFilter(item)}>{item === "ALL" ? "All results" : statusPresentation(item).label}</button>)}</div></div>
+      {items.length === 50 && <p className={styles.loading}>Showing the latest 50 cases. Use an investigation reference to reopen an older case.</p>}
 
       {loading ? <div className={styles.loading} aria-live="polite">Loading investigations…</div> : error ? <div className={styles.empty} role="alert"><p>{error}</p><button type="button" onClick={() => window.location.reload()}>Try again</button></div> : items.length === 0 ? <div className={styles.empty}><h2>No investigations yet.</h2><p>Check a claim, link or image to get started.</p><Link href="/investigate">Start an investigation →</Link></div> : filtered.length === 0 ? <div className={styles.empty}><h2>No matching investigations.</h2><p>Try a different search or result filter.</p></div> : <ul className={styles.list}>
-        {filtered.map(({ investigation, results }) => {
-          const claim = results?.claims[0]?.text;
-          const image = results?.media_assets?.some((asset) => asset.role.toUpperCase() === "ORIGINAL");
-          const status = results?.findings[0]?.status;
-          return <li key={investigation.id}><Link className={styles.item} href={`/investigate?investigation=${encodeURIComponent(investigation.id)}`}>
-            <span className={styles.typeIcon} aria-hidden="true">{image ? "▧" : "“ ”"}</span>
-            <span className={styles.mainText}><strong>{safeEvidenceText(claim || (image ? "Image investigation" : "Investigation in progress"))}</strong><small>{image ? "Image" : results?.sources.length ? "Claim · source checks" : "Claim"}{results?.sources.length ? ` · ${results.sources.length} sources` : ""}{investigation.status !== "COMPLETE" ? ` · ${stageLabel(investigation.status)}` : ""}</small></span>
-            <span className={`${styles.result} ${status ? statusTone(status) : ""}`}>{status ? statusPresentation(status).label : investigation.status === "COMPLETE" ? "No finding" : "In progress"}</span>
-            <time dateTime={investigation.created_at}>{relativeDate(investigation.created_at)}</time>
+        {filtered.map((item) => {
+          const status = item.finding_status;
+          return <li key={item.id}><Link className={styles.item} href={`/investigate?investigation=${encodeURIComponent(item.id)}`}>
+            <span className={styles.typeIcon} aria-hidden="true">{item.input_type === "IMAGE" ? "▧" : item.input_type === "VIDEO" ? "▣" : "“ ”"}</span>
+            <span className={styles.mainText}><strong>{safeEvidenceText(item.title || "Investigation")}</strong><small>{inputTypeLabel(item.input_type)}{item.sources_count ? ` · ${item.sources_count} sources` : ""}{item.status !== "COMPLETE" ? ` · ${stageLabel(item.status)}` : ""}</small></span>
+            <span className={`${styles.result} ${status ? statusTone(status) : ""}`}>{status ? statusPresentation(status).label : item.status === "COMPLETE" ? "No finding" : "In progress"}</span>
+            <time dateTime={item.created_at}>{relativeDate(item.created_at)}</time>
           </Link></li>;
         })}
       </ul>}
     </div>
   </main>;
+}
+
+function inputTypeLabel(inputType: InputType) {
+  const labels: Record<InputType, string> = {
+    TEXT: "Claim",
+    URL: "Public source",
+    IMAGE: "Image",
+    VIDEO: "Video",
+    AUDIO: "Audio",
+    DOCUMENT: "Document",
+  };
+  return labels[inputType];
 }
 
 function stageLabel(status: string) {

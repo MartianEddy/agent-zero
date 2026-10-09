@@ -29,17 +29,31 @@ logger = logging.getLogger(__name__)
 class PlannedClaim(BaseModel):
     text: str = Field(min_length=5, max_length=2000)
     normalized_text: str = Field(min_length=5, max_length=2000)
-    claim_type: str = Field(default="GENERAL", max_length=40)
+    claim_type: Literal[
+        "SETTLED_FACT",
+        "CHECKABLE_EVENT",
+        "STATISTICAL",
+        "MEDIA_CLAIM",
+        "CONTESTED",
+        "OPINION_OR_PREDICTION",
+    ]
+    needs_deep_investigation: bool
 
 
 class PlannedQuery(BaseModel):
     text: str = Field(min_length=1, max_length=500)
     freshness: Literal["CURRENT", "HISTORICAL", "BALANCED"] = "BALANCED"
+    claim_index: int = Field(default=0, ge=0, le=2)
+    topic: str = Field(default="general", min_length=1, max_length=80)
+    jurisdiction: list[str] = Field(default_factory=list, max_length=5)
+    source_lane: Literal["PRIMARY", "REFERENCE_REPORTING", "FACT_CHECK", "SOCIAL"] = "PRIMARY"
+    widening_reason: str = Field(default="", max_length=240)
 
 
 class ResearchPlan(BaseModel):
     claims: list[PlannedClaim] = Field(default_factory=list, max_length=3)
     queries: list[PlannedQuery | str] = Field(default_factory=list, max_length=5)
+    clarification_question: str | None = Field(default=None, max_length=300)
 
 
 class EvidenceAssessment(BaseModel):
@@ -109,11 +123,43 @@ class ModelGateway:
         investigation_id,
     ) -> ModelRun:
         instructions = (
-            "Extract at most three independently verifiable factual claims from this submission. "
+            "Triage the user's request into at most three atomic claim records. Every claim must "
+            "include claim_type from SETTLED_FACT, CHECKABLE_EVENT, STATISTICAL, MEDIA_CLAIM, "
+            "CONTESTED, or OPINION_OR_PREDICTION, and needs_deep_investigation. Use "
+            "OPINION_OR_PREDICTION for opinions and predictions; never invent a factual verdict "
+            "for them. SETTLED_FACT is limited to common knowledge, definitions, or stable facts "
+            "that can be checked with a relevant authoritative reference. Other factual claims "
+            "require deep investigation. Normalize each claim to one proposition. "
+            "Turn the user's request into at most three independently verifiable factual claims. "
+            "A clear factual question is a request to check its underlying proposition: rewrite it "
+            "as a short declarative claim while preserving the named people or institutions, "
+            "action, place, and time. Example: 'Did the ministry announce X yesterday?' becomes "
+            "'The ministry announced X on [the normalized date]'. Do not return the question itself "
+            "as a claim. Split compound requests only when each proposition can be checked alone. "
+            "If a necessary subject, event, place, or time is missing or ambiguous, do not guess: "
+            "return no claims and provide one concise clarification_question naming the missing "
+            "detail. Retain opinions/predictions as OPINION_OR_PREDICTION claims and do not plan "
+            "searches for them; explain why they cannot be verified and suggest a factual "
+            "reformulation when useful. If no proposition can be assessed, return no claims and "
+            "ask for clarification. "
+            "When image or video frames are attached, use visible text or context only to form a "
+            "narrowly scoped checkable claim; do not infer event truth, identity, origin, or "
+            "manipulation from appearance. "
             "The prompt may include an application-supplied receipt timestamp and deterministic "
             "relative-date normalization; treat those lines as temporal context, not submitted claims. "
-            "Return concise claims and at most five focused search-query objects, each with text "
-            "and freshness. Classify each query as CURRENT when the claim is time-sensitive, "
+            "Return concise claims and at most five focused search-query objects. Do not create "
+            "queries for OPINION_OR_PREDICTION claims. Each query "
+            "must include text, claim_index (zero-based index into the claims array), freshness, "
+            "topic, jurisdiction, source_lane, and widening_reason. "
+            "Use topic and jurisdiction labels, not invented trusted-domain lists. Route lanes are "
+            "PRIMARY for original records and topic-authoritative institutions, "
+            "REFERENCE_REPORTING for established references and independent reporting, "
+            "FACT_CHECK only for prior published fact-check discovery, and SOCIAL only when the "
+            "claim is about a social post/account, circulation, or a firsthand social report. "
+            "Start with PRIMARY. Widen to REFERENCE_REPORTING only to corroborate or fill a "
+            "specific primary-source gap; use FACT_CHECK as context and follow it back to its "
+            "sources. Do not plan SOCIAL for ordinary factual claims. Explain the gap/trigger in "
+            "widening_reason. Classify each query as CURRENT when the claim is time-sensitive, "
             "ongoing, asks about latest/current/recent state, or refers to a recent event whose "
             "status should be checked against current reporting. Use HISTORICAL only when the "
             "request is confined to a past period or settled historical record. Use BALANCED when "
@@ -131,14 +177,16 @@ class ModelGateway:
             "and ask for the intended timezone instead of guessing. For current-event claims, "
             "plan separate CURRENT coverage and HISTORICAL context queries when the budget allows. "
             "Do not treat old coverage as evidence of current status. Do not assess truth or invent details. "
-            "If the submission contains no factual claim, return empty arrays."
+            "Each returned claim must be specific enough that a source passage could support or "
+            "contradict it. If no such claim can be responsibly stated, return empty claims and "
+            "queries plus a useful clarification_question."
         )
         return asyncio.run(
             self._structured_call(
                 purpose="CLAIM_EXTRACTION",
                 instructions=instructions,
                 prompt=text[: self.settings.max_model_input_chars],
-                images=[],
+                images=images,
                 output_type=ResearchPlan,
                 max_tokens=self.settings.max_model_output_tokens_research,
                 session=session,
@@ -207,10 +255,10 @@ class ModelGateway:
         )
 
     def analyze_visual_content(
-        self, *, image: tuple[str, bytes], claim_text: str, session, investigation_id
+        self, *, images: list[tuple[str, bytes]], claim_text: str, session, investigation_id
     ) -> ModelRun:
         instructions = (
-            "Describe only visible, claim-relevant observations in this image. This is not AI, "
+            "Describe only visible, claim-relevant observations in this image or sampled video frame. This is not AI, "
             "deepfake, authenticity, truth, or forensic detection. Do not identify people. "
             "Return at most twelve structured observations with uncertainty and limitations. "
             "Do not infer image origin, event truth, manipulation, or synthetic generation "
@@ -227,7 +275,7 @@ class ModelGateway:
                     + "\nReport visible text, objects, scene, signage, dates, layout, or apparent "
                     "anomalies only where relevant."
                 ),
-                images=[image],
+                images=images[:4],
                 output_type=VisualAnalysis,
                 max_tokens=min(700, self.settings.max_model_output_tokens_research),
                 session=session,

@@ -54,6 +54,7 @@ from app.modules.sources.evidence_extraction import (
     select_claim_relevant_regions,
 )
 from app.modules.sources.exa_search import ExaSearchError, search_exa
+from app.modules.sources.openai_web_search import OpenAIWebSearchError, search_openai_web
 from app.modules.sources.registry import classify_source, role_for_claim
 from app.modules.sources.retrieval import (
     SourceRetrievalError,
@@ -506,7 +507,8 @@ def _persist_plan(
                     investigation_id=investigation.id,
                     text=text,
                     normalized_text=normalized,
-                    claim_type=candidate.claim_type[:40] or "GENERAL",
+                    claim_type=candidate.claim_type,
+                    needs_deep_investigation=candidate.needs_deep_investigation,
                 )
             )
         session.add_all(claims)
@@ -515,26 +517,95 @@ def _persist_plan(
     traces = list(
         session.scalars(select(SearchTrace).where(SearchTrace.investigation_id == investigation.id))
     )
-    already_planned = {trace.query for trace in traces}
-    queries = []
+    already_planned = {(trace.query, trace.provider) for trace in traces}
+    queries: list[tuple[str, dict[str, object]]] = []
+    seen_query_texts: set[str] = set()
+    seen_route_keys: set[tuple[str, int, str]] = set()
     for planned_query in plan.queries:
         if isinstance(planned_query, str):
             query_text = planned_query
             freshness = "BALANCED"
+            route_metadata: dict[str, object] = {
+                "topic": "general",
+                "jurisdiction": [],
+                "source_lane": "PRIMARY",
+                "widening_reason": "",
+                "claim_index": 0,
+                "freshness": freshness,
+            }
         else:
             query_text = planned_query.text
             freshness = planned_query.freshness
+            route_metadata = {
+                "topic": planned_query.topic,
+                "jurisdiction": planned_query.jurisdiction,
+                "source_lane": planned_query.source_lane,
+                "widening_reason": planned_query.widening_reason,
+                "claim_index": planned_query.claim_index,
+                "freshness": planned_query.freshness,
+            }
+        if (
+            0 <= int(route_metadata.get("claim_index", 0)) < len(claims)
+            and claims[int(route_metadata.get("claim_index", 0))].claim_type
+            == "OPINION_OR_PREDICTION"
+        ):
+            continue
         normalized_query = _query_for_freshness(query_text, freshness)[:500]
-        if normalized_query and normalized_query not in already_planned:
-            queries.append(normalized_query)
-            already_planned.add(normalized_query)
+        route_key = (
+            str(route_metadata.get("source_lane", "PRIMARY")),
+            int(route_metadata.get("claim_index", 0)),
+            freshness if route_metadata.get("source_lane", "PRIMARY") == "PRIMARY" else "",
+        )
+        if (
+            normalized_query
+            and normalized_query not in seen_query_texts
+            and route_key not in seen_route_keys
+        ):
+            queries.append((normalized_query, route_metadata))
+            seen_query_texts.add(normalized_query)
+            seen_route_keys.add(route_key)
+    # Every checkable claim gets a primary-source pass, even if the planner only
+    # proposed secondary/reporting queries. Secondary lanes remain additional.
+    primary_claim_indices = {
+        int(route.get("claim_index", 0))
+        for _, route in queries
+        if route.get("source_lane") == "PRIMARY"
+    }
+    for claim_index, claim in enumerate(claims[: settings.max_claims_per_investigation]):
+        if claim.claim_type == "OPINION_OR_PREDICTION":
+            continue
+        if claim_index in primary_claim_indices:
+            continue
+        contextual_route = next(
+            (route for _, route in queries if int(route.get("claim_index", 0)) == claim_index),
+            {},
+        )
+        freshness = str(contextual_route.get("freshness", "BALANCED"))
+        primary_query = _query_for_freshness(
+            f"{claim.text[:360]} original official records and primary sources",
+            freshness,
+        )[:500]
+        queries.append(
+            (
+                primary_query,
+                {
+                    **contextual_route,
+                    "claim_index": claim_index,
+                    "freshness": freshness,
+                    "source_lane": "PRIMARY",
+                    "widening_reason": "Required first pass for this claim before secondary sources.",
+                },
+            )
+        )
     # Reserve budget for historical context beside recent coverage. Search results
     # from the background lane never substitute for date-checked recent reporting.
-    current_queries = [query for query in queries if CURRENT_QUERY_MARKER in query.casefold()]
-    other_queries = [query for query in queries if query not in current_queries]
+    current_queries = [
+        item for item in queries if CURRENT_QUERY_MARKER in item[0].casefold()
+    ]
+    other_queries = [item for item in queries if item not in current_queries]
     queries = list(current_queries)
     if current_queries and len(queries) < settings.max_search_queries:
-        current_query = current_queries[0]
+        current_query, current_route = current_queries[0]
         base_query = current_query.split(
             " latest official updates and recent independent reporting", 1
         )[0]
@@ -542,23 +613,36 @@ def _persist_plan(
             base_query[:330] + " original historical records and background context; "
             + HISTORICAL_QUERY_MARKER
         )[:500]
-        if historical_query not in already_planned:
-            queries.append(historical_query)
-            already_planned.add(historical_query)
+        historical_route = {**current_route, "source_lane": "PRIMARY"}
+        if (historical_query, "EXA") not in already_planned:
+            queries.append((historical_query, historical_route))
     queries.extend(other_queries)
+    lane_order = {"PRIMARY": 0, "REFERENCE_REPORTING": 1, "FACT_CHECK": 2, "SOCIAL": 3}
+    queries.sort(key=lambda item: lane_order.get(str(item[1].get("source_lane")), 0))
     if not queries and not traces:
-        queries = [claim.text[:500] for claim in claims]
-    for query in queries[: settings.max_search_queries]:
-        session.add(
-            SearchTrace(
-                investigation_id=investigation.id,
-                provider="EXA",
-                action="planned",
-                query=query,
-                sources=[],
-                citations=[],
+        queries = [
+            (claim.text[:500], {"topic": "general", "jurisdiction": [],
+                                "source_lane": "PRIMARY", "widening_reason": "",
+                                "claim_index": index, "freshness": "BALANCED"})
+            for index, claim in enumerate(claims)
+            if claim.claim_type != "OPINION_OR_PREDICTION"
+        ]
+    for query, route_metadata in queries[: settings.max_search_queries]:
+        for provider in ("EXA", "OPENAI_WEB_SEARCH"):
+            if (query, provider) in already_planned:
+                continue
+            session.add(
+                SearchTrace(
+                    investigation_id=investigation.id,
+                    provider=provider,
+                    action="planned",
+                    query=query,
+                    route_metadata=route_metadata,
+                    sources=[],
+                    citations=[],
+                )
             )
-        )
+            already_planned.add((query, provider))
     session.commit()
 
 
@@ -703,20 +787,25 @@ def _persist_visual_observations(
         .where(
             MediaAsset.investigation_id == investigation.id,
             MediaAsset.asset_role == "ORIGINAL",
-            MediaAsset.media_type == "IMAGE",
+            MediaAsset.media_type.in_(["IMAGE", "VIDEO"]),
         )
         .order_by(MediaAsset.created_at)
     )
     if original is None:
         return
-    normalized = session.scalar(
-        select(MediaAsset).where(
-            MediaAsset.parent_asset_id == original.id,
-            MediaAsset.artifact_type == "NORMALIZED_IMAGE",
+    if original.media_type == "IMAGE":
+        normalized = session.scalar(
+            select(MediaAsset).where(
+                MediaAsset.parent_asset_id == original.id,
+                MediaAsset.artifact_type == "NORMALIZED_IMAGE",
+            )
         )
-    )
-    if normalized is None:
-        return
+        if normalized is None:
+            return
+        visual_frames = [(normalized.mime_type, images[0][1])]
+    else:
+        # Bounded frames are normalized JPEGs extracted locally by inspect_media.
+        visual_frames = images[:4]
     claim = session.scalar(
         select(Claim).where(Claim.investigation_id == investigation.id).order_by(Claim.created_at)
     )
@@ -744,7 +833,7 @@ def _persist_visual_observations(
         return
     try:
         result = gateway.analyze_visual_content(
-            image=(normalized.mime_type, images[0][1]),
+            images=visual_frames,
             claim_text=claim.text,
             session=session,
             investigation_id=investigation.id,
@@ -798,7 +887,13 @@ def _persist_visual_observations(
     _link_unclaimed_media_evidence(session, investigation)
 
 
-def _execute_searches(session: Session, investigation: Investigation) -> None:
+def _execute_searches(
+    session: Session,
+    investigation: Investigation,
+    *,
+    source_lanes: set[str] | None = None,
+    claim_indices: set[int] | None = None,
+) -> None:
     settings = get_settings()
     key = settings.exa_api_key.get_secret_value().strip() if settings.exa_api_key else ""
     traces = list(
@@ -808,22 +903,62 @@ def _execute_searches(session: Session, investigation: Investigation) -> None:
                 SearchTrace.investigation_id == investigation.id,
                 SearchTrace.action.in_(["planned", "unavailable"]),
             )
-            .order_by(SearchTrace.created_at)
+            .order_by(SearchTrace.created_at, SearchTrace.id)
         )
     )
-    for trace in traces[: settings.max_search_queries]:
-        if not key:
+    lane_order = {"PRIMARY": 0, "REFERENCE_REPORTING": 1, "FACT_CHECK": 2, "SOCIAL": 3}
+    if source_lanes is not None:
+        traces = [
+            trace
+            for trace in traces
+            if str((trace.route_metadata or {}).get("source_lane", "PRIMARY")) in source_lanes
+            and (
+                claim_indices is None
+                or int((trace.route_metadata or {}).get("claim_index", 0)) in claim_indices
+            )
+        ]
+    traces.sort(
+        key=lambda trace: lane_order.get(
+            str((trace.route_metadata or {}).get("source_lane", "PRIMARY")), 0
+        )
+    )
+    max_calls = settings.max_search_queries * 2
+    for trace in traces[:max_calls]:
+        provider = trace.provider or "EXA"
+        lane = str((trace.route_metadata or {}).get("source_lane", "PRIMARY"))
+        if lane == "SOCIAL":
+            trace.action = "unavailable"
+            session.commit()
+            add_limitation(
+                session,
+                investigation.id,
+                "Direct social-platform search is not configured for this investigation.",
+            )
+            continue
+        openai_key = (
+            getattr(settings, "openai_api_key", None).get_secret_value().strip()
+            if getattr(settings, "openai_api_key", None)
+            else ""
+        )
+        if (provider == "EXA" and not key) or (provider == "OPENAI_WEB_SEARCH" and not openai_key):
             trace.action = "unavailable"
             trace.created_at = utcnow()
             session.commit()
             add_limitation(
                 session,
                 investigation.id,
-                "Web search is not configured; sources could not be discovered.",
+                f"{provider.replace('_', ' ').title()} search is not configured.",
             )
             continue
+        query_context = (
+            f"Topic: {(trace.route_metadata or {}).get('topic', 'general')}. "
+            f"Jurisdiction: {', '.join((trace.route_metadata or {}).get('jurisdiction', []))}. "
+            f"Source lane: {lane}. "
+            f"Why this lane: {(trace.route_metadata or {}).get('widening_reason', '')}. "
+            f"Query: {trace.query or ''}"
+        )
         usage = _usage(session, investigation.id)
-        if usage.search_calls >= settings.max_search_queries:
+        if usage.search_calls >= max_calls:
             trace.action = "budget_exceeded"
             session.commit()
             add_limitation(session, investigation.id, "Search-query budget reached.")
@@ -840,20 +975,41 @@ def _execute_searches(session: Session, investigation: Investigation) -> None:
                     "start_published_date": (search_now - timedelta(days=30)).date().isoformat(),
                     "end_published_date": search_now.date().isoformat(),
                 }
-            response = search_exa(
-                api_key=key,
-                query=trace.query or "",
-                num_results=settings.max_search_results_per_query,
-                **date_filters,
-            )
-        except ExaSearchError:
+            if provider == "EXA":
+                response = search_exa(
+                    api_key=key,
+                    query=query_context,
+                    num_results=settings.max_search_results_per_query,
+                    **date_filters,
+                )
+                provider_results = response.results
+                provider_citations = []
+                request_id = response.request_id
+            elif provider == "OPENAI_WEB_SEARCH":
+                response = search_openai_web(
+                    api_key=openai_key,
+                    model=settings.openai_model,
+                    query=query_context,
+                )
+                provider_results = response.results
+                provider_citations = response.citations
+                request_id = response.request_id
+            else:
+                trace.action = "unavailable"
+                session.commit()
+                continue
+        except (ExaSearchError, OpenAIWebSearchError):
             trace.action = "error"
             trace.created_at = utcnow()
             session.commit()
-            add_limitation(session, investigation.id, "A web search could not be completed.")
+            add_limitation(
+                session,
+                investigation.id,
+                f"{provider.replace('_', ' ').title()} search could not be completed.",
+            )
             continue
         normalized_results: list[dict[str, object]] = []
-        for item in response.results[: settings.max_search_results_per_query]:
+        for item in provider_results[: settings.max_search_results_per_query]:
             raw_url = item.get("url")
             if not isinstance(raw_url, str):
                 continue
@@ -865,8 +1021,9 @@ def _execute_searches(session: Session, investigation: Investigation) -> None:
             if not any(existing["url"] == url for existing in normalized_results):
                 normalized_results.append(normalized_item)
         trace.action = "search" if normalized_results else "empty"
-        trace.call_reference = response.request_id
+        trace.call_reference = request_id
         trace.sources = normalized_results
+        trace.citations = provider_citations
         trace.created_at = utcnow()
         for item in normalized_results:
             _create_source_candidate(
@@ -876,19 +1033,30 @@ def _execute_searches(session: Session, investigation: Investigation) -> None:
                 title=str(item.get("title") or ""),
                 publisher=str(item.get("author") or _source_domain(str(item["url"])) or ""),
                 published_at=_valid_publication_date(item.get("publishedDate")),
-                discovery_method="EXA",
+                discovery_method=provider,
                 trace_id=trace.id,
             )
         _audit(
             session,
             investigation.id,
             "SEARCH_COMPLETED",
-            {"query": trace.query, "result_count": len(normalized_results)},
+            {
+                "provider": provider,
+                "query": trace.query,
+                "route": trace.route_metadata,
+                "result_count": len(normalized_results),
+            },
         )
         session.commit()
 
 
-def _retrieve_candidates(session: Session, investigation: Investigation) -> dict[UUID, str]:
+def _retrieve_candidates(
+    session: Session,
+    investigation: Investigation,
+    *,
+    source_lanes: set[str] | None = None,
+    retrieval_cap: int | None = None,
+) -> dict[UUID, str]:
     settings = get_settings()
     sources = list(
         session.scalars(
@@ -901,15 +1069,24 @@ def _retrieve_candidates(session: Session, investigation: Investigation) -> dict
             select(Claim).where(Claim.investigation_id == investigation.id)
         )
     ]
-    trace_ids = {source.discovery_trace_id for source in sources if source.discovery_trace_id}
-    traces = (
-        list(session.scalars(select(SearchTrace).where(SearchTrace.id.in_(trace_ids))))
-        if trace_ids
-        else []
+    traces = list(
+        session.scalars(select(SearchTrace).where(SearchTrace.investigation_id == investigation.id))
     )
+    lane_by_trace = {
+        trace.id: str((trace.route_metadata or {}).get("source_lane", "PRIMARY"))
+        for trace in traces
+    }
     context_by_source: dict[UUID, str] = {}
     for source in sources:
-        matching_traces = [trace for trace in traces if trace.id == source.discovery_trace_id]
+        matching_traces = [
+            trace
+            for trace in traces
+            if trace.id == source.discovery_trace_id
+            or any(
+                isinstance(item, dict) and item.get("url") == source.url
+                for item in trace.sources
+            )
+        ]
         context_parts: list[str] = []
         for trace in matching_traces:
             if trace.query:
@@ -927,6 +1104,9 @@ def _retrieve_candidates(session: Session, investigation: Investigation) -> dict
     sources = prioritize_sources(sources, claims, context_by_source=context_by_source)
     retrieved: dict[UUID, str] = {}
     for source in sources:
+        if source_lanes is not None and source.discovery_trace_id:
+            if lane_by_trace.get(source.discovery_trace_id, "PRIMARY") not in source_lanes:
+                continue
         if source.retrieval_status == "RETRIEVED" and source.content_storage_key:
             try:
                 text = get_private_object(key=source.content_storage_key).decode(
@@ -942,7 +1122,11 @@ def _retrieve_candidates(session: Session, investigation: Investigation) -> dict
         if source.retrieval_status not in {"CANDIDATE", "SUBMITTED", "NOT_ENABLED"}:
             continue
         current_count = _usage(session, investigation.id).sources_retrieved
-        if current_count >= settings.max_retrieved_sources:
+        effective_retrieval_cap = min(
+            settings.max_retrieved_sources,
+            retrieval_cap if retrieval_cap is not None else settings.max_retrieved_sources,
+        )
+        if current_count >= effective_retrieval_cap:
             source.retrieval_status = "NOT_ATTEMPTED_LIMIT"
             session.commit()
             add_limitation(session, investigation.id, "Source retrieval limit reached.")
@@ -1052,6 +1236,149 @@ def _persist_evidence(
         session.commit()
     if remaining <= 0:
         add_limitation(session, investigation.id, "Total evidence-text budget reached.")
+
+
+def _claims_needing_independent_sources(
+    session: Session, investigation: Investigation
+) -> set[int]:
+    """Return zero-based claim indexes with fewer than two retrieved source domains."""
+    claims = list(
+        session.scalars(
+            select(Claim)
+            .where(Claim.investigation_id == investigation.id)
+            .order_by(Claim.created_at, Claim.id)
+        )
+    )
+    indexes: set[int] = set()
+    for index, claim in enumerate(claims):
+        domains = set(
+            session.scalars(
+                select(Source.domain)
+                .join(Evidence, Evidence.source_id == Source.id)
+                .join(ClaimEvidence, ClaimEvidence.evidence_id == Evidence.id)
+                .where(
+                    ClaimEvidence.claim_id == claim.id,
+                    Evidence.investigation_id == investigation.id,
+                    Source.domain.is_not(None),
+                    Source.source_role != "DERIVATIVE",
+                )
+            )
+        )
+        if len(domains) < 2:
+            indexes.add(index)
+    return indexes
+
+
+def _plan_widened_queries(
+    session: Session,
+    investigation: Investigation,
+    *,
+    source_lane: str,
+    claim_indices: set[int],
+) -> None:
+    """Add focused secondary queries only for claims with an evidence coverage gap."""
+    if not claim_indices:
+        return
+    settings = get_settings()
+    claims = list(
+        session.scalars(
+            select(Claim)
+            .where(Claim.investigation_id == investigation.id)
+            .order_by(Claim.created_at, Claim.id)
+        )
+    )
+    traces = list(
+        session.scalars(select(SearchTrace).where(SearchTrace.investigation_id == investigation.id))
+    )
+    distinct_queries = {trace.query for trace in traces if trace.query}
+    lane_queries = {
+        (
+            str((trace.route_metadata or {}).get("source_lane", "PRIMARY")),
+            int((trace.route_metadata or {}).get("claim_index", 0)),
+        )
+        for trace in traces
+        if trace.query
+    }
+    for claim_index in sorted(claim_indices):
+        if claim_index >= len(claims) or (source_lane, claim_index) in lane_queries:
+            continue
+        if len(distinct_queries) >= settings.max_search_queries:
+            add_limitation(
+                session,
+                investigation.id,
+                "The search budget did not allow another source lane for every claim.",
+            )
+            break
+        claim = claims[claim_index]
+        primary_trace = next(
+            (
+                trace
+                for trace in traces
+                if str((trace.route_metadata or {}).get("source_lane", "PRIMARY")) == "PRIMARY"
+                and int((trace.route_metadata or {}).get("claim_index", 0)) == claim_index
+            ),
+            None,
+        )
+        primary_route = primary_trace.route_metadata if primary_trace else {}
+        freshness = str(primary_route.get("freshness", "BALANCED"))
+        query_seed = (
+            f"{claim.text[:340]} independent established reporting and references"
+            if source_lane == "REFERENCE_REPORTING"
+            else f"published fact checks assessing: {claim.text[:350]}"
+        )
+        query = _query_for_freshness(query_seed, freshness)[:500]
+        route_metadata = {
+            "claim_index": claim_index,
+            "topic": primary_route.get("topic", "general"),
+            "jurisdiction": primary_route.get("jurisdiction", []),
+            "freshness": freshness,
+            "source_lane": source_lane,
+            "widening_reason": (
+                "Primary-source pass found fewer than two distinct retrieved source domains."
+                if source_lane == "REFERENCE_REPORTING"
+                else "Independent reporting pass still lacks two retrieved source domains."
+            ),
+        }
+        for provider in ("EXA", "OPENAI_WEB_SEARCH"):
+            session.add(
+                SearchTrace(
+                    investigation_id=investigation.id,
+                    provider=provider,
+                    action="planned",
+                    query=query,
+                    route_metadata=route_metadata,
+                    sources=[],
+                    citations=[],
+                )
+            )
+        distinct_queries.add(query)
+        lane_queries.add((source_lane, claim_index))
+    session.commit()
+
+
+def _mark_routes_not_needed(
+    session: Session,
+    investigation: Investigation,
+    *,
+    source_lanes: set[str],
+    claim_indices: set[int] | None = None,
+) -> None:
+    traces = list(
+        session.scalars(
+            select(SearchTrace).where(
+                SearchTrace.investigation_id == investigation.id,
+                SearchTrace.action == "planned",
+            )
+        )
+    )
+    for trace in traces:
+        route = trace.route_metadata or {}
+        if str(route.get("source_lane", "PRIMARY")) not in source_lanes:
+            continue
+        if claim_indices is not None and int(route.get("claim_index", 0)) not in claim_indices:
+            continue
+        trace.action = "not_needed"
+    session.commit()
 
 
 def _detect_source_relationships(
@@ -1661,8 +1988,12 @@ def _load_plan(session: Session, investigation_id: UUID) -> ResearchPlan:
     from app.modules.investigations.investigator import PlannedClaim, PlannedQuery
 
     planned_queries = []
+    seen_queries: set[str] = set()
     for item in planned:
         query = item.query or ""
+        if query in seen_queries:
+            continue
+        seen_queries.add(query)
         freshness = (
             "CURRENT"
             if CURRENT_QUERY_MARKER in query.casefold()
@@ -1671,12 +2002,35 @@ def _load_plan(session: Session, investigation_id: UUID) -> ResearchPlan:
             in query.casefold()
             else "HISTORICAL"
         )
-        planned_queries.append(PlannedQuery(text=query[:500], freshness=freshness))
+        route = item.route_metadata or {}
+        planned_queries.append(
+            PlannedQuery(
+                text=query[:500],
+                freshness=freshness,
+                topic=str(route.get("topic") or "general"),
+                jurisdiction=[
+                    str(value) for value in route.get("jurisdiction", []) if isinstance(value, str)
+                ][:5],
+                source_lane=route.get("source_lane", "PRIMARY"),
+                claim_index=int(route.get("claim_index", 0)),
+                widening_reason=str(route.get("widening_reason") or "")[:240],
+            )
+        )
 
     return ResearchPlan(
         claims=[
             PlannedClaim(
-                text=item.text, normalized_text=item.normalized_text, claim_type=item.claim_type
+                text=item.text,
+                normalized_text=item.normalized_text,
+                claim_type=(
+                    item.claim_type
+                    if item.claim_type in {
+                        "SETTLED_FACT", "CHECKABLE_EVENT", "STATISTICAL", "MEDIA_CLAIM",
+                        "CONTESTED", "OPINION_OR_PREDICTION",
+                    }
+                    else "CHECKABLE_EVENT"
+                ),
+                needs_deep_investigation=True,
             )
             for item in claims
         ],
@@ -1776,6 +2130,7 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
             )
             is not None
         )
+        summary_override = None
         if submitted_url and not url_text and not claims_exist:
             add_limitation(
                 session,
@@ -1784,6 +2139,11 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
                 "no article claims were inferred.",
             )
             _persist_plan(session, investigation, _url_only_fallback_plan(submitted_url))
+            summary_override = (
+                "I couldn’t open the submitted page, so I couldn’t identify the claim it makes. "
+                "Share an accessible link or paste the passage you want checked. I haven’t assessed "
+                "it as true or false."
+            )
         elif not claims_exist or not planned_exist:
             model_run = ModelGateway().extract_claims_and_queries(
                 text=model_input,
@@ -1792,6 +2152,37 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
                 investigation_id=investigation.id,
             )
             _persist_plan(session, investigation, model_run.output)
+            if not model_run.output.claims:
+                clarification = (model_run.output.clarification_question or "").strip()
+                if clarification:
+                    summary_override = (
+                        "I need one more detail before I can check this fairly: "
+                        f"{clarification} I haven’t assessed it as true or false."
+                    )
+                elif submitted_url and not url_text:
+                    summary_override = (
+                        "I couldn’t open the submitted page, so I couldn’t identify the claim "
+                        "it makes. Share an accessible link or paste the passage you want checked. "
+                        "I haven’t assessed it as true or false."
+                    )
+                elif images and investigation.input_type == InputType.IMAGE:
+                    summary_override = (
+                        "I reviewed the image’s available visual and file checks, but they do not "
+                        "establish where or when the depicted event happened. Share the original "
+                        "post or a source page to investigate its context."
+                    )
+                elif images and investigation.input_type == InputType.VIDEO:
+                    summary_override = (
+                        "I sampled visual frames from the video, but couldn’t identify a specific "
+                        "claim that those frames could check. Audio was not transcribed. Share the "
+                        "spoken claim, a transcript, or the original source to continue."
+                    )
+                else:
+                    summary_override = (
+                        "I couldn’t identify a specific, checkable factual claim in this request. "
+                        "Share the exact statement, who or what it concerns, and any relevant date "
+                        "or place. I haven’t assessed it as true or false."
+                    )
         else:
             _persist_plan(session, investigation, _load_plan(session, investigation.id))
 
@@ -1800,16 +2191,86 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
             _persist_visual_observations(session, investigation, images, ModelGateway())
 
         _stage(session, investigation, InvestigationStatus.RESEARCHING)
-        _execute_searches(session, investigation)
+        _execute_searches(session, investigation, source_lanes={"PRIMARY"})
         _stage(session, investigation, InvestigationStatus.CORROBORATING)
-        retrieved = _retrieve_candidates(session, investigation)
-        _detect_source_relationships(session, investigation, retrieved)
+        settings = get_settings()
+        primary_retrieval_cap = max(1, settings.max_retrieved_sources - 2)
+        retrieved = _retrieve_candidates(
+            session,
+            investigation,
+            source_lanes={"PRIMARY"},
+            retrieval_cap=primary_retrieval_cap,
+        )
         _persist_evidence(session, investigation, retrieved)
+        _detect_source_relationships(session, investigation, retrieved)
+
+        claims_needing_widening = _claims_needing_independent_sources(session, investigation)
+        if not claims_needing_widening:
+            _mark_routes_not_needed(
+                session,
+                investigation,
+                source_lanes={"REFERENCE_REPORTING", "FACT_CHECK"},
+            )
+        if claims_needing_widening:
+            _plan_widened_queries(
+                session,
+                investigation,
+                source_lane="REFERENCE_REPORTING",
+                claim_indices=claims_needing_widening,
+            )
+            _execute_searches(
+                session,
+                investigation,
+                source_lanes={"REFERENCE_REPORTING"},
+                claim_indices=claims_needing_widening,
+            )
+            retrieved.update(
+                _retrieve_candidates(
+                    session,
+                    investigation,
+                    source_lanes={"REFERENCE_REPORTING"},
+                )
+            )
+            _persist_evidence(session, investigation, retrieved)
+            _detect_source_relationships(session, investigation, retrieved)
+
+        claims_needing_widening = _claims_needing_independent_sources(session, investigation)
+        if claims_needing_widening:
+            _plan_widened_queries(
+                session,
+                investigation,
+                source_lane="FACT_CHECK",
+                claim_indices=claims_needing_widening,
+            )
+            _execute_searches(
+                session,
+                investigation,
+                source_lanes={"FACT_CHECK"},
+                claim_indices=claims_needing_widening,
+            )
+            retrieved.update(
+                _retrieve_candidates(
+                    session,
+                    investigation,
+                    source_lanes={"FACT_CHECK"},
+                )
+            )
+            _persist_evidence(session, investigation, retrieved)
+            _detect_source_relationships(session, investigation, retrieved)
+        else:
+            _mark_routes_not_needed(
+                session,
+                investigation,
+                source_lanes={"FACT_CHECK"},
+            )
+
+        _execute_searches(session, investigation, source_lanes={"SOCIAL"})
+        retrieved.update(_retrieve_candidates(session, investigation))
+        _detect_source_relationships(session, investigation, retrieved)
         claims = list(
             session.scalars(select(Claim).where(Claim.investigation_id == investigation.id))
         )
         evidence_exists = _has_claim_linked_evidence(session, investigation)
-        summary_override = None
         if claims:
             has_missing_findings = any(
                 session.scalar(select(Finding.id).where(Finding.claim_id == claim.id).limit(1))
@@ -1831,7 +2292,7 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
                 text,
                 re.I,
             )
-            if images and ai_origin_question:
+            if images and investigation.input_type == InputType.IMAGE and ai_origin_question:
                 media_rows = list(
                     session.scalars(
                         select(Evidence)

@@ -42,8 +42,21 @@ class InvestigationResponse(BaseModel):
     id: UUID
     reference: str
     status: InvestigationStatus
+    input_type: InputType
     current_stage: str
     created_at: datetime
     failure_reason: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class InvestigationHistoryResponse(BaseModel):
+    id: UUID
+    reference: str
+    status: InvestigationStatus
+    input_type: InputType
+    current_stage: str
+    created_at: datetime
+    title: str
+    finding_status: str | None = None
+    sources_count: int = 0
