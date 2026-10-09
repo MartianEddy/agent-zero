@@ -60,3 +60,11 @@ Schema changes require an Alembic migration and a rollback/recovery note. Legacy
 - If provider keys or retrieval are missing, say which step was unavailable. Do not represent model knowledge as a completed source investigation.
 - Public demo remains non-sensitive and shared until authentication, access isolation, retention/deletion and provider handling are implemented and approved.
 
+
+## Slice 1 implementation notes (2026-10-09)
+
+Text, URL, and media submissions now use a structured triage draft. The draft is persisted without queueing research; the workspace lets the reviewer edit or split up to three claims and confirms before the worker is queued. Media uploads attach to that confirmed draft before queueing. `SETTLED_FACT` claims use the bounded Wikipedia/Wikidata reference adapter, independent of Jina; Wikipedia is an authoritative reference tier, while Wikidata descriptions are context. The case fast-path budget is five seconds and failure is recorded as insufficient evidence with a named limitation. Source tiers are configured in `backend/app/modules/sources/source_tiers.json`.
+
+The sufficiency policy is applied in application code after structured model output. Opinion/prediction claims are always `NOT_VERIFIABLE`; unsupported or insufficiently independent model verdicts are downgraded. The tomato and similar sense-dependent behavior is instructed in the evidence-reasoning schema prompt; a dedicated deterministic semantic classifier is deferred because it would assert meaning without retrieved reference evidence.
+
+Evaluation uses `evals/golden_claims.json` and `evals/run_eval.py`. The runner scores captured outputs and does not invoke a model or retrieval provider. `evals/RESULTS.md` reports no measured model scores because no live provider evaluation was run under the repository's provider sandbox rules.

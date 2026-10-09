@@ -1,0 +1,36 @@
+{
+  "PRIMARY": [
+    "go.ke",
+    "parliament.go.ke",
+    "knbs.or.ke",
+    "ca.go.ke",
+    "kenyalaw.org",
+    "presidentiallibrary.go.ke",
+    "un.org",
+    "who.int",
+    "worldbank.org"
+  ],
+  "AUTHORITATIVE_REFERENCE": [
+    "wikipedia.org",
+    "wikidata.org",
+    "britannica.com",
+    "ourworldindata.org"
+  ],
+  "REPUTABLE_REPORTING": [
+    "nation.africa",
+    "standardmedia.co.ke",
+    "citizen.digital"
+  ],
+  "SECONDARY_AGGREGATOR": [
+    "africacheck.org"
+  ],
+  "UNVERIFIED_SOCIAL": [
+    "x.com",
+    "twitter.com",
+    "facebook.com",
+    "instagram.com",
+    "tiktok.com",
+    "reddit.com",
+    "youtube.com"
+  ]
+}

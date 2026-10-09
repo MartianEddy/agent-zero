@@ -124,7 +124,7 @@ class Claim(Base):
     )
     text: Mapped[str] = mapped_column(Text)
     normalized_text: Mapped[str] = mapped_column(Text)
-    claim_type: Mapped[str] = mapped_column(String(40), default="GENERAL")
+    claim_type: Mapped[str] = mapped_column(String(40), default="CHECKABLE_EVENT")
     needs_deep_investigation: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -323,7 +323,7 @@ class Finding(Base):
     )
     status: Mapped[str] = mapped_column(String(30))
     statement: Mapped[str] = mapped_column(Text)
-    evidence_confidence: Mapped[str] = mapped_column(String(12), default="UNASSESSED")
+    evidence_confidence: Mapped[str] = mapped_column(String(12), default="LOW")
     confidence_rationale: Mapped[str] = mapped_column(Text, default="")
     limitations: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

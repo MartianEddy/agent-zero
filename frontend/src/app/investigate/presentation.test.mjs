@@ -37,7 +37,7 @@ const baseResults = {
 };
 
 test("all claim finding statuses have readable labels and explanations", () => {
-  for (const status of ["SUPPORTED", "CONTRADICTED", "UNVERIFIED", "INCONCLUSIVE"]) {
+  for (const status of ["SUPPORTED", "CONTRADICTED", "PARTLY_TRUE", "INSUFFICIENT_EVIDENCE", "NOT_VERIFIABLE"]) {
     const copy = statusPresentation(status);
     assert.ok(copy.icon);
     assert.ok(copy.label);
@@ -48,9 +48,9 @@ test("all claim finding statuses have readable labels and explanations", () => {
 test("backend verdicts map to calm, non-binary language", () => {
   assert.equal(statusPresentation("SUPPORTED").label, "Evidence supports this claim");
   assert.equal(statusPresentation("CONTRADICTED").label, "Evidence challenges this claim");
-  assert.equal(statusPresentation("UNVERIFIED").label, "Not enough evidence yet");
-  assert.equal(statusPresentation("INCONCLUSIVE").label, "Evidence leaves this unresolved");
-  assert.match(statusPresentation("UNVERIFIED").explanation, /does not mean the claim is false/i);
+  assert.equal(statusPresentation("INSUFFICIENT_EVIDENCE").label, "Not enough evidence yet");
+  assert.equal(statusPresentation("PARTLY_TRUE").label, "Some parts or meanings are supported");
+  assert.match(statusPresentation("INSUFFICIENT_EVIDENCE").explanation, /does not mean the claim is false/i);
 });
 
 test("unified input infers web links without asking for a mode", () => {
@@ -111,7 +111,7 @@ test("unknowns, limitations, next steps, and partial-analysis notice are availab
     ...baseResults,
     claims: [{ id: "claim-1", text: "The event occurred." }],
     evidence: [{ id: "e1", provenance: { status: "NOT_PRESENT" } }],
-    findings: [{ status: "INCONCLUSIVE" }],
+    findings: [{ status: "PARTLY_TRUE", evidence_ids: [] }],
     usage_summary: { limitations: ["Visual interpretation was unavailable after provider failure."] },
   };
   const unknowns = unknownsFromResults(results);

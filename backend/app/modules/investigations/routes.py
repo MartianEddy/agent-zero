@@ -1,4 +1,5 @@
 import hashlib
+import json
 import uuid
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -14,7 +15,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -38,12 +39,16 @@ from app.modules.investigations.models import (
     SearchTrace,
     Source,
     SourceRelationship,
+    Submission,
     VerificationBrief,
 )
+from app.modules.investigations.investigator import ModelGateway, ModelInvocationFailed
 from app.modules.investigations.schemas import (
     CreateInvestigationRequest,
+    ContinueInvestigationRequest,
     InvestigationHistoryResponse,
     InvestigationResponse,
+    TriageRequest,
 )
 from app.modules.investigations.service import DEV_USER_ID, InvestigationService
 from app.modules.sources.registry import classify_source
@@ -58,6 +63,157 @@ def current_owner_id() -> UUID:
     if settings.app_env not in {"development", "test"} or settings.auth_mode != "disabled":
         raise HTTPException(status_code=503, detail="Authentication adapter is not configured")
     return DEV_USER_ID
+
+
+def _enqueue_confirmed_draft(session: Session, investigation: Investigation) -> ProcessingJob:
+    job = ProcessingJob(
+        investigation_id=investigation.id,
+        stage="RECEIVED",
+        status="QUEUED",
+        idempotency_key=f"triage-confirmed:{investigation.id}:{uuid4().hex}",
+    )
+    session.add(job)
+    session.flush()
+    session.add(
+        OutboxEvent(
+            aggregate_id=investigation.id,
+            event_type="INVESTIGATION_RECEIVED",
+            payload={"investigation_id": str(investigation.id), "job_id": str(job.id)},
+        )
+    )
+    investigation.current_stage = "RECEIVED"
+    session.add(
+        AuditEvent(
+            investigation_id=investigation.id,
+            event_type="TRIAGE_CONFIRMED",
+            actor="local-development-user",
+            event_metadata={"claim_count": session.scalar(
+                select(func.count()).select_from(Claim).where(
+                    Claim.investigation_id == investigation.id
+                )
+            )},
+        )
+    )
+    return job
+
+
+@router.post("/triage")
+def triage_submission(body: TriageRequest, session: DbSession) -> dict[str, object]:
+    """Run structured claim triage, then pause for human edits before queueing research."""
+    owner_id = current_owner_id()
+    draft = InvestigationService(session).create(
+        owner_id=owner_id,
+        content=body.content,
+        input_type=body.input_type,
+        idempotency_key=f"triage:{uuid4().hex}",
+        enqueue=False,
+    )
+    draft.current_stage = "TRIAGE_PENDING"
+    session.commit()
+    try:
+        result = ModelGateway().extract_claims_and_queries(
+            text=body.content,
+            images=[],
+            session=session,
+            investigation_id=draft.id,
+        )
+    except ModelInvocationFailed as exc:
+        session.delete(draft)
+        session.commit()
+        detail = (
+            "Claim triage is unavailable because OpenAI is not configured. No source check was started."
+            if exc.category.value == "AUTHENTICATION_FAILED"
+            else "Claim triage could not complete with the configured OpenAI provider. No source check was started."
+        )
+        raise HTTPException(status_code=503, detail=detail) from exc
+    from app.modules.investigations.orchestrator import _persist_plan
+
+    _persist_plan(session, draft, result.output)
+    if not result.output.claims:
+        clarification = result.output.clarification_question or (
+            "Please share one specific factual statement, including the subject and relevant time or place."
+        )
+        session.delete(draft)
+        session.commit()
+        return {"claims": [], "clarification_question": clarification, "draft_id": None}
+    draft.current_stage = "TRIAGE_PENDING"
+    session.add(
+        AuditEvent(
+            investigation_id=draft.id,
+            event_type="CLAIM_TRIAGE_COMPLETED",
+            actor="openai",
+            event_metadata={"claim_count": len(result.output.claims), "model": result.model},
+        )
+    )
+    session.commit()
+    claims = list(
+        session.scalars(
+            select(Claim).where(Claim.investigation_id == draft.id).order_by(Claim.created_at, Claim.id)
+        )
+    )
+    return {
+        "draft_id": str(draft.id),
+        "claims": [
+            {
+                "text": claim.text,
+                "claim_type": claim.claim_type,
+                "needs_deep_investigation": claim.needs_deep_investigation,
+            }
+            for claim in claims
+        ],
+        "clarification_question": result.output.clarification_question,
+        "triage_provider": result.provider,
+        "triage_model": result.model,
+    }
+
+
+@router.post("/{investigation_id}/continue", response_model=InvestigationResponse, status_code=status.HTTP_202_ACCEPTED)
+def continue_triaged_investigation(
+    investigation_id: UUID,
+    body: ContinueInvestigationRequest,
+    session: DbSession,
+) -> InvestigationResponse:
+    owner_id = current_owner_id()
+    investigation = session.scalar(
+        select(Investigation).where(
+            Investigation.id == investigation_id,
+            Investigation.owner_id == owner_id,
+        ).with_for_update()
+    )
+    if investigation is None or investigation.current_stage != "TRIAGE_PENDING":
+        raise HTTPException(status_code=404, detail="Triage draft not found or already continued")
+    prior = list(
+        session.scalars(
+            select(Claim).where(Claim.investigation_id == investigation.id).order_by(Claim.created_at, Claim.id)
+        )
+    )
+    changed = len(prior) != len(body.claims) or any(
+        old.text != new.text
+        or old.claim_type != new.claim_type
+        or old.needs_deep_investigation != new.needs_deep_investigation
+        for old, new in zip(prior, body.claims, strict=False)
+    )
+    if changed:
+        for claim in prior:
+            session.delete(claim)
+        session.execute(delete(SearchTrace).where(SearchTrace.investigation_id == investigation.id))
+        session.flush()
+        session.add_all(
+            [
+                Claim(
+                    investigation_id=investigation.id,
+                    text=item.text,
+                    normalized_text=" ".join(item.text.casefold().split()),
+                    claim_type=item.claim_type,
+                    needs_deep_investigation=item.needs_deep_investigation,
+                )
+                for item in body.claims
+            ]
+        )
+    _enqueue_confirmed_draft(session, investigation)
+    session.commit()
+    session.refresh(investigation)
+    return InvestigationResponse.model_validate(investigation)
 
 
 @router.post("", response_model=InvestigationResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -230,6 +386,8 @@ async def create_media_investigation(
     session: DbSession,
     file: Annotated[UploadFile, File()],
     prompt: Annotated[str, Form(max_length=2000)] = "",
+    triage_id: Annotated[str | None, Form()] = None,
+    claims_json: Annotated[str | None, Form(max_length=12000)] = None,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> InvestigationResponse:
     settings = get_settings()
@@ -297,15 +455,7 @@ async def create_media_investigation(
                 status_code=503,
                 detail={"code": "STORAGE_FAILED", "message": "Media storage is unavailable"},
             ) from exc
-        investigation = InvestigationService(session).create(
-            owner_id=owner_id,
-            content=prompt.strip()
-            or "Please inspect the submitted media and identify verifiable claims.",
-            input_type=InputType(media_type),
-            idempotency_key=(
-                f"{owner_id}:{idempotency_key}" if idempotency_key else f"{owner_id}:{uuid4()}"
-            ),
-            media_asset={
+        media_asset = {
                 "id": asset_id,
                 "storage_key": key,
                 "media_type": media_type,
@@ -313,8 +463,70 @@ async def create_media_investigation(
                 "size_bytes": len(data),
                 "sha256": hashlib.sha256(data).hexdigest(),
                 "metadata_json": {},
-            },
-        )
+            }
+        if triage_id:
+            try:
+                draft_uuid = UUID(triage_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail="Triage reference is invalid") from exc
+            investigation = session.scalar(
+                select(Investigation).where(
+                    Investigation.id == draft_uuid,
+                    Investigation.owner_id == owner_id,
+                    Investigation.current_stage == "TRIAGE_PENDING",
+                ).with_for_update()
+            )
+            if investigation is None:
+                raise HTTPException(status_code=404, detail="Triage draft not found")
+            if claims_json:
+                try:
+                    edited = ContinueInvestigationRequest.model_validate({"claims": json.loads(claims_json)})
+                except (ValueError, TypeError) as exc:
+                    raise HTTPException(status_code=422, detail="Edited triage claims are invalid") from exc
+                prior_claims = list(session.scalars(select(Claim).where(Claim.investigation_id == investigation.id)))
+                for claim in prior_claims:
+                    session.delete(claim)
+                session.execute(delete(SearchTrace).where(SearchTrace.investigation_id == investigation.id))
+                session.flush()
+                session.add_all([
+                    Claim(
+                        investigation_id=investigation.id,
+                        text=item.text,
+                        normalized_text=" ".join(item.text.casefold().split()),
+                        claim_type=item.claim_type,
+                        needs_deep_investigation=item.needs_deep_investigation,
+                    )
+                    for item in edited.claims
+                ])
+                session.flush()
+            investigation.input_type = InputType(media_type)
+            submission = session.scalar(
+                select(Submission)
+                .where(Submission.investigation_id == investigation.id)
+                .order_by(Submission.received_at)
+            )
+            if submission is not None:
+                submission.input_type = InputType(media_type)
+                if prompt.strip():
+                    submission.original_text = prompt.strip()
+            session.add(MediaAsset(investigation_id=investigation.id, **media_asset))
+            session.flush()
+            _enqueue_confirmed_draft(session, investigation)
+            session.commit()
+            session.refresh(investigation)
+        else:
+            investigation = InvestigationService(session).create(
+                owner_id=owner_id,
+                content=prompt.strip()
+                or "Please inspect the submitted media and identify verifiable claims.",
+                input_type=InputType(media_type),
+                idempotency_key=(
+                    f"{owner_id}:{idempotency_key}"
+                    if idempotency_key
+                    else f"{owner_id}:{uuid4()}"
+                ),
+                media_asset=media_asset,
+            )
         if session.get(MediaAsset, asset_id) is None:
             delete_private_object(key=key)
     except Exception:

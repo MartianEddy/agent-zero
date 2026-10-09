@@ -33,6 +33,7 @@ class InvestigationService:
         media_asset: dict[str, object] | None = None,
         channel: Channel = Channel.WEB,
         source_metadata: dict[str, object] | None = None,
+        enqueue: bool = True,
     ) -> Investigation:
         existing_job = self.session.scalar(
             select(ProcessingJob).where(ProcessingJob.idempotency_key == idempotency_key)
@@ -59,13 +60,6 @@ class InvestigationService:
         )
         self.session.add(investigation)
         self.session.flush()
-        job = ProcessingJob(
-            id=uuid4(),
-            investigation_id=investigation_id,
-            stage="RECEIVED",
-            status="QUEUED",
-            idempotency_key=idempotency_key,
-        )
         records = [
             Submission(
                 investigation_id=investigation_id,
@@ -73,12 +67,6 @@ class InvestigationService:
                 input_type=input_type,
                 original_text=content,
                 source_metadata=source_metadata or {},
-            ),
-            job,
-            OutboxEvent(
-                aggregate_id=investigation_id,
-                event_type="INVESTIGATION_RECEIVED",
-                payload={"investigation_id": str(investigation_id), "job_id": str(job.id)},
             ),
             AuditEvent(
                 investigation_id=investigation_id,
@@ -92,6 +80,24 @@ class InvestigationService:
             ),
             InvestigationUsage(investigation_id=investigation_id),
         ]
+        if enqueue:
+            job = ProcessingJob(
+                id=uuid4(),
+                investigation_id=investigation_id,
+                stage="RECEIVED",
+                status="QUEUED",
+                idempotency_key=idempotency_key,
+            )
+            records.extend(
+                [
+                    job,
+                    OutboxEvent(
+                        aggregate_id=investigation_id,
+                        event_type="INVESTIGATION_RECEIVED",
+                        payload={"investigation_id": str(investigation_id), "job_id": str(job.id)},
+                    ),
+                ]
+            )
         if media_asset is not None:
             records.append(MediaAsset(investigation_id=investigation_id, **media_asset))
         self.session.add_all(records)

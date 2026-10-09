@@ -1,7 +1,12 @@
+"use client";
+
+import { usePathname } from "next/navigation";
 import { WHATSAPP_CONTACT_URL } from "@/lib/contact";
 import styles from "./WhatsAppFloat.module.css";
 
 export default function WhatsAppFloat() {
+  const pathname = usePathname();
+  if (pathname !== "/") return null;
   return (
     <a
       className={styles.contact}

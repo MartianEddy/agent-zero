@@ -1,9 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AgentMark } from "@/components/AgentMark";
+import { WorkspaceHeader } from "@/components/WorkspaceHeader";
 import { WHATSAPP_CONTACT_URL } from "@/lib/contact";
 import {
   aiDeclarationCopy,
@@ -27,7 +26,7 @@ import {
   visualAnalysisNotice,
   visualObservations,
 } from "./presentation.mjs";
-import type { Evidence, Finding, Investigation, Results, Source } from "./types";
+import type { ClaimType, Evidence, Finding, Investigation, Results, Source, TriageClaim, TriagePreview } from "./types";
 import styles from "./page.module.css";
 
 type EvidenceFilter = "ALL" | "SUPPORTS" | "CONTRADICTS" | "CONTEXT";
@@ -41,12 +40,12 @@ const ACTIVE = new Set([
   "GENERATING_BRIEF",
 ]);
 
-const EXAMPLES = [
-  "Did the government announce this?",
-  "Is this image from today’s event?",
-  "Has this claim been reported elsewhere?",
-  "Where did this information come from?",
+const EXAMPLES: { text: string; label: string }[] = [
+  { text: "Nairobi is the capital of Kenya.", label: "Likely true" },
+  { text: "The Great Wall of China is visible from the Moon with the naked eye.", label: "Likely false" },
+  { text: "The COVID-19 pandemic began with a laboratory accident.", label: "Contested" },
 ];
+const CLAIM_TYPES: ClaimType[] = ["SETTLED_FACT", "CHECKABLE_EVENT", "STATISTICAL", "MEDIA_CLAIM", "CONTESTED", "OPINION_OR_PREDICTION"];
 const REVIEW_STEPS = ["Understand the question", "Search for sources", "Compare retrieved pages", "Prepare the result"];
 
 async function readError(response: Response) {
@@ -178,6 +177,8 @@ export default function InvestigatePage() {
   const [retryBusy, setRetryBusy] = useState(false);
   const [error, setError] = useState("");
   const [evidenceFilter, setEvidenceFilter] = useState<EvidenceFilter>("ALL");
+  const [triage, setTriage] = useState<TriagePreview | null>(null);
+  const [triageClaims, setTriageClaims] = useState<TriageClaim[]>([]);
 
   function selectFile(file: File | null) {
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
@@ -246,26 +247,57 @@ export default function InvestigatePage() {
     setInvestigation(null);
     setPreviewUnavailable(false);
     try {
+      if (selectedFile) {
+        if (!content.trim()) throw new Error("Add the factual claim or question shown by the media before triage.");
+      }
+      const inputType = selectedFile ? "TEXT" : inferInputType(content);
+      const response = await fetch("/api/investigations/triage", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ input_type: inputType, content: content.trim() }),
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const preview = (await response.json()) as TriagePreview;
+      if (!preview.draft_id) {
+        setError(preview.clarification_question || "Please add one specific factual claim before continuing.");
+        return;
+      }
+      setTriage(preview);
+      setTriageClaims(preview.claims);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not start this investigation.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function continueTriage() {
+    if (!triage?.draft_id || triageClaims.length === 0) return;
+    setBusy(true);
+    setError("");
+    try {
       let response: Response;
       if (selectedFile) {
         const form = new FormData();
         form.set("file", selectedFile);
         form.set("prompt", content.trim());
+        form.set("triage_id", triage.draft_id);
+        form.set("claims_json", JSON.stringify(triageClaims));
         response = await fetch("/api/investigations/media", { method: "POST", body: form });
       } else {
-        const inputType = inferInputType(content);
-        response = await fetch("/api/investigations", {
+        response = await fetch(`/api/investigations/${triage.draft_id}/continue`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ input_type: inputType, content: content.trim() }),
+          body: JSON.stringify({ claims: triageClaims }),
         });
       }
       if (!response.ok) throw new Error(await readError(response));
       const created = (await response.json()) as Investigation;
+      setTriage(null);
       setInvestigation(created);
       await refresh(created.id);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not start this investigation.");
+      setError(reason instanceof Error ? reason.message : "Could not continue this investigation.");
     } finally {
       setBusy(false);
     }
@@ -355,13 +387,12 @@ export default function InvestigatePage() {
 
   return (
     <main className={styles.page}>
-      <header className={styles.header}>
-        <Link href="/" aria-label="Agent 0 home"><AgentMark /></Link>
-        <nav className={styles.workspaceNav} aria-label="Main navigation"><Link href="/investigate" aria-current="page">Investigate</Link><Link href="/investigations">Investigations</Link><Link href="/how-it-works">How it works</Link></nav>
-      </header>
+      <WorkspaceHeader activeHref="/investigate" />
 
       <div className={styles.workspace}>
-        <p className={styles.processingNote}>Shared public demo: other visitors can view investigations. Use public information only; do not submit private or sensitive details.</p>
+        <p className={styles.processingNote}>Shared demo: investigation history is visible to other visitors. Use public, non-sensitive claims only.</p>
+        <section className={styles.startGrid}>
+          <div className={styles.intakeMain}>
         <section className={styles.intro}>
           <p className="eyebrow">A clear place to start</p>
           <h1>What do you want to check?</h1>
@@ -390,8 +421,34 @@ export default function InvestigatePage() {
           {error && <p className={styles.error} role="alert">{error}</p>}
         </form>
 
-        {!investigation && <section className={styles.examples} aria-label="Examples">
-          <p>Try asking</p>{EXAMPLES.map((example) => <button type="button" key={example} onClick={() => { setContent(example); selectFile(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}>{example}</button>)}
+        {!investigation && !triage && <section className={styles.examples} aria-label="Examples">
+          <p>Try a demo claim</p>{EXAMPLES.map((example) => <button type="button" key={example.text} onClick={() => { setContent(example.text); selectFile(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}>{example.label}: {example.text}</button>)}
+        </section>}
+          </div>
+          {!investigation && <aside className={styles.startAside}>
+            <p className={styles.sectionKicker}>A careful first step</p>
+            <h2>Make the claim easy to check.</h2>
+            <p>Include who, what, where and when. A focused statement helps Agent 0 look for evidence that directly addresses it.</p>
+            <ol><li><span>01</span>We identify and split checkable claims.</li><li><span>02</span>You review the claims before research starts.</li><li><span>03</span>You inspect findings and their source material.</li></ol>
+          </aside>}
+        </section>
+
+        {triage && <section className={styles.stagePanel} aria-labelledby="triage-title">
+          <p className="eyebrow">Before investigation</p>
+          <h2 id="triage-title">Review the claims Agent 0 identified</h2>
+          <p>Edit a claim or split a compound statement into separate claims. Research starts after you confirm.</p>
+          {triageClaims.map((claim, index) => <div className={styles.form} key={`${index}-${claim.text}`}>
+            <label htmlFor={`triage-claim-${index}`}>Claim {index + 1}</label>
+            <textarea id={`triage-claim-${index}`} rows={2} value={claim.text} onChange={(event) => setTriageClaims((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, text: event.target.value } : item))} />
+            <label htmlFor={`triage-type-${index}`}>Claim type</label>
+            <select id={`triage-type-${index}`} value={claim.claim_type} onChange={(event) => { const claim_type = event.target.value as ClaimType; setTriageClaims((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, claim_type, needs_deep_investigation: claim_type !== "SETTLED_FACT" } : item)); }}>
+              {CLAIM_TYPES.map((type) => <option key={type} value={type}>{type.replaceAll("_", " ")}</option>)}
+            </select>
+            {triageClaims.length > 1 && <button type="button" className={styles.removeFile} onClick={() => setTriageClaims((items) => items.filter((_, itemIndex) => itemIndex !== index))}>Remove claim</button>}
+          </div>)}
+          <button type="button" className="button button-secondary" disabled={triageClaims.length >= 3} onClick={() => setTriageClaims((items) => [...items, { text: "", claim_type: "CHECKABLE_EVENT", needs_deep_investigation: true }])}>＋ Split into another claim</button>
+          <div className={styles.formFooter}><button type="button" className="button button-secondary" onClick={() => setTriage(null)}>Cancel</button><button type="button" className="button button-primary" disabled={busy || triageClaims.some((claim) => claim.text.trim().length < 5)} onClick={() => void continueTriage()}>{busy ? "Starting…" : "Confirm and investigate →"}</button></div>
+          {error && <p className={styles.error} role="alert">{error}</p>}
         </section>}
 
         {investigation && <section className={styles.results} aria-labelledby="result-title">
@@ -445,7 +502,7 @@ export default function InvestigatePage() {
                         <p>{presentation?.explanation}</p>
                       </div>
                       <p className={styles.findingStatement}>{safeEvidenceText(finding.statement)}</p>
-                      {finding.evidence_confidence && <p className={styles.findingConfidence}><strong>Evidence confidence: {finding.evidence_confidence === "UNASSESSED" ? "not assessed" : finding.evidence_confidence.toLowerCase()}</strong> {finding.evidence_confidence === "UNASSESSED" ? <span>(earlier result)</span> : <span>(qualitative, not a probability)</span>}{finding.confidence_rationale && <> · {safeEvidenceText(finding.confidence_rationale)}</>}</p>}
+                      {finding.evidence_confidence && <p className={styles.findingConfidence}><strong>Evidence confidence: {finding.evidence_confidence.toLowerCase()}</strong> <span>(qualitative, not a probability)</span>{finding.confidence_rationale && <> · {safeEvidenceText(finding.confidence_rationale)}</>}</p>}
                       {finding.limitations && <p className={styles.findingLimitation}>{safeEvidenceText(finding.limitations)}</p>}
                       <div className={styles.citationLinks}>
                         {cited.map(({ item, relationship }) => <a key={item.id} href={`#evidence-${item.id}`}>
@@ -583,7 +640,7 @@ export default function InvestigatePage() {
                 {claims.map((claim) => {
                   const finding = results.findings.find((item) => item.claim_id === claim.id);
                   const view = finding ? statusPresentation(finding.status) : null;
-                  return <article className={styles.briefClaim} key={claim.id}><h4>Claim</h4><p>{safeEvidenceText(claim.text)}</p>{finding && <><h4>Status</h4><p>{view?.label} — {safeEvidenceText(finding.statement)}</p>{finding.evidence_confidence && <><h4>Evidence confidence <small>{finding.evidence_confidence === "UNASSESSED" ? "(earlier result)" : "(qualitative, not a probability)"}</small></h4><p>{finding.evidence_confidence === "UNASSESSED" ? "Not assessed" : finding.evidence_confidence.toLowerCase()}{finding.confidence_rationale ? ` — ${safeEvidenceText(finding.confidence_rationale)}` : ""}</p></>}<h4>Key evidence</h4>{findingRelationship(finding, evidence).map(({ item, relationship }) => <a key={item.id} href={`#evidence-${item.id}`}>{relationshipPresentation(relationship)} · View cited evidence</a>)}</>}</article>;
+                  return <article className={styles.briefClaim} key={claim.id}><h4>Claim</h4><p>{safeEvidenceText(claim.text)}</p>{finding && <><h4>Status</h4><p>{view?.label} — {safeEvidenceText(finding.statement)}</p>{finding.evidence_confidence && <><h4>Evidence confidence <small>(qualitative, not a probability)</small></h4><p>{finding.evidence_confidence.toLowerCase()}{finding.confidence_rationale ? ` — ${safeEvidenceText(finding.confidence_rationale)}` : ""}</p></>}<h4>Key evidence</h4>{findingRelationship(finding, evidence).map(({ item, relationship }) => <a key={item.id} href={`#evidence-${item.id}`}>{relationshipPresentation(relationship)} · View cited evidence</a>)}</>}</article>;
                 })}
                 {claims.length === 0 && <article className={styles.briefClaim}><h4>{originalMedia ? "Image review" : originalVideo ? "Video review" : "Your request"}</h4>{content.trim() && <p>{safeEvidenceText(content.trim())}</p>}<p>{imageAnswer ?? results.brief.summary}</p></article>}
                 {originalMedia && claims.length > 0 && <><h4>Image origin &amp; history</h4><p>{provenance ? `${provenancePresentation(provenance.status).label}. ${provenancePresentation(provenance.status).limitation}` : "An image was submitted; no origin information is available."}</p></>}

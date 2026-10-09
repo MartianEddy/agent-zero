@@ -174,7 +174,9 @@ class CostControlledPipelineTests(unittest.TestCase):
                                 evidence=[
                                     {"evidence_id": str(evidence.id), "relationship": "SUPPORTS"}
                                 ],
-                            )
+                                        evidence_confidence="MEDIUM",
+            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
+)
                         ]
                     ),
                     provider="openai",
@@ -488,7 +490,7 @@ class CostControlledPipelineTests(unittest.TestCase):
                 investigation_id=self.investigation.id,
                 text="A specific testable claim.",
                 normalized_text="a specific testable claim",
-                claim_type="GENERAL",
+                claim_type="CHECKABLE_EVENT",
             )
             self.session.add(claim)
             self.session.commit()
@@ -502,12 +504,14 @@ class CostControlledPipelineTests(unittest.TestCase):
                         status="SUPPORTED",
                         statement="Unsupported assertion.",
                         evidence=[],
-                    )
+                                evidence_confidence="MEDIUM",
+            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
+)
                 ]
             ),
         )
         finding = self.session.scalar(select(Finding).where(Finding.claim_id == claim.id))
-        self.assertEqual(finding.status, "UNVERIFIED")
+        self.assertEqual(finding.status, "INSUFFICIENT_EVIDENCE")
         self.assertEqual(self.session.scalar(select(func.count()).select_from(FindingEvidence)), 0)
 
     def test_contradicted_finding_requires_contradicting_evidence(self) -> None:
@@ -515,7 +519,7 @@ class CostControlledPipelineTests(unittest.TestCase):
             investigation_id=self.investigation.id,
             text="A specific testable claim.",
             normalized_text="a specific testable claim",
-            claim_type="GENERAL",
+            claim_type="CHECKABLE_EVENT",
         )
         source = Source(
             investigation_id=self.investigation.id,
@@ -547,12 +551,14 @@ class CostControlledPipelineTests(unittest.TestCase):
                         status="CONTRADICTED",
                         statement="Unsupported contradiction.",
                         evidence=[{"evidence_id": str(evidence.id), "relationship": "SUPPORTS"}],
-                    )
+                                evidence_confidence="MEDIUM",
+            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
+)
                 ]
             ),
         )
         finding = self.session.scalar(select(Finding).where(Finding.claim_id == claim.id))
-        self.assertEqual(finding.status, "UNVERIFIED")
+        self.assertEqual(finding.status, "INSUFFICIENT_EVIDENCE")
 
 
 if __name__ == "__main__":

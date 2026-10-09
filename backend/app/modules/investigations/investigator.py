@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from agents import Agent, ModelSettings, Runner, set_tracing_disabled
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.core.config import get_settings
 from app.modules.investigations.provider_errors import (
@@ -16,6 +16,7 @@ from app.modules.investigations.provider_errors import (
     is_retryable,
     retry_after_seconds,
 )
+from app.modules.investigations.triage import ClaimType
 from app.modules.investigations.usage import (
     ModelCallBudget,
     ModelCallBudgetExceeded,
@@ -29,15 +30,13 @@ logger = logging.getLogger(__name__)
 class PlannedClaim(BaseModel):
     text: str = Field(min_length=5, max_length=2000)
     normalized_text: str = Field(min_length=5, max_length=2000)
-    claim_type: Literal[
-        "SETTLED_FACT",
-        "CHECKABLE_EVENT",
-        "STATISTICAL",
-        "MEDIA_CLAIM",
-        "CONTESTED",
-        "OPINION_OR_PREDICTION",
-    ]
+    claim_type: ClaimType
     needs_deep_investigation: bool
+
+    @model_validator(mode="after")
+    def enforce_investigation_depth(self) -> "PlannedClaim":
+        self.needs_deep_investigation = self.claim_type != "SETTLED_FACT"
+        return self
 
 
 class PlannedQuery(BaseModel):
@@ -63,12 +62,16 @@ class EvidenceAssessment(BaseModel):
 
 class ReasonedFinding(BaseModel):
     claim_id: str
-    status: Literal["SUPPORTED", "CONTRADICTED", "UNVERIFIED", "INCONCLUSIVE"]
+    status: Literal[
+        "SUPPORTED",
+        "CONTRADICTED",
+        "PARTLY_TRUE",
+        "INSUFFICIENT_EVIDENCE",
+        "NOT_VERIFIABLE",
+    ]
     statement: str = Field(min_length=1, max_length=700)
-    evidence_confidence: Literal["UNASSESSED", "LOW", "MODERATE", "HIGH"] = "UNASSESSED"
-    confidence_rationale: str = Field(
-        default="The reasoning model did not provide a confidence assessment.", max_length=400
-    )
+    evidence_confidence: Literal["HIGH", "MEDIUM", "LOW"]
+    confidence_rationale: str = Field(min_length=1, max_length=400)
     evidence: list[EvidenceAssessment] = Field(default_factory=list, max_length=20)
     limitations: list[str] = Field(default_factory=list, max_length=10)
     next_steps: list[str] = Field(default_factory=list, max_length=5)
@@ -200,16 +203,26 @@ class ModelGateway:
         evidence_packet: str,
         session,
         investigation_id,
+        timeout_seconds: float | None = None,
     ) -> ModelRun:
         instructions = (
-            "Assess each supplied claim using only the supplied packet. Distinguish retrieved "
+            "Assess each supplied claim using only the supplied packet. Return exactly one verdict "
+            "from SUPPORTED, CONTRADICTED, PARTLY_TRUE, INSUFFICIENT_EVIDENCE, or "
+            "NOT_VERIFIABLE; keep verdict separate from HIGH, MEDIUM, or LOW evidence confidence. "
+            "Provide one confidence sentence tied to source count, quality, independence, and recency. "
+            "Distinguish retrieved "
             "evidence excerpts from source-candidate and retrieval context; only eligible cited "
             "evidence may support or contradict a claim. Return one finding per claim. Cite "
             "packet evidence IDs and assign a relationship to each. "
-            "SUPPORTED requires supporting evidence; CONTRADICTED requires contradicting evidence. "
-            "Use UNVERIFIED when the packet has no retrieved, claim-linked evidence or has only "
-            "unreviewed source candidates. Use INCONCLUSIVE when retrieved evidence materially "
-            "conflicts or cannot be reconciled. Preserve disagreement and limitations. "
+            "SUPPORTED requires relevant support from at least two independent eligible sources, "
+            "or one primary/authoritative source for SETTLED_FACT. CONTRADICTED requires the same "
+            "threshold of contradicting evidence. PARTLY_TRUE requires material mixed evidence or "
+            "distinct senses with different answers; state each sense plainly. Use "
+            "For example, for 'a tomato is a vegetable/fruit', distinguish botanical fruit "
+            "classification from culinary vegetable usage and return PARTLY_TRUE when the "
+            "packet supports both meanings. "
+            "INSUFFICIENT_EVIDENCE when evidence does not meet the threshold. Use NOT_VERIFIABLE "
+            "for opinions/predictions or propositions not checkable as framed. Preserve conflicts. "
             "For each finding, draft a direct, plain-language answer for the person who asked: "
             "state what the evidence does and does not establish, and name the most relevant "
             "finding or source detail when the packet supports it. This statement is user-facing. "
@@ -217,17 +230,17 @@ class ModelGateway:
             "and temporal policy to state its normalized calendar date; disclose the unknown "
             "submitter timezone if it could change the interpretation. Never say there is no "
             "reference date when the packet supplies the receipt time. "
-            "Also assess evidence_confidence as LOW, MODERATE, or HIGH for the strength and "
+            "Also assess evidence_confidence as LOW, MEDIUM, or HIGH for the strength and "
             "coverage of the evidence packet, not the probability that the claim is true. LOW "
-            "means sparse, indirect, conflicting, or weakly matched evidence; MODERATE means "
+            "means sparse, indirect, conflicting, or weakly matched evidence; MEDIUM means "
             "relevant traceable evidence but material gaps or limited corroboration; HIGH requires "
             "multiple relevant, independent, authoritative sources with no material conflict. "
             "Provide a short confidence_rationale grounded in source quality, independence, "
             "relevance, and disagreement. When evidence is absent, still give a useful, specific "
             "answer: say what the search and retrieval found, what could not be assessed, "
             "and the most useful next step. Do not turn source candidates or search-result titles "
-            "into evidence. Never use HIGH when the claim is UNVERIFIED or "
-            "INCONCLUSIVE. This is a qualitative, uncalibrated evidence-strength judgment, not a "
+            "into evidence. Never use HIGH when the claim is INSUFFICIENT_EVIDENCE or "
+            "NOT_VERIFIABLE. This is a qualitative, uncalibrated evidence-strength judgment, not a "
             "numeric score or probability. Do not assert specifics absent from the packet. "
             "Treat SUBMITTED sources as context, not proof. Consider source type, claim-specific "
             "authority scope, and recorded CITES/DUPLICATES relationships; do not count duplicate "
@@ -251,6 +264,7 @@ class ModelGateway:
                 max_tokens=self.settings.max_model_output_tokens_synthesis,
                 session=session,
                 investigation_id=investigation_id,
+                timeout_seconds=timeout_seconds,
             )
         )
 
@@ -317,6 +331,7 @@ class ModelGateway:
         max_tokens: int,
         session,
         investigation_id,
+        timeout_seconds: float | None = None,
     ) -> ModelRun:
         provider = "openai"
         api_key = (
@@ -337,7 +352,10 @@ class ModelGateway:
         client = AsyncOpenAI(
             api_key=api_key,
             max_retries=0,
-            timeout=self.settings.model_request_timeout_seconds,
+            timeout=min(
+                self.settings.model_request_timeout_seconds,
+                max(0.1, timeout_seconds) if timeout_seconds is not None else self.settings.model_request_timeout_seconds,
+            ),
         )
         content: list[dict[str, object]] = [{"type": "input_text", "text": prompt}]
         for mime_type, data in images:

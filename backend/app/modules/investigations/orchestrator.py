@@ -5,6 +5,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from time import monotonic
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -56,6 +57,7 @@ from app.modules.sources.evidence_extraction import (
 from app.modules.sources.exa_search import ExaSearchError, search_exa
 from app.modules.sources.openai_web_search import OpenAIWebSearchError, search_openai_web
 from app.modules.sources.registry import classify_source, role_for_claim
+from app.modules.sources.settled_fact import ReferenceExcerpt, lookup_settled_fact
 from app.modules.sources.retrieval import (
     SourceRetrievalError,
     excerpt_is_present,
@@ -63,11 +65,19 @@ from app.modules.sources.retrieval import (
 )
 from app.modules.sources.source_prioritization import prioritize_sources
 from app.modules.sources.urls import extract_markdown_link_urls, normalize_source_url
+from app.modules.sources.tiers import source_tier_for_domain
+from app.modules.investigations.verdict_policy import (
+    EvidenceSignal,
+    assess_verdict,
+    build_independence_groups,
+)
 from app.storage.s3 import get_private_object, put_private_object
 
 logger = logging.getLogger(__name__)
 ALLOWED_RELATIONSHIPS = {"SUPPORTS", "CONTRADICTS", "CONTEXTUALIZES", "MENTIONS", "UNKNOWN"}
-ALLOWED_FINDING_STATUSES = {"SUPPORTED", "CONTRADICTED", "UNVERIFIED", "INCONCLUSIVE"}
+ALLOWED_FINDING_STATUSES = {
+    "SUPPORTED", "CONTRADICTED", "PARTLY_TRUE", "INSUFFICIENT_EVIDENCE", "NOT_VERIFIABLE"
+}
 MEDIA_PACKET_METHODS = {
     "MEDIA_PROVENANCE",
     "MEDIA_TECHNICAL_METADATA",
@@ -1528,6 +1538,18 @@ def _evidence_packet(session: Session, investigation: Investigation) -> str:
             )
         )
     )
+    independence_groups = build_independence_groups(
+        {
+            str(source.id): source.domain
+            for source in session.scalars(
+                select(Source).where(Source.investigation_id == investigation.id)
+            )
+        },
+        [
+            (str(item.source_id), str(item.related_source_id), item.relationship_type)
+            for item in relationships
+        ],
+    )
     packet["source_relationships"] = [
         {
             "source_id": str(item.source_id),
@@ -1585,6 +1607,8 @@ def _evidence_packet(session: Session, investigation: Investigation) -> str:
                     "domain": source.domain,
                     "url": source.url[:1000],
                     "source_type": source.source_type,
+                    "source_tier": source_tier_for_domain(source.domain),
+                    "independence_group_id": independence_groups.get(str(source.id)),
                     "authoritative_for": list(source_registry.authoritative_for),
                     "role": (
                         source.source_role
@@ -1637,6 +1661,22 @@ def _persist_findings(
     output: EvidenceReasoning,
 ) -> None:
     claims = list(session.scalars(select(Claim).where(Claim.investigation_id == investigation.id)))
+    sources = list(session.scalars(select(Source).where(Source.investigation_id == investigation.id)))
+    source_by_id = {item.id: item for item in sources}
+    source_relationships = list(
+        session.scalars(
+            select(SourceRelationship).where(
+                SourceRelationship.investigation_id == investigation.id
+            )
+        )
+    )
+    independence_groups = build_independence_groups(
+        {str(item.id): item.domain for item in sources},
+        [
+            (str(item.source_id), str(item.related_source_id), item.relationship_type)
+            for item in source_relationships
+        ],
+    )
     existing = {
         item.claim_id
         for item in session.scalars(
@@ -1650,8 +1690,6 @@ def _persist_findings(
         candidate = proposed.get(str(claim.id))
         accepted: list[tuple[UUID, str]] = []
         accepted_methods: dict[UUID, str] = {}
-        support_capable_ids: set[UUID] = set()
-        contradiction_capable_ids: set[UUID] = set()
         if candidate is not None:
             for assessment in candidate.evidence:
                 if assessment.relationship not in ALLOWED_RELATIONSHIPS:
@@ -1681,108 +1719,49 @@ def _persist_findings(
                 link.relationship = assessment.relationship
                 accepted.append((evidence_id, assessment.relationship))
                 accepted_methods[evidence_id] = evidence.method
-                credential_claim = any(
-                    term in claim.text.casefold()
-                    for term in ("credential", "c2pa", "content credentials")
-                ) and not any(
-                    term in claim.text.casefold()
-                    for term in ("authentic", "real", "fake", "true", "depicts", "shows", "event")
+        proposed_status = candidate.status if candidate is not None else "INSUFFICIENT_EVIDENCE"
+        signals: list[EvidenceSignal] = []
+        for evidence_id, relationship in accepted:
+            evidence = session.get(Evidence, evidence_id)
+            source = source_by_id.get(evidence.source_id) if evidence and evidence.source_id else None
+            if source is None or source.retrieval_status != "RETRIEVED":
+                continue
+            if relationship not in {"SUPPORTS", "CONTRADICTS"}:
+                continue
+            tier = source_tier_for_domain(source.domain)
+            group_id = independence_groups.get(str(source.id), "")
+            if tier == "SECONDARY_AGGREGATOR" and source.source_type == "UNKNOWN":
+                continue
+            signals.append(
+                EvidenceSignal(
+                    evidence_id=str(evidence_id),
+                    stance=relationship,
+                    source_tier=tier,
+                    independence_group_id=group_id,
+                    retrieved=True,
                 )
-                visual_description_claim = (
-                    evidence.method == "MEDIA_VISUAL_OBSERVATION"
-                    and any(
-                        marker in claim.text.casefold()
-                        for marker in (
-                            "shows",
-                            "visible",
-                            "contains",
-                            "sign",
-                            "banner",
-                            "text",
-                            "logo",
-                        )
-                    )
-                    and not any(
-                        marker in claim.text.casefold()
-                        for marker in (
-                            "manipulat",
-                            "fake",
-                            "authentic",
-                            "ai-generated",
-                            "synthetic",
-                        )
-                    )
-                )
-                if evidence.source_id is not None or visual_description_claim:
-                    support_capable_ids.add(evidence_id)
-                elif (
-                    evidence.method == "MEDIA_PROVENANCE" and assessment.relationship == "SUPPORTS"
-                ):
-                    claim_lower = claim.text.casefold()
-                    ai_declaration_claim = (
-                        credential_claim
-                        and any(term in claim_lower for term in ("declare", "declaration"))
-                        and any(term in claim_lower for term in ("ai", "generative"))
-                        and "Content Credentials declare generative AI involvement."
-                        in evidence.content
-                    )
-                    state = _media_packet_excerpt(evidence)
-                    positive_credentials_claim = (
-                        credential_claim
-                        and "no " not in claim_lower
-                        and "without" not in claim_lower
-                        and state.startswith("Local C2PA state: VALID.")
-                    )
-                    negative_credentials_claim = (
-                        credential_claim
-                        and any(term in claim_lower for term in ("no ", "without", "absent"))
-                        and state.startswith("Local C2PA state: NOT_PRESENT.")
-                    )
-                    if (
-                        ai_declaration_claim
-                        or positive_credentials_claim
-                        or negative_credentials_claim
-                    ):
-                        support_capable_ids.add(evidence_id)
-                if evidence.source_id is not None:
-                    contradiction_capable_ids.add(evidence_id)
-        status = candidate.status if candidate is not None else "UNVERIFIED"
-        has_eligible_support = any(
-            rel == "SUPPORTS" and evidence_id in support_capable_ids
-            for evidence_id, rel in accepted
-        )
-        has_eligible_contradiction = any(
-            rel == "CONTRADICTS" and evidence_id in contradiction_capable_ids
-            for evidence_id, rel in accepted
-        )
-        if status == "SUPPORTED" and not has_eligible_support:
-            status = "UNVERIFIED"
-        elif status == "CONTRADICTED" and not has_eligible_contradiction:
-            status = "UNVERIFIED"
-        has_material_conflict = has_eligible_support and has_eligible_contradiction
-        if has_material_conflict:
-            status = "INCONCLUSIVE"
-        elif status == "INCONCLUSIVE":
-            status = "UNVERIFIED"
-        if status not in ALLOWED_FINDING_STATUSES:
-            status = "UNVERIFIED"
-        if not accepted and status in {"SUPPORTED", "CONTRADICTED", "INCONCLUSIVE"}:
-            status = "UNVERIFIED"
-        conflicting = has_material_conflict
+            )
+        assessment = assess_verdict(claim.claim_type, proposed_status, signals)
+        status = assessment.verdict
+        conflicting = status == "PARTLY_TRUE"
         if candidate is not None and status == candidate.status and not conflicting:
             statement = candidate.statement.strip()
             limitations = candidate.limitations
-            evidence_confidence = candidate.evidence_confidence
-            confidence_rationale = candidate.confidence_rationale.strip()
+        elif conflicting and candidate is not None and candidate.status == "PARTLY_TRUE":
+            statement = candidate.statement.strip()
+            limitations = candidate.limitations
         elif conflicting:
             statement = (
-                "Retrieved evidence supports and contradicts this claim; it remains inconclusive."
+                "Retrieved evidence points in different directions. Review the linked passages "
+                "to see which parts or interpretations each source supports."
             )
-            limitations = candidate.limitations if candidate else []
-            evidence_confidence = "LOW"
-            confidence_rationale = (
-                "Retrieved evidence conflicts, so the available record cannot resolve the claim."
+            limitations = ["Eligible retrieved sources contain both supporting and challenging evidence."]
+        elif status == "NOT_VERIFIABLE":
+            statement = (
+                "This is an opinion or prediction, so it cannot be verified as a factual claim. "
+                "Submit a specific factual statement if you want it checked."
             )
+            limitations = ["Opinions and predictions do not have a source-verifiable truth value."]
         elif accepted:
             statement = (
                 "The retrieved material did not provide enough claim-specific evidence to "
@@ -1793,11 +1772,6 @@ def _persist_findings(
                 "Retrieved excerpts were linked, but none had an eligible relationship and source "
                 "type to support a factual conclusion."
             ]
-            evidence_confidence = "LOW"
-            confidence_rationale = (
-                "The linked material did not provide eligible, claim-specific support or "
-                "contradiction."
-            )
         else:
             statement = (
                 "Agent 0 could not verify this claim because no retrieved, claim-linked evidence "
@@ -1808,20 +1782,10 @@ def _persist_findings(
                 "Source candidates and search-result titles are leads, not evidence; no retrieved "
                 "excerpt was available to assess this claim."
             ]
-            evidence_confidence = "LOW"
-            confidence_rationale = (
-                "The available evidence is insufficient or not traceably linked to this claim."
-            )
-        if status in {"INCONCLUSIVE", "UNVERIFIED"} and evidence_confidence == "HIGH":
-            evidence_confidence = "LOW"
-            confidence_rationale = (
-                "The evidence does not resolve the claim, so confidence in this assessment is low."
-            )
-        if not accepted:
-            evidence_confidence = "LOW"
-            confidence_rationale = (
-                "No retrieved, claim-linked excerpt was available to assess the evidence."
-            )
+        evidence_confidence = assessment.confidence
+        confidence_rationale = assessment.confidence_reason
+        if status == "PARTLY_TRUE" and candidate is not None:
+            limitations = candidate.limitations
         if status == "SUPPORTED":
             supporting_methods = {
                 accepted_methods[evidence_id]
@@ -1849,7 +1813,7 @@ def _persist_findings(
                     "Content Credentials are provenance assertions and do not establish the "
                     "truth of depicted events. Local remote-manifest and OCSP checks were disabled."
                 ]
-                evidence_confidence = "MODERATE"
+                evidence_confidence = "MEDIUM"
                 confidence_rationale = (
                     "Local credentials were validated, but they describe provenance and do not "
                     "verify the depicted event."
@@ -1888,6 +1852,293 @@ def _persist_findings(
     _audit(session, investigation.id, "FINDINGS_CREATED", {"count": len(claims)})
 
 
+def _persist_settled_reference_evidence(
+    session: Session,
+    investigation: Investigation,
+    claim: Claim,
+    result,
+    *,
+    claim_index: int,
+) -> None:
+    """Persist reference API passages directly; this path does not use Jina Reader."""
+    provider_names = {"wikipedia_api": "WIKIPEDIA_API", "wikidata_api": "WIKIDATA_API"}
+    traces: dict[str, SearchTrace] = {}
+    for provider, label in provider_names.items():
+        provider_excerpts = [item for item in result.excerpts if item.provider == provider]
+        unavailable = any(label.replace("_", " ").title() in note for note in result.unavailable)
+        trace = SearchTrace(
+            investigation_id=investigation.id,
+            provider=label,
+            action="search" if provider_excerpts else "unavailable" if unavailable else "empty",
+            query=claim.text,
+            route_metadata={
+                "claim_index": claim_index,
+                "topic": "settled fact reference lookup",
+                "jurisdiction": [],
+                "freshness": "BALANCED",
+                "source_lane": "PRIMARY",
+                "widening_reason": "Bounded settled-fact reference route; Wikipedia is a reference, not a primary source.",
+            },
+            sources=[{"title": item.title, "url": item.url} for item in provider_excerpts],
+            citations=[{"title": item.title, "url": item.url} for item in provider_excerpts],
+        )
+        session.add(trace)
+        session.flush()
+        traces[provider] = trace
+        if provider_excerpts:
+            _usage(session, investigation.id).search_calls += 1
+
+    for item in result.excerpts:
+        try:
+            normalized_url = normalize_source_url(item.url)
+        except ValueError:
+            continue
+        source = session.scalar(
+            select(Source).where(
+                Source.investigation_id == investigation.id,
+                Source.url == normalized_url,
+            )
+        )
+        domain = _source_domain(normalized_url)
+        if source is None:
+            source = Source(
+                investigation_id=investigation.id,
+                url=normalized_url,
+                title=item.title[:2000],
+                publisher="Wikipedia" if item.provider == "wikipedia_api" else "Wikidata",
+                domain=domain,
+                source_type="REFERENCE",
+                source_role="AUTHORITATIVE_REFERENCE",
+                discovery_method="SETTLED_FACT_REFERENCE",
+                discovery_trace_id=traces[item.provider].id,
+                retrieval_status="RETRIEVED",
+                retrieval_provider=item.provider,
+                content_sha256=hashlib.sha256(item.excerpt.encode("utf-8")).hexdigest(),
+                retrieved_at=utcnow(),
+            )
+            session.add(source)
+            session.flush()
+            _usage(session, investigation.id).sources_discovered += 1
+        else:
+            source.retrieval_status = "RETRIEVED"
+            source.retrieval_provider = item.provider
+            source.retrieved_at = utcnow()
+            source.discovery_trace_id = traces[item.provider].id
+        evidence = Evidence(
+            investigation_id=investigation.id,
+            source_id=source.id,
+            content=item.excerpt[: get_settings().max_source_chars_per_source],
+            method="REFERENCE_API_EXCERPT",
+            limitations=(
+                "Retrieved through the provider's public API. Wikipedia is a secondary reference; "
+                "Wikidata entity descriptions are context only and do not establish the claim."
+            ),
+        )
+        session.add(evidence)
+        session.flush()
+        session.add(
+            ClaimEvidence(claim_id=claim.id, evidence_id=evidence.id, relationship="UNKNOWN")
+        )
+    if result.unavailable:
+        usage = _usage(session, investigation.id)
+        usage.limitations = list(dict.fromkeys([*usage.limitations, *result.unavailable]))
+    session.commit()
+
+
+def _settled_claim_packet(session: Session, claim: Claim) -> str:
+    rows = list(
+        session.execute(
+            select(Evidence, ClaimEvidence, Source)
+            .join(ClaimEvidence, ClaimEvidence.evidence_id == Evidence.id)
+            .join(Source, Source.id == Evidence.source_id)
+            .where(ClaimEvidence.claim_id == claim.id)
+            .order_by(Evidence.created_at)
+        )
+    )
+    relationships = list(
+        session.scalars(
+            select(SourceRelationship).where(
+                SourceRelationship.investigation_id == claim.investigation_id
+            )
+        )
+    )
+    source_domains = {
+        str(source.id): source.domain
+        for _, _, source in rows
+    }
+    groups = build_independence_groups(
+        source_domains,
+        [
+            (str(item.source_id), str(item.related_source_id), item.relationship_type)
+            for item in relationships
+        ],
+    )
+    return json.dumps(
+        {
+            "claims": [{"id": str(claim.id), "text": claim.text, "claim_type": claim.claim_type}],
+            "evidence": [
+                {
+                    "evidence_id": str(evidence.id),
+                    "claim_id": str(link.claim_id),
+                    "excerpt": evidence.content,
+                    "title": source.title,
+                    "publisher": source.publisher,
+                    "url": source.url,
+                    "source_tier": source_tier_for_domain(source.domain),
+                    "independence_group_id": groups.get(str(source.id)),
+                    "stance": "CONTEXT",
+                    "retrieval_status": source.retrieval_status,
+                }
+                for evidence, link, source in rows
+            ],
+            "limitations": _usage(
+                session, claim.investigation_id
+            ).limitations,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _record_deterministic_finding(
+    session: Session,
+    investigation: Investigation,
+    claim: Claim,
+    *,
+    status: str,
+    statement: str,
+    confidence_reason: str,
+    limitation: str | None = None,
+) -> None:
+    if session.scalar(select(Finding.id).where(Finding.claim_id == claim.id).limit(1)):
+        return
+    session.add(
+        Finding(
+            investigation_id=investigation.id,
+            claim_id=claim.id,
+            status=status,
+            statement=statement,
+            evidence_confidence="LOW",
+            confidence_rationale=confidence_reason,
+            limitations=limitation,
+        )
+    )
+    session.commit()
+
+
+def _run_fast_path_claims(
+    session: Session,
+    investigation: Investigation,
+    *,
+    case_deadline: float,
+) -> set[int]:
+    """Assess settled facts with a hard five-second worker deadline; never use model memory alone."""
+    claims = list(
+        session.scalars(
+            select(Claim)
+            .where(Claim.investigation_id == investigation.id)
+            .order_by(Claim.created_at, Claim.id)
+        )
+    )
+    fast_indexes: set[int] = set()
+    for index, claim in enumerate(claims):
+        if claim.claim_type == "OPINION_OR_PREDICTION":
+            _record_deterministic_finding(
+                session,
+                investigation,
+                claim,
+                status="NOT_VERIFIABLE",
+                statement=(
+                    "This is an opinion or prediction, so it cannot be verified as a factual claim. "
+                    "Submit a specific factual statement if you want it checked."
+                ),
+                confidence_reason="Opinions and predictions have no source-verifiable truth value.",
+            )
+            fast_indexes.add(index)
+            continue
+        if claim.claim_type != "SETTLED_FACT" or claim.needs_deep_investigation:
+            continue
+        fast_indexes.add(index)
+        remaining = case_deadline - monotonic()
+        if remaining <= 0:
+            _record_deterministic_finding(
+                session,
+                investigation,
+                claim,
+                status="INSUFFICIENT_EVIDENCE",
+                statement="The reference check did not finish before the case deadline, so this claim was not assessed.",
+                confidence_reason="No authoritative reference text was retrieved within the five-second case deadline.",
+                limitation="Settled-fact reference lookup reached its five-second deadline.",
+            )
+            continue
+        result = lookup_settled_fact(claim.text, deadline_seconds=remaining)
+        _persist_settled_reference_evidence(session, investigation, claim, result, claim_index=index)
+        wiki_evidence = session.scalar(
+            select(Evidence.id)
+            .join(Source, Source.id == Evidence.source_id)
+            .join(ClaimEvidence, ClaimEvidence.evidence_id == Evidence.id)
+            .where(
+                Evidence.investigation_id == investigation.id,
+                Evidence.method == "REFERENCE_API_EXCERPT",
+                Source.retrieval_provider == "wikipedia_api",
+                ClaimEvidence.evidence_id == Evidence.id,
+                ClaimEvidence.claim_id == claim.id,
+            )
+            .limit(1)
+        )
+        if wiki_evidence is None:
+            unavailable = "; ".join(result.unavailable) or "No relevant Wikipedia article text was returned."
+            _record_deterministic_finding(
+                session,
+                investigation,
+                claim,
+                status="INSUFFICIENT_EVIDENCE",
+                statement=f"I couldn’t complete an authoritative reference check: {unavailable} No conclusion was drawn from model knowledge alone.",
+                confidence_reason="No retrieved authoritative reference passage was available for this claim.",
+                limitation=unavailable,
+            )
+            continue
+        remaining = case_deadline - monotonic()
+        if remaining <= 0:
+            _record_deterministic_finding(
+                session,
+                investigation,
+                claim,
+                status="INSUFFICIENT_EVIDENCE",
+                statement="The reference page was retrieved, but there was not enough time to assess it before the case deadline.",
+                confidence_reason="A reference page was retrieved but not assessed within the five-second case deadline.",
+                limitation="OpenAI evidence assessment was not completed before the five-second case deadline.",
+            )
+            continue
+        try:
+            packet = _settled_claim_packet(session, claim)
+            output = ModelGateway().reason_about_evidence(
+                evidence_packet=packet,
+                session=session,
+                investigation_id=investigation.id,
+                timeout_seconds=remaining,
+            )
+            _persist_findings(session, investigation, output.output)
+        except (ModelInvocationFailed, ModelCallBudgetExceeded) as exc:
+            add_limitation(
+                session,
+                investigation.id,
+                "OpenAI evidence assessment was unavailable or exceeded the five-second settled-fact deadline.",
+            )
+            _record_deterministic_finding(
+                session,
+                investigation,
+                claim,
+                status="INSUFFICIENT_EVIDENCE",
+                statement="A reference passage was retrieved, but the evidence assessment step was unavailable. The claim remains unchecked.",
+                confidence_reason="The retrieved reference was not assessed by the evidence-reasoning step.",
+                limitation=f"OpenAI evidence assessment unavailable ({getattr(getattr(exc, 'category', None), 'value', 'provider error')}).",
+            )
+        if monotonic() > case_deadline:
+            add_limitation(session, investigation.id, "Settled-fact assessment exceeded its five-second worker deadline.")
+    return fast_indexes
+
+
 def _create_unverified_findings(session: Session, investigation: Investigation) -> None:
     claims = list(session.scalars(select(Claim).where(Claim.investigation_id == investigation.id)))
     existing = {
@@ -1902,7 +2153,7 @@ def _create_unverified_findings(session: Session, investigation: Investigation) 
                 Finding(
                     investigation_id=investigation.id,
                     claim_id=claim.id,
-                    status="UNVERIFIED",
+                    status="INSUFFICIENT_EVIDENCE",
                     statement=(
                         "Agent 0 could not verify this claim because no retrieved, claim-linked "
                         "evidence was available. Review the listed source candidates or provide "
@@ -1958,7 +2209,7 @@ def _build_brief(
     limitations = list(usage.limitations)
     if not findings and claims:
         limitations.append("Findings are unavailable because evidence reasoning did not complete.")
-    if any(item.status in {"INCONCLUSIVE", "UNVERIFIED"} for item in findings):
+    if any(item.status in {"PARTLY_TRUE", "INSUFFICIENT_EVIDENCE"} for item in findings):
         limitations.append(
             "Recommended next step: review the cited sources and seek confirmation from an "
             "independent, authoritative source before publication. This is a recommendation, "
@@ -2030,7 +2281,7 @@ def _load_plan(session: Session, investigation_id: UUID) -> ResearchPlan:
                     }
                     else "CHECKABLE_EVENT"
                 ),
-                needs_deep_investigation=True,
+                needs_deep_investigation=item.needs_deep_investigation,
             )
             for item in claims
         ],
@@ -2190,8 +2441,28 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
         if images and investigation.input_type != InputType.URL:
             _persist_visual_observations(session, investigation, images, ModelGateway())
 
+        case_deadline = monotonic() + 5.0
+        fast_path_indices = _run_fast_path_claims(
+            session, investigation, case_deadline=case_deadline
+        )
+        searchable_indices = {
+            index
+            for index, claim in enumerate(
+                session.scalars(
+                    select(Claim)
+                    .where(Claim.investigation_id == investigation.id)
+                    .order_by(Claim.created_at, Claim.id)
+                )
+            )
+            if index not in fast_path_indices and claim.claim_type != "OPINION_OR_PREDICTION"
+        }
         _stage(session, investigation, InvestigationStatus.RESEARCHING)
-        _execute_searches(session, investigation, source_lanes={"PRIMARY"})
+        _execute_searches(
+            session,
+            investigation,
+            source_lanes={"PRIMARY"},
+            claim_indices=searchable_indices,
+        )
         _stage(session, investigation, InvestigationStatus.CORROBORATING)
         settings = get_settings()
         primary_retrieval_cap = max(1, settings.max_retrieved_sources - 2)
@@ -2204,7 +2475,7 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
         _persist_evidence(session, investigation, retrieved)
         _detect_source_relationships(session, investigation, retrieved)
 
-        claims_needing_widening = _claims_needing_independent_sources(session, investigation)
+        claims_needing_widening = _claims_needing_independent_sources(session, investigation) - fast_path_indices
         if not claims_needing_widening:
             _mark_routes_not_needed(
                 session,
@@ -2234,7 +2505,7 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
             _persist_evidence(session, investigation, retrieved)
             _detect_source_relationships(session, investigation, retrieved)
 
-        claims_needing_widening = _claims_needing_independent_sources(session, investigation)
+        claims_needing_widening = _claims_needing_independent_sources(session, investigation) - fast_path_indices
         if claims_needing_widening:
             _plan_widened_queries(
                 session,
@@ -2264,7 +2535,12 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
                 source_lanes={"FACT_CHECK"},
             )
 
-        _execute_searches(session, investigation, source_lanes={"SOCIAL"})
+        _execute_searches(
+            session,
+            investigation,
+            source_lanes={"SOCIAL"},
+            claim_indices=searchable_indices,
+        )
         retrieved.update(_retrieve_candidates(session, investigation))
         _detect_source_relationships(session, investigation, retrieved)
         claims = list(
