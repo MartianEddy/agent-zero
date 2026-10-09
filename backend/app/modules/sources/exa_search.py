@@ -23,6 +23,7 @@ def search_exa(
     num_results: int = 5,
     start_published_date: str | None = None,
     end_published_date: str | None = None,
+    timeout_seconds: float = 20.0,
 ) -> ExaSearchResponse:
     """Search Exa and return provider results with token-efficient highlights."""
     payload = {
@@ -43,7 +44,7 @@ def search_exa(
         method="POST",
     )
     try:
-        with urlopen(request, timeout=20) as response:
+        with urlopen(request, timeout=max(0.1, min(20.0, timeout_seconds))) as response:
             payload = json.loads(response.read())
     except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         raise ExaSearchError("Exa search request failed") from exc

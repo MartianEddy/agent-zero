@@ -406,7 +406,7 @@ class EvidencePipelineIntegrationTests(unittest.TestCase):
         self.settings.max_retrieved_sources = 2
         retrieved_urls: list[str] = []
 
-        def read(url):
+        def read(url, **_kwargs):
             retrieved_urls.append(url)
             return RetrievedPage(
                 requested_url=url, text="Smartphones reached 52.3 million in June 2026."
@@ -446,7 +446,7 @@ class EvidencePipelineIntegrationTests(unittest.TestCase):
             ),
             patch(
                 "app.modules.investigations.orchestrator.read_public_page",
-                side_effect=lambda url: (
+                side_effect=lambda url, **_kwargs: (
                     calls.append(url)
                     or RetrievedPage(
                         requested_url=url, text="A relevant report about the Authority."
@@ -490,7 +490,7 @@ class EvidencePipelineIntegrationTests(unittest.TestCase):
             ),
             patch(
                 "app.modules.investigations.orchestrator.read_public_page",
-                side_effect=lambda url: (
+                side_effect=lambda url, **_kwargs: (
                     calls.append(url)
                     or RetrievedPage(
                         requested_url=url, text="A new source passage with the Authority."

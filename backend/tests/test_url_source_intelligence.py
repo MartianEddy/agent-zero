@@ -10,6 +10,7 @@ from app.db.base import Base
 from app.domain.investigation import InputType, InvestigationStatus
 from app.modules.investigations.investigator import (
     EvidenceReasoning,
+    ExplanationSentence,
     ModelInvocationFailed,
     ModelRun,
     PlannedClaim,
@@ -38,7 +39,12 @@ from app.modules.investigations.provider_errors import FailureCategory
 from app.modules.investigations.service import InvestigationService
 from app.modules.sources.exa_search import ExaSearchResponse
 from app.modules.sources.registry import classify_source, lookup_source
-from app.modules.sources.retrieval import RetrievedPage, SourceRetrievalError, parse_reader_response
+from app.modules.sources.retrieval import (
+    RetrievedPage,
+    SourceRetrievalError,
+    parse_reader_response,
+    read_public_page,
+)
 from app.modules.sources.urls import normalize_source_url
 
 OWNER_ID = UUID("00000000-0000-4000-8000-000000000001")
@@ -73,6 +79,49 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
         self.assertEqual(page.author, "Jane Reporter")
         self.assertEqual(page.published_at, "2026-10-02T09:00:00Z")
         self.assertEqual(page.text, "Schools in Nyeri County will remain closed tomorrow.")
+
+    def test_reader_uses_configured_jina_bearer_key(self) -> None:
+        captured = {}
+
+        class Headers:
+            @staticmethod
+            def get_content_type():
+                return "text/plain"
+
+        class Response:
+            status = 200
+            headers = Headers()
+
+            @staticmethod
+            def read(_limit):
+                return b"Title: Sample\nMarkdown Content:\nReader body"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        class Opener:
+            @staticmethod
+            def open(request, timeout):
+                captured["authorization"] = request.get_header("Authorization")
+                return Response()
+
+        settings = SimpleNamespace(
+            jina_api_key=SimpleNamespace(get_secret_value=lambda: "test-key")
+        )
+        with (
+            patch("app.modules.sources.retrieval.get_settings", return_value=settings),
+            patch(
+                "app.modules.sources.retrieval.validate_public_http_url",
+                return_value="https://example.org/page",
+            ),
+            patch("app.modules.sources.retrieval.build_opener", return_value=Opener()),
+        ):
+            page = read_public_page("https://example.org/page")
+        self.assertEqual(captured["authorization"], "Bearer test-key")
+        self.assertEqual(page.text, "Reader body")
 
     def test_url_pipeline_uses_retrieved_submission_as_context_not_evidence(self) -> None:
         engine = create_engine("sqlite+pysqlite:///:memory:")
@@ -165,7 +214,7 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
                     == 1
                 )
 
-        def retrieve(url):
+        def retrieve(url, **_kwargs):
             calls.append("retrieve-submitted" if "nation.africa" in url else "retrieve-candidate")
             if "nation.africa" in url:
                 return RetrievedPage(
@@ -358,8 +407,8 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
         for index in range(2):
             source = Source(
                 investigation_id=investigation.id,
-                url=f"https://source{index}.example/report",
-                domain=f"source{index}.example",
+                url=f"https://{'nation.africa' if index == 0 else 'standardmedia.co.ke'}/report",
+                domain="nation.africa" if index == 0 else "standardmedia.co.ke",
                 source_type="NEWS",
                 retrieval_status="RETRIEVED",
             )
@@ -370,6 +419,10 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
                 source_id=source.id,
                 content=f"Retrieved passage {index} describes the event.",
                 method="TEST_FIXTURE",
+                source_tier="REPUTABLE_REPORTING",
+                independence_group_id=f"group-{index}",
+                run_id=investigation.id,
+                excerpt_validated=True,
             )
             session.add(evidence)
             session.flush()
@@ -386,6 +439,15 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
                         claim_id=str(claim.id),
                         status="PARTLY_TRUE",
                         statement="Evidence supports and contradicts different interpretations.",
+                        explanation=[
+                            ExplanationSentence(
+                                sentence="One report supports the claim while another challenges it.",
+                                evidence_ids=[
+                                    str(evidence_items[0].id),
+                                    str(evidence_items[1].id),
+                                ],
+                            )
+                        ],
                         evidence=[
                             {
                                 "evidence_id": str(evidence_items[0].id),
@@ -404,7 +466,7 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
         )
         finding = session.scalar(select(Finding).where(Finding.claim_id == claim.id))
         self.assertEqual(finding.status, "PARTLY_TRUE")
-        self.assertIn("supports and contradicts", finding.statement)
+        self.assertIn("supports the claim while another challenges it", finding.statement)
         self.assertEqual(
             {
                 item.relationship

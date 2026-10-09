@@ -90,7 +90,7 @@ The structured record is an application contract, not a hardcoded fact. The mode
 
 Do not run all lanes automatically. Each new lane must answer a documented evidence gap. Do not interpret an empty constrained search as evidence of absence. If a lane is unavailable, surface that limitation and continue only if the remaining route can responsibly answer.
 
-**MVP defaults:** use current Exa adapter for bounded public web discovery; use existing optional Jina Reader for public-page retrieval only where configured; add no general-purpose crawler or scraping/browser-cookie path. Implement curated source routes and Google Claim Search as the first optional discovery additions. Keep social providers behind feature flags until the platform, privacy, retention, and cost decisions are approved.
+**MVP defaults:** use current Exa adapter for bounded public web discovery; Jina Reader retrieves selected public pages by default and can be disabled through configuration; add no general-purpose crawler or scraping/browser-cookie path. Implement curated source routes and Google Claim Search as the first optional discovery additions. Keep social providers behind feature flags until the platform, privacy, retention, and cost decisions are approved.
 
 ### Step 4 — Retrieval and evidence admission
 
@@ -184,7 +184,7 @@ InvestigationService
   ├─ ClaimPlanner (OpenAI Agents SDK / current ModelGateway)
   ├─ RoutePlanner (application policy + versioned source catalog)
   ├─ SearchProvider[] (existing Exa; optional OpenAI web search; Google Claim Search)
-  ├─ SourceReader[] (existing optional Jina Reader)
+  ├─ SourceReader[] (Jina Reader enabled by default; explicit configuration opt-out)
   ├─ EvidenceExtractor / deterministic quote matcher
   ├─ EvidenceReasoner (existing structured model call)
   ├─ FindingValidator / CitationValidator
@@ -198,7 +198,7 @@ Provider adapters return a shared candidate contract: provider, lane, query ID, 
 |---|---|---|
 | OpenAI Agents SDK / existing model gateway | Claim extraction and structured evidence reasoning | Keep; pin compatible SDK version; retain structured schemas, budgets, provider metadata, and deterministic validation |
 | Exa Search API | First search adapter for web lanes; domain include/exclude routed by application policy | Keep thin native HTTP adapter; no extra SDK required while schema remains small |
-| Jina Reader | Optional bounded fetch of selected public web candidates | Keep current adapter only with explicit provider and source-URL disclosure; provider-data decision remains a rollout gate |
+| Jina Reader | Default bounded fetch of selected public web candidates, with an explicit opt-out | Keep source-URL disclosure; private/credential-bearing URLs are rejected. Auth and tenant isolation still gate sensitive/production use. |
 | Google Fact Check Tools API (`claims.search`) | Secondary archive lookup, after initial relevant-source plan | Small adapter; Google's Python client is optional, not required for one simple REST call. Keep API key server-side; the returned ClaimReview is a lead/context and must be fetched/evaluated separately |
 | OpenAI Responses `web_search` | Optional search adapter/fallback when configured; preserve returned citations/source metadata | Do not swap current flow to free-form generated answers. Reconcile the current ADR/architecture mismatch before enabling this route |
 | X API | Later, only for claims about X posts/accounts or circulation/origin | Official API adapter only after current access tiers/cost, auth scopes, storage/deletion rules, and product need are confirmed. No cookie/browser session or unofficial scraper |

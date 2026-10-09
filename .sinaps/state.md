@@ -3,8 +3,8 @@ project: agent-zero
 current_stage: OPERATE
 tier: major
 tier_reason: Core claim/verdict workflow changes across API, persistence, and UI; schema migration required
-last_updated: 2026-10-09T01:09:47Z
-current_session_deliverable: Phase 0 audit and target-flow design are documented in docs/AUDIT.md and docs/DESIGN.md. Phase 1 claim-triage foundation adds a strict claim-type schema, deep-investigation flag persistence/API projection, opinion/prediction search suppression, and a schema test. Migration 0012 is unverified. No tests, dependency install, browser journey, or provider calls were run because the existing health gate records 4% disk free. Verdict/evidence-ledger/reviewer/export/eval work remains.
+last_updated: 2026-10-09T02:16:43Z
+current_session_deliverable: Slice 2 evidence ledger and citation validation implemented on feature/slice-2. Migration 0014 conservatively maps legacy evidence to unknown/unvalidated; evidence grouping, exact excerpt offsets, sentence citation validation, verdict sufficiency recalculation, UI ledger/citations, shared case deadline handling, stored-data eval scoring, and default-on Jina Reader with optional Bearer key are in place. Backend verification: 133 passed; 3 baseline failures remain. Frontend: 15 tests and standalone TypeScript check passed; Next production build still fails in Next's --showConfig parsing after compile. No live providers called; eval scores remain unmeasured. Next requested slice is human decision panel and JSON export.
 ---
 
 ## Current feature

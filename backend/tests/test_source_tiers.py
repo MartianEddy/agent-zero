@@ -8,7 +8,7 @@ class SourceTierTests(unittest.TestCase):
         self.assertEqual(source_tier_for_domain("en.wikipedia.org"), "AUTHORITATIVE_REFERENCE")
         self.assertEqual(source_tier_for_domain("wikidata.org"), "AUTHORITATIVE_REFERENCE")
         self.assertEqual(source_tier_for_domain("parliament.go.ke"), "PRIMARY")
-        self.assertEqual(source_tier_for_domain("fake-go.ke.example.net"), "SECONDARY_AGGREGATOR")
+        self.assertEqual(source_tier_for_domain("fake-go.ke.example.net"), "UNKNOWN")
         self.assertEqual(source_tier_for_domain("x.com"), "UNVERIFIED_SOCIAL")
 
 

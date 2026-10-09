@@ -50,3 +50,12 @@ baseline. The accepted Slice 1 frontend copy update already resolves them:
   remain.
 - Frontend: **15 passed, 0 failed** (baseline was 13 passed, 2 failed).
 - No live providers were called.
+
+## Slice 2 verification
+
+- Backend: **133 passed, 3 failed**. Failures are the same three pre-Slice 1 baseline failures above (historical query expectation, extra source rows, retry search-call count); no Slice 2 test is failing.
+- Frontend presentation tests: **15 passed, 0 failed**. `npx tsc --noEmit` passed.
+- `npm run build` compiled the app but failed during Next.js TypeScript configuration parsing (`Could not parse output from TypeScript's --showConfig`). Direct TypeScript checking passes; this build-tool failure is documented and not attributed to the Slice 2 UI changes.
+- Evidence-ledger unit/integration tests cover grouping, excerpt offsets, citation checks, conservative migration defaults/rollback, and all six claim types using mocked evidence. No live source provider was called.
+- `evals/run_eval.py` reports 42 golden claims and no accuracy/citation score because no captured provider results were supplied. `evals/RESULTS.md` reports these measures as not measured.
+- Jina Reader effective local setting resolves to `jina_reader`; no `JINA_API_KEY` is configured in the current environment. The default reader path and optional Bearer-header behavior are unit tested. No Reader request was made.

@@ -14,6 +14,7 @@ Verdict = Literal[
 Confidence = Literal["HIGH", "MEDIUM", "LOW"]
 Stance = Literal["SUPPORTS", "CONTRADICTS", "CONTEXT", "UNRELATED"]
 SourceTier = Literal[
+    "UNKNOWN",
     "PRIMARY",
     "AUTHORITATIVE_REFERENCE",
     "REPUTABLE_REPORTING",
@@ -51,6 +52,8 @@ def assess_verdict(
         and item.source_tier != "UNVERIFIED_SOCIAL"
         and item.stance in {"SUPPORTS", "CONTRADICTS"}
         and item.independence_group_id
+        and item.independence_group_id != "unknown"
+        and item.source_tier != "UNKNOWN"
     ]
     supporting = [item for item in eligible if item.stance == "SUPPORTS"]
     contradicting = [item for item in eligible if item.stance == "CONTRADICTS"]

@@ -674,6 +674,8 @@ def get_investigation_results(investigation_id: UUID, session: DbSession) -> dic
                 "statement": item.statement,
                 "evidence_confidence": item.evidence_confidence,
                 "confidence_rationale": item.confidence_rationale,
+                "explanation": item.explanation_json or [],
+                "unsupported_statements_removed": item.unsupported_statements_removed,
                 "limitations": item.limitations,
                 "evidence_ids": [str(evidence_id) for evidence_id in linked_ids],
             }
@@ -798,6 +800,18 @@ def get_investigation_results(investigation_id: UUID, session: DbSession) -> dic
                 "content": item.content,
                 "method": item.method,
                 "limitations": item.limitations,
+                "source_tier": item.source_tier,
+                "stance": item.stance,
+                "excerpt_location": (
+                    {"start": item.excerpt_start, "end": item.excerpt_end}
+                    if item.excerpt_start is not None and item.excerpt_end is not None else None
+                ),
+                "independence_group_id": item.independence_group_id,
+                "published_date": item.published_date,
+                "is_stale": item.is_stale,
+                "retrieval_timestamp": item.retrieval_timestamp,
+                "run_id": str(item.run_id) if item.run_id else None,
+                "excerpt_validated": item.excerpt_validated,
                 "origin": {
                     "source_id": str(item.source_id) if item.source_id else None,
                     "media_asset_id": str(item.media_asset_id) if item.media_asset_id else None,
@@ -811,6 +825,7 @@ def get_investigation_results(investigation_id: UUID, session: DbSession) -> dic
                     {
                         "id": str(source_by_id[evidence_source[item.id]].id),
                         "url": source_by_id[evidence_source[item.id]].url,
+                        "retrieval_status": source_by_id[evidence_source[item.id]].retrieval_status,
                     }
                     if evidence_source[item.id] is not None
                     and evidence_source[item.id] in source_by_id

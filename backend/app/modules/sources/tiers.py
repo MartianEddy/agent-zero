@@ -20,7 +20,7 @@ def _domains_by_tier() -> dict[str, tuple[str, ...]]:
 def source_tier_for_domain(domain: str | None) -> str:
     normalized = (domain or "").strip().casefold().removeprefix("www.").rstrip(".")
     if not normalized:
-        return "UNVERIFIED_SOCIAL"
+        return "UNKNOWN"
     tiers = _domains_by_tier()
     for tier in (
         "PRIMARY",
@@ -31,4 +31,4 @@ def source_tier_for_domain(domain: str | None) -> str:
     ):
         if any(normalized == allowed or normalized.endswith(f".{allowed}") for allowed in tiers.get(tier, ())):
             return tier
-    return "SECONDARY_AGGREGATOR"
+    return "UNKNOWN"

@@ -103,6 +103,15 @@ export type Evidence = {
   id: string;
   content: string;
   method: string;
+  source_tier?: string;
+  stance?: string;
+  excerpt_location?: { start: number; end: number } | null;
+  independence_group_id?: string;
+  published_date?: string | null;
+  is_stale?: boolean | null;
+  retrieval_timestamp?: string | null;
+  run_id?: string | null;
+  excerpt_validated?: boolean;
   limitations?: string | null;
   origin: { source_id?: string | null; media_asset_id?: string | null };
   claim_links: EvidenceRelationship[];
@@ -118,6 +127,8 @@ export type Finding = {
   statement: string;
   evidence_confidence?: "LOW" | "MEDIUM" | "HIGH";
   confidence_rationale?: string;
+  explanation?: { sentence: string; evidence_ids: string[] }[];
+  unsupported_statements_removed?: boolean;
   limitations?: string | null;
   evidence_ids: string[];
 };
