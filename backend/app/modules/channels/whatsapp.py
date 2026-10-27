@@ -210,6 +210,8 @@ def _parse_message_events(
     rejection_counts: dict[str, int] = {}
     sender_shapes: dict[str, int] = {}
     sender_fallback_fields: set[str] = set()
+    status_states: dict[str, int] = {}
+    status_error_codes: dict[str, int] = {}
     summary: dict[str, object] = {
         "fields": "none",
         "raw_messages": 0,
@@ -243,6 +245,41 @@ def _parse_message_events(
             statuses = value.get("statuses")
             if isinstance(statuses, list):
                 summary["statuses"] = int(summary["statuses"]) + len(statuses)
+                for status in statuses:
+                    if not isinstance(status, dict):
+                        continue
+                    state = status.get("status")
+                    known_states = {
+                        "deleted",
+                        "delivered",
+                        "failed",
+                        "played",
+                        "read",
+                        "sent",
+                    }
+                    normalized_state = (
+                        state.casefold()
+                        if isinstance(state, str)
+                        and state.casefold() in known_states
+                        else "other"
+                    )
+                    status_states[normalized_state] = status_states.get(normalized_state, 0) + 1
+                    errors = status.get("errors")
+                    if isinstance(errors, list):
+                        for error in errors:
+                            if not isinstance(error, dict):
+                                continue
+                            code = error.get("code")
+                            code_label = (
+                                str(code)
+                                if isinstance(code, int)
+                                and not isinstance(code, bool)
+                                and 0 <= code <= 999999
+                                else "other"
+                            )
+                            status_error_codes[code_label] = (
+                                status_error_codes.get(code_label, 0) + 1
+                            )
             if field != "messages":
                 continue
 
@@ -329,6 +366,14 @@ def _parse_message_events(
             )
             or "none",
             "sender_fallback_fields": ",".join(sorted(sender_fallback_fields)) or "none",
+            "status_states": ",".join(
+                f"{state}:{count}" for state, count in sorted(status_states.items())
+            )
+            or "none",
+            "status_error_codes": ",".join(
+                f"{code}:{count}" for code, count in sorted(status_error_codes.items())
+            )
+            or "none",
         }
     )
     return events, summary
@@ -601,7 +646,7 @@ async def receive_webhook(
     logger.info(
         "WhatsApp webhook payload fields=%s raw_messages=%d statuses=%d "
         "parsed_messages=%d message_types=%s rejections=%s sender_shapes=%s "
-        "sender_fallback_fields=%s",
+        "sender_fallback_fields=%s status_states=%s status_error_codes=%s",
         summary["fields"],
         summary["raw_messages"],
         summary["statuses"],
@@ -610,6 +655,8 @@ async def receive_webhook(
         summary["rejections"],
         summary["sender_shapes"],
         summary["sender_fallback_fields"],
+        summary["status_states"],
+        summary["status_error_codes"],
     )
     if len(events) == MAX_MESSAGES_PER_WEBHOOK:
         raise HTTPException(status_code=413, detail="Too many messages in one webhook")

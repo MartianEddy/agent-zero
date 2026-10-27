@@ -447,11 +447,17 @@ def test_webhook_route_authenticates_raw_body_before_processing_events() -> None
 def test_webhook_logs_status_callback_shape_without_sensitive_payload(caplog) -> None:
     private_text = "private webhook content"
     private_sender = "254700000000"
+    private_message_id = "wamid.private-status-id"
     payload = {
         "object": "whatsapp_business_account",
         "entry": [{"changes": [{"field": "messages", "value": {
             "metadata": {"phone_number_id": "12345"},
-            "statuses": [{"recipient_id": private_sender, "status": "delivered"}],
+            "statuses": [{
+                "id": private_message_id,
+                "recipient_id": private_sender,
+                "status": "failed",
+                "errors": [{"code": 131026, "title": private_text}],
+            }],
             "messages": [],
             "diagnostic": private_text,
         }}]}],
@@ -472,8 +478,11 @@ def test_webhook_logs_status_callback_shape_without_sensitive_payload(caplog) ->
     assert "raw_messages=0" in caplog.text
     assert "statuses=1" in caplog.text
     assert "parsed_messages=0" in caplog.text
+    assert "status_states=failed:1" in caplog.text
+    assert "status_error_codes=131026:1" in caplog.text
     assert private_text not in caplog.text
     assert private_sender not in caplog.text
+    assert private_message_id not in caplog.text
 
 
 def test_webhook_logs_supported_message_shape_without_content_or_identity(caplog) -> None:
