@@ -85,132 +85,161 @@ def verify_webhook_signature(body: bytes, signature: str | None, app_secret: str
     return hmac.compare_digest(expected, signature)
 
 
-def _message_event(message: dict, phone_number_id: str) -> IncomingWhatsAppMessage | None:
+def _message_event(
+    message: dict, phone_number_id: str
+) -> tuple[IncomingWhatsAppMessage | None, str | None]:
     message_id = message.get("id")
     sender = message.get("from")
     message_type = message.get("type")
-    if (
-        not isinstance(message_id, str)
-        or not message_id
-        or len(message_id) > 200
-        or not isinstance(sender, str)
-        or not re.fullmatch(r"[0-9]{5,20}", sender)
-        or not isinstance(message_type, str)
-    ):
-        return None
+    if not isinstance(message_id, str) or not message_id or len(message_id) > 200:
+        return None, "invalid_message_id"
+    if not isinstance(sender, str) or not re.fullmatch(r"[0-9]{5,20}", sender):
+        return None, "invalid_sender"
+    if not isinstance(message_type, str):
+        return None, "invalid_message_type"
     text: str | None = None
     if message_type == "text":
         text_value = message.get("text")
         if isinstance(text_value, dict) and isinstance(text_value.get("body"), str):
             text = text_value["body"].strip()
             if not text:
-                return None
+                return None, "empty_text"
         else:
-            return None
-    return IncomingWhatsAppMessage(
-        message_id=message_id,
-        sender=sender,
-        phone_number_id=phone_number_id,
-        message_type=message_type,
-        text=text,
+            return None, "invalid_text_body"
+    return (
+        IncomingWhatsAppMessage(
+            message_id=message_id,
+            sender=sender,
+            phone_number_id=phone_number_id,
+            message_type=message_type,
+            text=text,
+        ),
+        None,
     )
 
 
-def parse_message_events(payload: object) -> list[IncomingWhatsAppMessage]:
-    """Read only supported Cloud API message events; ignore status callbacks."""
-    if not isinstance(payload, dict) or payload.get("object") != "whatsapp_business_account":
-        return []
+def _parse_message_events(
+    payload: object,
+) -> tuple[list[IncomingWhatsAppMessage], dict[str, object]]:
+    """Parse supported messages and collect privacy-safe rejection diagnostics."""
     events: list[IncomingWhatsAppMessage] = []
+    callback_fields: set[str] = set()
+    message_types: set[str] = set()
+    rejection_counts: dict[str, int] = {}
+    summary: dict[str, object] = {
+        "fields": "none",
+        "raw_messages": 0,
+        "statuses": 0,
+        "parsed_messages": 0,
+        "message_types": "none",
+        "rejections": "none",
+    }
+    if not isinstance(payload, dict) or payload.get("object") != "whatsapp_business_account":
+        return events, summary
+
     entries = payload.get("entry")
     if not isinstance(entries, list):
-        return events
+        return events, summary
+
     for entry in entries:
         if not isinstance(entry, dict) or not isinstance(entry.get("changes"), list):
             continue
         for change in entry["changes"]:
-            if not isinstance(change, dict) or change.get("field") != "messages":
+            if not isinstance(change, dict):
                 continue
+            field = change.get("field")
+            callback_fields.add(
+                field
+                if isinstance(field, str) and field in {"messages", "statuses"}
+                else "other"
+            )
             value = change.get("value")
-            metadata = value.get("metadata") if isinstance(value, dict) else None
+            if not isinstance(value, dict):
+                continue
+            statuses = value.get("statuses")
+            if isinstance(statuses, list):
+                summary["statuses"] = int(summary["statuses"]) + len(statuses)
+            if field != "messages":
+                continue
+
+            messages = value.get("messages")
+            if not isinstance(messages, list):
+                rejection_counts["missing_message_list"] = (
+                    rejection_counts.get("missing_message_list", 0) + 1
+                )
+                continue
+            summary["raw_messages"] = int(summary["raw_messages"]) + len(messages)
+            metadata = value.get("metadata")
             phone_number_id = (
                 metadata.get("phone_number_id") if isinstance(metadata, dict) else None
             )
-            messages = value.get("messages") if isinstance(value, dict) else None
-            if not isinstance(phone_number_id, str) or not isinstance(messages, list):
-                continue
-            for message in messages:
-                if isinstance(message, dict):
-                    event = _message_event(message, phone_number_id)
-                    if event is not None:
-                        events.append(event)
-                        if len(events) >= MAX_MESSAGES_PER_WEBHOOK:
-                            return events
-    return events
-
-
-def _webhook_payload_summary(
-    payload: dict[str, object], events: list[IncomingWhatsAppMessage]
-) -> dict[str, object]:
-    """Return bounded callback-shape metadata without message content or identities."""
-    callback_fields: set[str] = set()
-    raw_message_count = 0
-    status_count = 0
-    message_types: set[str] = set()
-    known_message_types = {
-        "audio",
-        "button",
-        "contacts",
-        "document",
-        "image",
-        "interactive",
-        "location",
-        "order",
-        "reaction",
-        "sticker",
-        "system",
-        "text",
-        "unknown",
-        "video",
-    }
-
-    entries = payload.get("entry")
-    if isinstance(entries, list):
-        for entry in entries:
-            if not isinstance(entry, dict) or not isinstance(entry.get("changes"), list):
-                continue
-            for change in entry["changes"]:
-                if not isinstance(change, dict):
-                    continue
-                field = change.get("field")
-                callback_fields.add(
-                    field
-                    if isinstance(field, str) and field in {"messages", "statuses"}
-                    else "other"
+            if not isinstance(phone_number_id, str) or not phone_number_id:
+                rejection_counts["missing_phone_number_id"] = (
+                    rejection_counts.get("missing_phone_number_id", 0) + len(messages)
                 )
-                value = change.get("value")
-                if not isinstance(value, dict):
-                    continue
-                messages = value.get("messages")
-                if isinstance(messages, list):
-                    raw_message_count += len(messages)
-                    for message in messages:
-                        message_type = message.get("type") if isinstance(message, dict) else None
-                        message_types.add(
-                            message_type
-                            if isinstance(message_type, str) and message_type in known_message_types
-                            else "other"
-                        )
-                statuses = value.get("statuses")
-                if isinstance(statuses, list):
-                    status_count += len(statuses)
+                continue
 
-    return {
-        "fields": ",".join(sorted(callback_fields)) or "none",
-        "raw_messages": raw_message_count,
-        "statuses": status_count,
-        "parsed_messages": len(events),
-        "message_types": ",".join(sorted(message_types)) or "none",
-    }
+            for message in messages:
+                if not isinstance(message, dict):
+                    rejection_counts["invalid_message_object"] = (
+                        rejection_counts.get("invalid_message_object", 0) + 1
+                    )
+                    continue
+                message_type = message.get("type")
+                if isinstance(message_type, str):
+                    message_types.add(
+                        message_type
+                        if message_type
+                        in {
+                            "audio",
+                            "button",
+                            "contacts",
+                            "document",
+                            "image",
+                            "interactive",
+                            "location",
+                            "order",
+                            "reaction",
+                            "sticker",
+                            "system",
+                            "text",
+                            "unknown",
+                            "video",
+                        }
+                        else "other"
+                    )
+                else:
+                    message_types.add("other")
+                event, rejection = _message_event(message, phone_number_id)
+                if event is not None:
+                    events.append(event)
+                    if len(events) >= MAX_MESSAGES_PER_WEBHOOK:
+                        break
+                elif rejection is not None:
+                    rejection_counts[rejection] = rejection_counts.get(rejection, 0) + 1
+            if len(events) >= MAX_MESSAGES_PER_WEBHOOK:
+                break
+        if len(events) >= MAX_MESSAGES_PER_WEBHOOK:
+            break
+
+    summary.update(
+        {
+            "fields": ",".join(sorted(callback_fields)) or "none",
+            "parsed_messages": len(events),
+            "message_types": ",".join(sorted(message_types)) or "none",
+            "rejections": ",".join(
+                f"{reason}:{count}" for reason, count in sorted(rejection_counts.items())
+            )
+            or "none",
+        }
+    )
+    return events, summary
+
+
+def parse_message_events(payload: object) -> list[IncomingWhatsAppMessage]:
+    """Read only supported Cloud API message events; ignore status callbacks."""
+    events, _summary = _parse_message_events(payload)
+    return events
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -468,16 +497,16 @@ async def receive_webhook(
         raise HTTPException(status_code=400, detail="Invalid webhook payload") from exc
     if not isinstance(payload, dict) or payload.get("object") != "whatsapp_business_account":
         raise HTTPException(status_code=400, detail="Unexpected webhook object")
-    events = parse_message_events(payload)
-    summary = _webhook_payload_summary(payload, events)
+    events, summary = _parse_message_events(payload)
     logger.info(
         "WhatsApp webhook payload fields=%s raw_messages=%d statuses=%d "
-        "parsed_messages=%d message_types=%s",
+        "parsed_messages=%d message_types=%s rejections=%s",
         summary["fields"],
         summary["raw_messages"],
         summary["statuses"],
         summary["parsed_messages"],
         summary["message_types"],
+        summary["rejections"],
     )
     if len(events) == MAX_MESSAGES_PER_WEBHOOK:
         raise HTTPException(status_code=413, detail="Too many messages in one webhook")

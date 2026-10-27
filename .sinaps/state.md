@@ -3,8 +3,8 @@ project: agent-zero
 current_stage: OPERATE
 tier: major
 tier_reason: Core claim/verdict workflow changes across API, persistence, and UI; schema migration required
-last_updated: 2026-10-27T11:03:00Z
-current_session_deliverable: Diagnosed the live WhatsApp path. User-initiated Cloudflare POST and Render API webhook returned HTTP 200, but no Celery investigation task/outbox dispatch followed. Read-only Meta check confirmed the WABA has one `Sinaps Technology` app subscription and no callback override; the app dashboard shows `messages` subscribed. Added privacy-safe callback-shape logging locally (field categories, counts, allow-listed message types only) and regression tests; focused suite passes. This diagnostic is not yet deployed. Do not call the WhatsApp investigation flow fixed until a text event is observed parsed and queued. Render services remain online. No outbound message was sent by the agent. Zetaris/Nightshift remain out of scope.
+last_updated: 2026-10-27T11:13:41Z
+current_session_deliverable: Deployed privacy-safe WhatsApp callback diagnostics in commit `55ec0e2`. The latest user-initiated callback reached the API as a `messages` event with one raw `text` item, but parsed zero messages; no investigation/outbox/Celery job followed. WABA subscription and callback override were checked read-only and appear correct. Added local parser rejection-category diagnostics and tests (14 WhatsApp tests pass; Ruff passes); follow-up is not deployed. Deploy it, identify the failed validation gate without logging values, then fix and verify parsing through worker completion. Render services remain online. No outbound message was sent by the agent. Zetaris/Nightshift remain out of scope.
 ---
 
 ## Current feature

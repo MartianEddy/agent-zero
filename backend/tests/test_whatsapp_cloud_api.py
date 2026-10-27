@@ -268,6 +268,39 @@ def test_webhook_logs_supported_message_shape_without_content_or_identity(caplog
     assert private_id not in caplog.text
 
 
+def test_webhook_logs_parser_rejection_reason_without_message_values(caplog) -> None:
+    private_text = "A private test claim"
+    private_sender = "254700000000"
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"field": "messages", "value": {
+            "metadata": {"phone_number_id": "12345"},
+            "messages": [{
+                "from": private_sender,
+                "type": "text",
+                "text": {"body": private_text},
+            }],
+        }}]}],
+    }
+    raw_body = json.dumps(payload).encode()
+    signature = "sha256=" + hmac.new(b"app-secret", raw_body, hashlib.sha256).hexdigest()
+    caplog.set_level(logging.INFO, logger="app.modules.channels.whatsapp")
+
+    with (
+        patch("app.modules.channels.whatsapp.get_settings", return_value=_settings()),
+        patch("app.modules.channels.whatsapp._handle_message") as handle,
+    ):
+        result = asyncio.run(receive_webhook(_request_with_body(raw_body), MagicMock(), signature))
+
+    assert result == {"status": "ok"}
+    handle.assert_not_called()
+    assert "raw_messages=1" in caplog.text
+    assert "parsed_messages=0" in caplog.text
+    assert "rejections=invalid_message_id:1" in caplog.text
+    assert private_text not in caplog.text
+    assert private_sender not in caplog.text
+
+
 def test_webhook_route_rejects_bad_signature_before_parsing_or_processing() -> None:
     session = MagicMock()
     with (
