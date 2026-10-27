@@ -2,13 +2,13 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
-    Integer,
-    Boolean,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -20,6 +20,7 @@ from sqlalchemy.types import JSON
 
 from app.db.base import Base
 from app.domain.investigation import Channel, InputType, InvestigationStatus
+from app.modules.conversations.models import WhatsAppConversation  # noqa: F401
 
 JSON_DOCUMENT = JSON().with_variant(JSONB, "postgresql")
 
@@ -201,10 +202,23 @@ class InvestigationUsage(Base):
 
 class ModelUsageRecord(Base):
     __tablename__ = "model_usage_records"
+    __table_args__ = (
+        CheckConstraint(
+            "(investigation_id IS NOT NULL AND conversation_id IS NULL) OR "
+            "(investigation_id IS NULL AND conversation_id IS NOT NULL)",
+            name="model_usage_owner_valid",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
-    investigation_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("investigations.id", ondelete="CASCADE"), index=True
+    investigation_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("investigations.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    conversation_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("whatsapp_conversations.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
     )
     provider: Mapped[str] = mapped_column(String(40))
     model: Mapped[str] = mapped_column(String(160))

@@ -2,12 +2,13 @@ import logging
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.core.config import get_settings
 from app.core.tracing import configure_tracing, tracer
 from app.db.session import SessionLocal
 from app.domain.investigation import InvestigationStatus
+from app.modules.conversations.models import WhatsAppConversation
 from app.modules.investigations.job_lease import (
     claim_processing_job,
     protect_job_lease,
@@ -18,6 +19,18 @@ from app.modules.investigations.orchestrator import process_investigation as run
 from app.worker import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+@celery_app.task(name="agent_zero.expire_whatsapp_conversations")
+def expire_whatsapp_conversations() -> int:
+    """Delete expired conversational context and its associated model usage."""
+    now = datetime.now(UTC)
+    with SessionLocal() as session:
+        result = session.execute(
+            delete(WhatsAppConversation).where(WhatsAppConversation.expires_at <= now)
+        )
+        session.commit()
+        return int(result.rowcount or 0)
 
 
 @celery_app.task(name="agent_zero.dispatch_outbox")
@@ -75,10 +88,7 @@ def recover_stalled_investigations() -> int:
                         & ProcessingJob.lease_expires_at.is_not(None)
                         & (ProcessingJob.lease_expires_at <= now)
                     )
-                    | (
-                        (ProcessingJob.status == "QUEUED")
-                        & (Investigation.updated_at < cutoff)
-                    )
+                    | ((ProcessingJob.status == "QUEUED") & (Investigation.updated_at < cutoff))
                     | (
                         (ProcessingJob.status == "RUNNING")
                         & ProcessingJob.lease_expires_at.is_(None)
@@ -100,9 +110,8 @@ def recover_stalled_investigations() -> int:
             stale_legacy_or_queued = (
                 job.lease_expires_at is None and investigation.updated_at < cutoff
             )
-            if (
-                job.status not in {"QUEUED", "RUNNING"}
-                or not (lease_expired or stale_legacy_or_queued)
+            if job.status not in {"QUEUED", "RUNNING"} or not (
+                lease_expired or stale_legacy_or_queued
             ):
                 continue
             investigation.status = InvestigationStatus.FAILED

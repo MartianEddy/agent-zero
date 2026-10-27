@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     source_reader_provider: Literal["disabled", "jina_reader"] = "jina_reader"
     jina_api_key: SecretStr | None = None
     max_model_calls_per_investigation: int = 4
+    max_model_calls_per_whatsapp_conversation: int = 12
     max_claims_per_investigation: int = 3
     max_search_queries: int = 5
     max_search_results_per_query: int = 5
@@ -60,6 +61,7 @@ class Settings(BaseSettings):
     whatsapp_identity_key: SecretStr | None = None
     whatsapp_owner_id: UUID | None = None
     whatsapp_graph_api_version: str = "v25.0"
+    whatsapp_conversation_enabled: bool = False
 
     @model_validator(mode="after")
     def require_auth_outside_development(self) -> "Settings":

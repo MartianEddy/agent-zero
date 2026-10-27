@@ -20,7 +20,11 @@ celery_app.conf.update(
         "recover-stalled-investigations": {
             "task": "agent_zero.recover_stalled_investigations",
             "schedule": 60.0,
-        }
+        },
+        "expire-whatsapp-conversations": {
+            "task": "agent_zero.expire_whatsapp_conversations",
+            "schedule": 900.0,
+        },
     },
 )
 

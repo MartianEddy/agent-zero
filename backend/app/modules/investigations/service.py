@@ -34,6 +34,7 @@ class InvestigationService:
         channel: Channel = Channel.WEB,
         source_metadata: dict[str, object] | None = None,
         enqueue: bool = True,
+        commit: bool = True,
     ) -> Investigation:
         existing_job = self.session.scalar(
             select(ProcessingJob).where(ProcessingJob.idempotency_key == idempotency_key)
@@ -72,9 +73,13 @@ class InvestigationService:
                 investigation_id=investigation_id,
                 event_type="INVESTIGATION_CREATED",
                 actor=(
-                    "clickcast-webhook"
-                    if channel == Channel.WHATSAPP
-                    else "local-development-user"
+                    "meta-whatsapp-webhook"
+                    if (source_metadata or {}).get("platform") == "meta_cloud_api"
+                    else (
+                        "clickcast-webhook"
+                        if channel == Channel.WHATSAPP
+                        else "local-development-user"
+                    )
                 ),
                 event_metadata={"channel": channel.value, "input_type": input_type.value},
             ),
@@ -101,8 +106,10 @@ class InvestigationService:
         if media_asset is not None:
             records.append(MediaAsset(investigation_id=investigation_id, **media_asset))
         self.session.add_all(records)
-        self.session.commit()
-        self.session.refresh(investigation)
+        self.session.flush()
+        if commit:
+            self.session.commit()
+            self.session.refresh(investigation)
         return investigation
 
     def get(self, *, investigation_id: UUID, owner_id: UUID) -> Investigation | None:

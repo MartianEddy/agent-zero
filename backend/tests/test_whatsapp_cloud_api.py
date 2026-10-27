@@ -3,8 +3,9 @@ import hashlib
 import hmac
 import json
 import logging
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import pytest
@@ -16,12 +17,13 @@ from app.core.config import Settings
 from app.modules.channels.whatsapp import (
     IncomingWhatsAppMessage,
     _handle_message,
-    _result_message,
     parse_message_events,
     receive_webhook,
     verify_webhook,
     verify_webhook_signature,
 )
+from app.modules.conversations.schemas import ConversationTurn
+from app.modules.conversations.service import _result_message
 
 
 def test_meta_signature_is_verified_against_raw_request_body() -> None:
@@ -404,6 +406,8 @@ def _settings():
         whatsapp_identity_key=SimpleNamespace(get_secret_value=lambda: "i" * 32),
         whatsapp_phone_number_id="12345",
         whatsapp_graph_api_version="v25.0",
+        whatsapp_conversation_enabled=True,
+        max_search_queries=5,
         whatsapp_owner_id=UUID("00000000-0000-4000-8000-000000000123"),
     )
 
@@ -602,68 +606,336 @@ def test_webhook_route_rejects_bad_signature_before_parsing_or_processing() -> N
     handle.assert_not_called()
 
 
-def test_inbound_text_uses_investigation_service_and_hmac_sender_identity() -> None:
+def _conversation_fixture(**overrides):
+    from datetime import UTC, datetime, timedelta
+
+    values = {
+        "id": UUID(int=100),
+        "owner_id": UUID(int=1),
+        "sender_ref": "hmac-sender",
+        "state": "IDLE",
+        "context_json": [],
+        "processed_events": [],
+        "draft_text": None,
+        "draft_input_type": None,
+        "proposed_claims": [],
+        "proposed_queries": [],
+        "clarification_question": None,
+        "preview_version": 0,
+        "model_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "draft_expires_at": None,
+        "confirmation_token": None,
+        "expires_at": datetime.now(UTC) + timedelta(hours=24),
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+
+def test_inbound_receipt_is_committed_before_any_model_work_and_replays_reply() -> None:
+    from app.modules.conversations.models import WhatsAppInboundEvent
+    from app.modules.conversations.service import _claim_inbound_event
+
+    conversation = _conversation_fixture(id=UUID(int=8))
+    event = ConversationTurn(
+        message_id="wamid.receipt", sender="254700000000", message_type="text", text="Hi"
+    )
+    now = datetime.now(UTC)
     session = MagicMock()
-    session.scalar.return_value = None
-    investigation = SimpleNamespace(reference="AZ-261026-ABC123")
+    session.scalar.side_effect = [None, conversation]
+
+    assert _claim_inbound_event(
+        session, conversation=conversation, event=event, sender_ref="sender-hmac", now=now
+    ) is None
+    receipt = next(
+        item
+        for item in session.add.call_args_list[0].args
+        if isinstance(item, WhatsAppInboundEvent)
+    )
+    assert receipt.message_id == event.message_id
+    assert receipt.state == "PROCESSING"
+    assert receipt.sender_ref == "sender-hmac"
+    session.commit.assert_called_once()
+
+    receipt.state = "COMPLETED"
+    receipt.reply_text = "Saved response"
+    replay_session = MagicMock()
+    replay_session.scalar.return_value = receipt
+    assert _claim_inbound_event(
+        replay_session,
+        conversation=conversation,
+        event=event,
+        sender_ref="sender-hmac",
+        now=now,
+    ) == "Saved response"
+    replay_session.commit.assert_not_called()
+
+
+def test_natural_confirmation_requires_the_code_for_the_active_preview() -> None:
+    from app.modules.conversations.service import ConversationService
+
+    session = MagicMock()
+    conversation = _conversation_fixture(
+        state="AWAITING_CONFIRMATION",
+        draft_text="Investigate the procurement timeline",
+        proposed_claims=[
+            {"text": "Company X won the contract early.", "claim_type": "CHECKABLE_EVENT"}
+        ],
+        confirmation_token="89ABCDEF",
+        draft_expires_at=datetime.now(UTC) + timedelta(minutes=10),
+    )
+    session.scalar.return_value = conversation
+    turn = IncomingWhatsAppMessage(
+        message_id="wamid.natural-confirm",
+        sender="254700000000",
+        phone_number_id="12345",
+        message_type="text",
+        text="Yes, please go ahead and verify it",
+    )
+    output = SimpleNamespace(
+        intent="CONFIRM_DRAFT", reply="", claims=[], queries=[],
+        clarification_question=None, reference=None
+    )
+
+    async def immediate_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    with (
+        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service._complete_inbound_event"),
+        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch("app.modules.channels.whatsapp.send_text_message") as send,
+        patch(
+            "app.modules.conversations.service.run_in_threadpool",
+            side_effect=immediate_in_threadpool,
+        ),
+        patch("app.modules.conversations.service.InvestigationService") as investigations,
+    ):
+        gateway.return_value.interpret_whatsapp_turn = AsyncMock(
+            return_value=SimpleNamespace(output=output)
+        )
+        assert asyncio.run(
+            ConversationService(session, _settings()).handle_turn(
+                ConversationTurn(
+                    message_id=turn.message_id,
+                    sender=turn.sender,
+                    message_type=turn.message_type,
+                    text=turn.text,
+                ),
+                send,
+            )
+        )
+
+    investigations.return_value.create.assert_not_called()
+    assert "SUBMIT 89ABCDEF" in send.call_args.args[1]
+    assert "No investigation has started" in send.call_args.args[1]
+
+
+def test_previous_preview_code_cannot_approve_replacement_preview() -> None:
+    from app.modules.conversations.service import _confirm_conversation_draft
+
+    session = MagicMock()
+    conversation = _conversation_fixture(
+        state="AWAITING_CONFIRMATION",
+        proposed_claims=[{"text": "A changed claim.", "claim_type": "CHECKABLE_EVENT"}],
+        confirmation_token="89ABCDEF",
+        preview_version=2,
+        draft_expires_at=datetime.now(UTC) + timedelta(minutes=10),
+    )
+    event = ConversationTurn(
+        message_id="wamid.old-code",
+        sender="254700000000",
+        message_type="text",
+        text="SUBMIT 12345678",
+    )
+
+    reply, created = asyncio.run(
+        _confirm_conversation_draft(
+            session,
+            conversation=conversation,
+            event=event,
+            settings=_settings(),
+            user_text=event.text or "",
+            confirmation_code="12345678",
+        )
+    )
+
+    assert created is False
+    assert "SUBMIT 89ABCDEF" in reply
+    session.scalar.assert_not_called()
+
+
+def test_webhook_kill_switch_hides_conversation_endpoint() -> None:
+    payload = json.dumps({"object": "whatsapp_business_account"}).encode()
+    settings = _settings()
+    settings.whatsapp_conversation_enabled = False
+    with patch("app.modules.channels.whatsapp.get_settings", return_value=settings):
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(receive_webhook(_request_with_body(payload), MagicMock(), None))
+    assert error.value.status_code == 404
+
+def test_inbound_text_uses_luna_to_create_preview_without_creating_case() -> None:
+    session = MagicMock()
+    conversation = _conversation_fixture()
+    session.scalar.return_value = conversation
+    session.get.return_value = SimpleNamespace(id=UUID(int=1))
     event = IncomingWhatsAppMessage(
         message_id="wamid.abc",
         sender="254700000000",
         phone_number_id="12345",
         message_type="text",
-        text="Check this claim",
+        text="Please investigate this claim",
     )
-    async def immediate_in_threadpool(function, *args):
-        return function(*args)
 
+    async def immediate_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    output = SimpleNamespace(
+        intent="INVESTIGATION_REQUEST",
+        reply="Here is the proposed claim.",
+        claims=[
+            SimpleNamespace(
+                text="Company X received the contract before the tender was announced.",
+                claim_type="CHECKABLE_EVENT",
+            )
+        ],
+        queries=[],
+        clarification_question=None,
+        reference=None,
+    )
     with (
-        patch("app.modules.channels.whatsapp.InvestigationService") as service,
+        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service._complete_inbound_event"),
+        patch("app.modules.conversations.service.InvestigationService") as service,
+        patch("app.modules.conversations.service.ModelGateway") as gateway,
         patch("app.modules.channels.whatsapp.send_text_message") as send,
         patch(
-            "app.modules.channels.whatsapp.run_in_threadpool",
+            "app.modules.conversations.service.run_in_threadpool",
+            side_effect=immediate_in_threadpool,
+        ),
+    ):
+        gateway.return_value.interpret_whatsapp_turn = AsyncMock(
+            return_value=SimpleNamespace(output=output)
+        )
+        assert asyncio.run(_handle_message(session, event, _settings()))
+
+    service.return_value.create.assert_not_called()
+    assert conversation.state == "AWAITING_CONFIRMATION"
+    assert conversation.proposed_claims[0]["claim_type"] == "CHECKABLE_EVENT"
+    preview = send.call_args.args[1]
+    assert "SUBMIT " in preview
+    assert conversation.confirmation_token in preview
+    assert "No investigation has started yet" in send.call_args.args[1]
+
+
+def test_explicit_submit_creates_one_investigation_from_approved_claims() -> None:
+    session = MagicMock()
+    conversation = _conversation_fixture(
+        state="AWAITING_CONFIRMATION",
+        draft_text="Please investigate this claim",
+        draft_input_type="TEXT",
+        proposed_claims=[
+            {
+                "text": "Company X received the contract before the tender was announced.",
+                "claim_type": "CHECKABLE_EVENT",
+            }
+        ],
+        draft_expires_at=datetime.now(UTC) + timedelta(minutes=20),
+        preview_version=1,
+        confirmation_token="1234ABCD",
+    )
+    session.scalar.side_effect = [conversation, None]
+    investigation = SimpleNamespace(
+        id=UUID(int=200), reference="AZ-261027-ABC123", current_stage="TRIAGE_PENDING"
+    )
+    event = IncomingWhatsAppMessage(
+        message_id="wamid.submit",
+        sender="254700000000",
+        phone_number_id="12345",
+        message_type="text",
+        text="Yes, please go ahead and verify it. SUBMIT 1234ABCD",
+    )
+
+    async def immediate_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    with (
+        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service._complete_inbound_event"),
+        patch("app.modules.conversations.service.InvestigationService") as service,
+        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch("app.modules.channels.whatsapp.send_text_message") as send,
+        patch(
+            "app.modules.conversations.service.run_in_threadpool",
             side_effect=immediate_in_threadpool,
         ),
     ):
         service.return_value.create.return_value = investigation
-
+        gateway.return_value.interpret_whatsapp_turn = AsyncMock(
+            return_value=SimpleNamespace(
+                output=SimpleNamespace(
+                    intent="CONFIRM_DRAFT",
+                    reply="",
+                    claims=[],
+                    queries=[],
+                    clarification_question=None,
+                    reference=None,
+                )
+            )
+        )
         assert asyncio.run(_handle_message(session, event, _settings()))
 
     kwargs = service.return_value.create.call_args.kwargs
-    assert kwargs["content"] == "Check this claim"
-    assert kwargs["channel"].value == "WHATSAPP"
-    assert kwargs["idempotency_key"].startswith("meta-wa:12345:")
-    assert kwargs["source_metadata"]["platform"] == "meta_cloud_api"
-    assert kwargs["source_metadata"]["sender_ref"] != event.sender
-    assert send.called
+    assert kwargs["enqueue"] is False
+    assert kwargs["commit"] is False
+    assert kwargs["source_metadata"]["approved_preview_version"] == 1
+    gateway.return_value.interpret_whatsapp_turn.assert_awaited_once()
+    assert conversation.state == "IDLE"
+    assert "AZ-261027-ABC123" in send.call_args.args[1]
+    queued = [
+        item
+        for item in session.add_all.call_args.args[0]
+        if getattr(item, "status", None) == "QUEUED"
+    ]
+    assert len(queued) == 1
 
 
-def test_meta_redelivery_reuses_job_without_creating_another_investigation() -> None:
+def test_meta_redelivery_repeats_saved_conversation_reply_without_retriage() -> None:
     session = MagicMock()
-    session.scalar.return_value = SimpleNamespace(investigation_id=UUID(int=42))
-    session.get.return_value = SimpleNamespace(reference="AZ-261026-ABC123")
+    conversation = _conversation_fixture(
+        processed_events=[
+            {"message_id": "wamid.abc", "reply": "I received that message."}
+        ],
+        context_json=[{"role": "assistant", "content": "I received that message."}],
+    )
+    session.scalar.return_value = conversation
     event = IncomingWhatsAppMessage(
         message_id="wamid.abc",
         sender="254700000000",
         phone_number_id="12345",
         message_type="text",
-        text="Check this claim",
+        text="Hello",
     )
-    async def immediate_in_threadpool(function, *args):
-        return function(*args)
+
+    async def immediate_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
 
     with (
-        patch("app.modules.channels.whatsapp.InvestigationService") as service,
+        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service._complete_inbound_event"),
+        patch("app.modules.conversations.service.ModelGateway") as gateway,
         patch("app.modules.channels.whatsapp.send_text_message") as send,
         patch(
-            "app.modules.channels.whatsapp.run_in_threadpool",
+            "app.modules.conversations.service.run_in_threadpool",
             side_effect=immediate_in_threadpool,
         ),
     ):
         assert asyncio.run(_handle_message(session, event, _settings()))
 
-    service.return_value.create.assert_not_called()
-    send.assert_called_once()
-
+    gateway.return_value.interpret_whatsapp_turn.assert_not_called()
+    send.assert_called_once_with(event.sender, "I received that message.")
 
 def test_result_lookup_is_scoped_to_the_hmac_sender_and_includes_saved_limits() -> None:
     session = MagicMock()
@@ -792,59 +1064,49 @@ def test_parser_rejects_bot_echo_messages() -> None:
     assert "bot_echo:3" in summary["rejections"]
 
 
-def test_handle_message_ignores_duplicate_submission_within_window() -> None:
-    from datetime import UTC, datetime
-
+def test_greeting_is_conversational_and_does_not_create_an_investigation() -> None:
     session = MagicMock()
-    session.scalar.return_value = None
-    recent_sub = SimpleNamespace(
-        original_text="Check this claim",
-        received_at=datetime.now(UTC),
-    )
-    session.scalars.return_value = [recent_sub]
-
+    conversation = _conversation_fixture()
+    session.scalar.return_value = conversation
+    session.get.return_value = SimpleNamespace(id=UUID(int=1))
     event = IncomingWhatsAppMessage(
-        message_id="wamid.new_id",
+        message_id="wamid.greeting",
         sender="254700000000",
         phone_number_id="12345",
         message_type="text",
-        text="Check this claim",
+        text="Hi there",
     )
+    output = SimpleNamespace(
+        intent="CONVERSATION",
+        reply="Hi! I can help you investigate factual claims or talk through a story.",
+        claims=[],
+        queries=[],
+        clarification_question=None,
+        reference=None,
+    )
+
+    async def immediate_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
 
     with (
-        patch("app.modules.channels.whatsapp.InvestigationService") as service,
+        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service._complete_inbound_event"),
+        patch("app.modules.conversations.service.InvestigationService") as service,
+        patch("app.modules.conversations.service.ModelGateway") as gateway,
         patch("app.modules.channels.whatsapp.send_text_message") as send,
+        patch(
+            "app.modules.conversations.service.run_in_threadpool",
+            side_effect=immediate_in_threadpool,
+        ),
     ):
-        result = asyncio.run(_handle_message(session, event, _settings()))
-        assert result is True
-        service.return_value.create.assert_not_called()
-        send.assert_not_called()
+        gateway.return_value.interpret_whatsapp_turn = AsyncMock(
+            return_value=SimpleNamespace(output=output)
+        )
+        assert asyncio.run(_handle_message(session, event, _settings()))
 
-
-def test_handle_message_throttles_rapid_fire_submissions() -> None:
-    from datetime import UTC, datetime
-
-    session = MagicMock()
-    session.scalar.return_value = None
-    recent_sub = SimpleNamespace(
-        original_text="Earlier different claim",
-        received_at=datetime.now(UTC),
+    service.return_value.create.assert_not_called()
+    assert conversation.state == "IDLE"
+    assert send.call_args.args[1] == (
+        "Hi, I’m Agent Zero. I can talk through what you’ve shared or help investigate a "
+        "factual claim using public evidence. What are you looking into?"
     )
-    session.scalars.return_value = [recent_sub]
-
-    event = IncomingWhatsAppMessage(
-        message_id="wamid.rapid_id",
-        sender="254700000000",
-        phone_number_id="12345",
-        message_type="text",
-        text="A new claim immediately after",
-    )
-
-    with (
-        patch("app.modules.channels.whatsapp.InvestigationService") as service,
-        patch("app.modules.channels.whatsapp.send_text_message") as send,
-    ):
-        result = asyncio.run(_handle_message(session, event, _settings()))
-        assert result is True
-        service.return_value.create.assert_not_called()
-        send.assert_not_called()

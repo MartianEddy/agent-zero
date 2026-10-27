@@ -69,12 +69,13 @@ Agent 0 is an evidence-verification platform. Web, WhatsApp and future integrati
 
 ### Direct Meta WhatsApp Cloud API channel
 
-- Meta can deliver WhatsApp messages to a separate signed webhook adapter. This does not replace the optional ClickCast HTTP API integration; both call the same investigation service.
-- Verify GET subscription challenges with a dedicated verify token and verify POST bodies using Meta's `X-Hub-Signature-256` signature and the app secret. Reject malformed signatures and events for an unconfigured phone-number ID.
-- Use the stable provider message ID to prevent webhook redelivery from creating a second investigation. Persist only an HMAC sender reference, not the sender's raw number.
-- Support text and public URL intake, send a brief immediate acknowledgement, and let the sender request the saved result with `RESULT` or `RESULT <reference>`. Send free-form replies only to the sender of a verified inbound message. Do not persist recipient numbers for later pushes.
-- Media, interactive messages, status callbacks, templates, and completion-time proactive messages are not supported by this slice. Production enablement still requires the documented auth, retention, and deployment decisions.
-- This authorizes local implementation and sandboxed integration only. Production multi-user use remains blocked until authentication/tenant ownership, retention/deletion, provider handling and deployment decisions are resolved.
+- Direct Meta is the first conversational WhatsApp path. Keep the Cloud API signature/verify-token boundary and do not run ClickCast automation as a second conversation handler for the same account.
+- Every supported inbound text turn is interpreted by GPT Luna through the existing `ModelGateway` boundary. Greetings, capability questions, and story discussion can receive a natural reply, but do not create a case. A factual request that needs current/source-backed checking is offered as an investigation, not represented as fresh research.
+- For an investigation request, Luna proposes at most three claims, a clarification question where needed, and bounded search-query metadata. Persist this as separate expiring conversation/draft state. Show a claim preview with a preview-specific approval code and require explicit confirmation of that exact preview before creating an Investigation or processing job. Natural affirmative intent is supported but must include the displayed code. `EDIT` invalidates the prior preview; `CANCEL` discards only an unconfirmed draft.
+- On confirmation, validate the current preview and create the investigation, approved claims, planned search traces, processing job, and outbox event atomically. Reuse the existing Agent Zero worker and evidence pipeline; do not create a parallel n8n research path.
+- Keep a bounded conversation context and pending draft separate from Investigation records. Use HMAC sender identity; retain no raw recipient identifier in conversation state. Draft preview expires after 30 minutes and conversational state is deleted after 24 hours. Production use still requires the approved retention/deletion and identity policies.
+- Support natural case-list/status/result requests plus optional `STATUS`, `RESULT`, and exact-reference shortcuts. Verify owner/sender scope on every read. A case reference is not authorization.
+- The initial direct Meta slice uses text replies as the confirmation fallback. Outbound interactive buttons, media, proactive completion messages, ClickCast parity, n8n, and cross-investigation knowledge are deferred. Production multi-user use remains blocked until authentication/tenant ownership, retention/deletion, provider handling, cost controls, and deployment decisions are resolved.
 
 ### Evidence answer and confidence presentation
 

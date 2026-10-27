@@ -13,36 +13,22 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi import Request as FastAPIRequest
-from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.domain.investigation import Channel, InputType, InvestigationStatus
-from app.modules.investigations.models import (
-    Finding,
-    Investigation,
-    ProcessingJob,
-    Submission,
-    VerificationBrief,
-)
-from app.modules.investigations.service import DEV_USER_ID, InvestigationService
-from app.modules.investigations.summary import finding_result_summary
+from app.modules.conversations.schemas import ConversationTurn
+from app.modules.conversations.service import ConversationService, ConversationTurnInProgress
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/channels/whatsapp", tags=["WhatsApp Cloud API"])
 MAX_WEBHOOK_BYTES = 1_000_000
-MAX_MESSAGE_CHARS = 20_000
 MAX_MESSAGES_PER_WEBHOOK = 25
 GRAPH_SEND_TIMEOUT_SECONDS = 8
 _PHONE_SENDER_PATTERN = re.compile(r"[0-9]{5,20}")
@@ -63,6 +49,11 @@ _BOT_MESSAGE_PREFIXES = (
     "that url is invalid",
     "check started",
     "your result is ready",
+    "hi, i’m agent zero",
+    "here’s what i understand you want investigated",
+    "i understood this as",
+    "your investigation has been registered",
+    "please reply submit",
 )
 
 
@@ -218,6 +209,19 @@ def _message_event(
                 return None, "bot_echo"
         else:
             return None, "invalid_text_body"
+    elif message_type == "interactive":
+        interactive = message.get("interactive")
+        reply = None
+        if isinstance(interactive, dict):
+            for key in ("button_reply", "list_reply"):
+                value = interactive.get(key)
+                if isinstance(value, dict):
+                    reply = value.get("id") or value.get("title")
+                    if isinstance(reply, str):
+                        break
+        if not isinstance(reply, str) or not reply.strip():
+            return None, "invalid_interactive_reply"
+        text = reply.strip()
     return (
         IncomingWhatsAppMessage(
             message_id=message_id,
@@ -469,195 +473,20 @@ def send_text_message(recipient: str, body: str) -> None:
         raise WhatsAppSendError("Meta message delivery failed") from exc
 
 
-def _sender_reference(sender: str, identity_key: str) -> str:
-    return hmac.new(identity_key.encode(), sender.encode(), hashlib.sha256).hexdigest()
-
-
-def _owner_id(settings) -> UUID:
-    return settings.whatsapp_owner_id or DEV_USER_ID
-
-
-def _result_message(
-    session: Session,
-    *,
-    settings,
-    sender_ref: str,
-    reference: str | None,
-) -> str:
-    statement = (
-        select(Investigation)
-        .join(Submission, Submission.investigation_id == Investigation.id)
-        .where(
-            Investigation.owner_id == _owner_id(settings),
-            Investigation.channel == Channel.WHATSAPP,
-            Submission.channel == Channel.WHATSAPP,
-            Submission.source_metadata["sender_ref"].as_string() == sender_ref,
-        )
-    )
-    if reference:
-        statement = statement.where(Investigation.reference == reference)
-    else:
-        statement = statement.order_by(Investigation.created_at.desc()).limit(1)
-    investigation = session.scalar(statement)
-    if investigation is None:
-        return (
-            "I couldn't find a check for this WhatsApp number. "
-            "Send a claim or public URL to start one."
-        )
-
-    brief = session.scalar(
-        select(VerificationBrief).where(VerificationBrief.investigation_id == investigation.id)
-    )
-    if brief is None:
-        if investigation.status == InvestigationStatus.FAILED:
-            message = "This check could not be completed. You can send the claim again later."
-        elif investigation.status == InvestigationStatus.CANCELLED:
-            message = "This check was cancelled before an assessment was ready."
-        elif investigation.status == InvestigationStatus.NEEDS_REVIEW:
-            message = (
-                "This check needs a human review. No final assessment is available yet; "
-                "please review the case in Agent Zero."
-            )
-        elif investigation.status == InvestigationStatus.COMPLETE:
-            message = (
-                "This check finished without a saved summary. No conclusion is available; "
-                "please review the case in Agent Zero."
-            )
-        else:
-            message = "This check is still processing. Send RESULT again in a little while."
-        return f"{message}\nReference: {investigation.reference}"
-
-    findings = list(
-        session.scalars(
-            select(Finding)
-            .where(Finding.investigation_id == investigation.id)
-            .order_by(Finding.created_at)
-            .limit(5)
-        )
-    )
-    summary = finding_result_summary(findings, max_chars=2600)
-    limitations = [item[:260] for item in (brief.limitations or [])[:3] if item]
-    limitation_text = "\n\nLimitations: " + "; ".join(limitations) if limitations else ""
-    return f"{summary}{limitation_text}\n\nReference: {investigation.reference}"[:3900]
-
-
-async def _handle_message(session: Session, event: IncomingWhatsAppMessage, settings) -> bool:
-    """Persist a new inquiry or answer a result command. Returns whether it was accepted."""
+async def _handle_message(
+    session: Session, event: IncomingWhatsAppMessage, settings
+) -> bool:
+    """Normalize one authenticated Meta event and delegate conversation behavior."""
     if event.phone_number_id != settings.whatsapp_phone_number_id:
         logger.warning("Ignoring WhatsApp event for an unconfigured phone number")
         return False
-    identity_key = settings.whatsapp_identity_key.get_secret_value()
-    sender_ref = _sender_reference(event.sender, identity_key)
-    if event.message_type != "text" or event.text is None:
-        await run_in_threadpool(
-            send_text_message,
-            event.sender,
-            "I can currently investigate text claims and public URLs. "
-            "Send a text claim or public link to begin.",
-        )
-        return True
-
-    command = event.text.strip()
-    if len(command) > MAX_MESSAGE_CHARS:
-        await run_in_threadpool(
-            send_text_message,
-            event.sender,
-            f"That message is too long. Please keep it under {MAX_MESSAGE_CHARS:,} characters.",
-        )
-        return True
-    if command.casefold() == "result" or command.casefold().startswith("result "):
-        reference = command[6:].strip() or None
-        if reference and not re.fullmatch(r"AZ-[0-9]{6}-[A-F0-9]{6}", reference, re.IGNORECASE):
-            await run_in_threadpool(
-                send_text_message, event.sender, "Use RESULT or RESULT AZ-YYMMDD-XXXXXX."
-            )
-            return True
-        response = _result_message(
-            session, settings=settings, sender_ref=sender_ref, reference=reference
-        )
-        await run_in_threadpool(send_text_message, event.sender, response)
-        return True
-
-    parsed = urlsplit(command)
-    if parsed.scheme in {"http", "https"}:
-        if not parsed.hostname or parsed.username or parsed.password:
-            await run_in_threadpool(
-                send_text_message,
-                event.sender,
-                "That URL is invalid. Send a public http or https link.",
-            )
-            return True
-        input_type = InputType.URL
-    else:
-        input_type = InputType.TEXT
-
-    message_digest = hashlib.sha256(event.message_id.encode()).hexdigest()
-    idempotency_key = f"meta-wa:{event.phone_number_id}:{message_digest}"
-    existing_job = session.scalar(
-        select(ProcessingJob).where(ProcessingJob.idempotency_key == idempotency_key)
+    turn = ConversationTurn(
+        message_id=event.message_id,
+        sender=event.sender,
+        message_type=event.message_type,
+        text=event.text,
     )
-    if existing_job is not None:
-        # Meta redeliveries must not enqueue another investigation. Repeating
-        # the acknowledgement lets a retry recover if the first Graph send
-        # failed after the database commit.
-        existing = session.get(Investigation, existing_job.investigation_id)
-        if existing is not None:
-            await run_in_threadpool(
-                send_text_message,
-                event.sender,
-                "Received. Agent Zero is investigating this request. Send RESULT or "
-                f"RESULT {existing.reference} to check progress and read the saved result.",
-            )
-        return True
-
-    now = datetime.now(UTC)
-    cutoff = now - timedelta(minutes=5)
-    recent_submissions = list(
-        session.scalars(
-            select(Submission)
-            .where(
-                Submission.channel == Channel.WHATSAPP,
-                Submission.source_metadata["sender_ref"].as_string() == sender_ref,
-                Submission.received_at >= cutoff,
-            )
-            .order_by(Submission.received_at.desc())
-            .limit(5)
-        )
-    )
-    if recent_submissions:
-        for prev in recent_submissions:
-            if prev.original_text and prev.original_text.strip() == command:
-                logger.info("Ignoring duplicate WhatsApp submission within 5 minutes for sender")
-                return True
-        most_recent = recent_submissions[0]
-        most_recent_time = most_recent.received_at
-        if most_recent_time:
-            if most_recent_time.tzinfo is None:
-                most_recent_time = most_recent_time.replace(tzinfo=UTC)
-            if (now - most_recent_time).total_seconds() < 10:
-                logger.warning("Throttling rapid-fire WhatsApp submission from same sender")
-                return True
-
-    investigation = InvestigationService(session).create(
-        owner_id=_owner_id(settings),
-        content=command,
-        input_type=input_type,
-        idempotency_key=idempotency_key,
-        channel=Channel.WHATSAPP,
-        source_metadata={
-            "platform": "meta_cloud_api",
-            "provider_message_id": event.message_id,
-            "sender_ref": sender_ref,
-            "message_type": "TEXT",
-        },
-    )
-    await run_in_threadpool(
-        send_text_message,
-        event.sender,
-        "Received. Agent Zero is investigating this request. Send RESULT or "
-        f"RESULT {investigation.reference} to check progress and read the saved result.",
-    )
-    return True
+    return await ConversationService(session, settings).handle_turn(turn, send_text_message)
 
 
 @router.get("/webhook", response_class=PlainTextResponse)
@@ -691,6 +520,8 @@ async def receive_webhook(
         settings = _configured_settings()
     except WhatsAppConfigurationError as exc:
         raise HTTPException(status_code=404, detail="Webhook not found") from exc
+    if not settings.whatsapp_conversation_enabled:
+        raise HTTPException(status_code=404, detail="Webhook not found")
     body_chunks: list[bytes] = []
     body_size = 0
     async for chunk in request.stream():
@@ -731,6 +562,10 @@ async def receive_webhook(
     for event in events:
         try:
             handled_messages += await _handle_message(session, event, settings)
+        except ConversationTurnInProgress as exc:
+            raise HTTPException(
+                status_code=503, detail="WhatsApp message is already being processed"
+            ) from exc
         except WhatsAppSendError as exc:
             # If Meta retries after this error, the provider message ID keeps
             # the investigation idempotent and the existing job can be used to
