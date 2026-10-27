@@ -41,6 +41,12 @@ logger = logging.getLogger(__name__)
 MAX_MESSAGE_CHARS = 20_000
 INBOUND_EVENT_PROVIDER = "meta_whatsapp_cloud"
 INBOUND_EVENT_LEASE = timedelta(minutes=3)
+_UNRESOLVED_CLAIM_PATTERN = re.compile(
+    r"(?:\[[^\]\n]{1,100}\]|\b(?:tbd|todo|placeholder|lorem ipsum)\b|"
+    r"\b(?:particular|specific|certain|unknown|unspecified|some)\s+"
+    r"(?:date|year|time|person|place|number|amount|event)\b)",
+    re.IGNORECASE,
+)
 
 
 class ConversationTurnInProgress(RuntimeError):
@@ -397,6 +403,11 @@ def _preview_code_in(text: str) -> str | None:
     return match.group(0).upper() if match else None
 
 
+def _preview_button_code(text: str, action: str) -> str | None:
+    match = re.fullmatch(rf"{re.escape(action)}\s+([A-F0-9]{{8}})", text.strip(), re.IGNORECASE)
+    return match.group(1).upper() if match else None
+
+
 def _looks_like_confirmation(text: str) -> bool:
     normalized = " ".join(text.casefold().strip().split())
     return normalized in {
@@ -468,7 +479,7 @@ def _conversation_reply(
     if "?" in text or normalized.startswith(question_starts):
         return (
             f"I haven’t researched “{subject}” yet. This chat can investigate specific factual "
-            "claims using public evidence, but it can’t provide general company profiles yet. "
+            "claims using public evidence, but it can’t provide a sourced general overview yet. "
             "Tell me the claim you want checked and I’ll show you a preview before anything "
             "starts. No investigation has started."
         )
@@ -483,7 +494,7 @@ def _conversation_reply(
     if len(normalized.split()) <= 8 and "?" in last_assistant and subject:
         return (
             f"Got it — {subject} is the topic. I haven’t researched it yet. This chat can’t "
-            "provide general company profiles, but I can check a specific factual claim "
+            "provide a sourced general overview, but I can check a specific factual claim "
             "using public evidence and show you a preview first. What claim would you like me "
             "to check? No investigation has started."
         )
@@ -498,6 +509,7 @@ async def _send_saved_reply(
     user_text: str,
     reply: str,
     send_message,
+    buttons: list[tuple[str, str]] | None = None,
 ) -> None:
     _append_turn(
         conversation,
@@ -508,7 +520,10 @@ async def _send_saved_reply(
     )
     _complete_inbound_event(session, event=event, reply=reply)
     session.commit()
-    await run_in_threadpool(send_message, event.sender, reply)
+    if buttons:
+        await run_in_threadpool(send_message, event.sender, reply, buttons)
+    else:
+        await run_in_threadpool(send_message, event.sender, reply)
 
 
 async def _confirm_conversation_draft(
@@ -879,6 +894,36 @@ async def _handle_turn(
             reply=reply,
         )
         return True
+    interactive_cancel = event.message_type == "interactive" and folded.startswith("cancel")
+    if interactive_cancel:
+        code = _preview_button_code(command, "CANCEL")
+        if (
+            not pending
+            or conversation.state != "AWAITING_CONFIRMATION"
+            or code != conversation.confirmation_token
+        ):
+            await _send_saved_reply(
+                session,
+                conversation=conversation,
+                event=event,
+                send_message=send_message,
+                user_text=command,
+                reply=(
+                    "That action belongs to an older preview, so I didn’t change anything. "
+                    "Review the latest preview or send CANCEL to discard the current draft."
+                ),
+            )
+            return True
+        _clear_conversation_draft(conversation)
+        await _send_saved_reply(
+            session,
+            conversation=conversation,
+            event=event,
+            send_message=send_message,
+            user_text=command,
+            reply="Cancelled the draft. No investigation was started.",
+        )
+        return True
     if folded == "cancel":
         if pending:
             _clear_conversation_draft(conversation)
@@ -897,13 +942,54 @@ async def _handle_turn(
             reply=reply,
         )
         return True
+    interactive_edit = event.message_type == "interactive" and folded.startswith("edit")
+    if interactive_edit and (
+        not pending
+        or conversation.state != "AWAITING_CONFIRMATION"
+        or _preview_button_code(command, "EDIT") != conversation.confirmation_token
+    ):
+        await _send_saved_reply(
+            session,
+            conversation=conversation,
+            event=event,
+            send_message=send_message,
+            user_text=command,
+            reply=(
+                "That action belongs to an older preview, so I didn’t change anything. "
+                "Review the latest preview or send EDIT followed by your correction."
+            ),
+        )
+        return True
+    if pending and conversation.state == "AWAITING_CONFIRMATION" and (
+        folded in {"edit", "edit claim"} or interactive_edit
+    ):
+        conversation.state = "NEEDS_CLARIFICATION"
+        conversation.proposed_claims = []
+        conversation.proposed_queries = []
+        conversation.confirmation_token = None
+        conversation.preview_version += 1
+        conversation.clarification_question = "Send the corrected claim or missing detail."
+        conversation.draft_expires_at = now + timedelta(minutes=30)
+        await _send_saved_reply(
+            session,
+            conversation=conversation,
+            event=event,
+            send_message=send_message,
+            user_text=command,
+            reply=(
+                "Send the corrected claim or missing detail in your next message. "
+                "I’ll prepare a new preview before anything starts. "
+                "Send CANCEL to discard the draft."
+            ),
+        )
+        return True
     if pending and conversation.state == "AWAITING_CONFIRMATION":
         folded_prefix = folded.split(maxsplit=1)[0] if folded else ""
         if folded_prefix in {"submit", "confirm"}:
             code = _preview_code_in(command)
             if code is None:
                 reply = (
-                    "To approve this exact preview, reply "
+                    "Tap Submit claim below to approve this exact preview, or reply "
                     f"SUBMIT {conversation.confirmation_token}. No investigation has started."
                 )
                 await _send_saved_reply(
@@ -913,6 +999,11 @@ async def _handle_turn(
                     send_message=send_message,
                     user_text=command,
                     reply=reply,
+                    buttons=[
+                        (f"SUBMIT {conversation.confirmation_token}", "Submit claim"),
+                        (f"EDIT {conversation.confirmation_token}", "Edit claim"),
+                        (f"CANCEL {conversation.confirmation_token}", "Cancel"),
+                    ],
                 )
                 return True
             reply, saved = await _confirm_conversation_draft(
@@ -985,6 +1076,7 @@ async def _handle_turn(
         output.intent,
         pending,
     )
+    reply_buttons: list[tuple[str, str]] | None = None
     if output.intent == "CONFIRM_DRAFT":
         code = _preview_code_in(command)
         if not pending or conversation.state != "AWAITING_CONFIRMATION":
@@ -994,9 +1086,14 @@ async def _handle_turn(
             )
         elif code is None:
             reply = (
-                "I can approve this preview once you include its code: "
+                "Tap Submit claim below to approve this exact preview, or reply "
                 f"SUBMIT {conversation.confirmation_token}. No investigation has started."
             )
+            reply_buttons = [
+                (f"SUBMIT {conversation.confirmation_token}", "Submit claim"),
+                (f"EDIT {conversation.confirmation_token}", "Edit claim"),
+                (f"CANCEL {conversation.confirmation_token}", "Cancel"),
+            ]
         else:
             reply, saved = await _confirm_conversation_draft(
                 session,
@@ -1043,6 +1140,29 @@ async def _handle_turn(
                 "There’s no unsubmitted investigation draft to cancel. "
                 "Your existing investigations are unchanged."
             )
+    elif output.intent == "INVESTIGATION_REQUEST" and any(
+        _UNRESOLVED_CLAIM_PATTERN.search(claim.text) for claim in output.claims
+    ):
+        conversation.draft_text = (
+            f"{draft_text}\nClarification: {command}"
+            if pending and draft_text
+            else (draft_text or command)
+        )
+        conversation.proposed_claims = []
+        conversation.proposed_queries = []
+        conversation.confirmation_token = None
+        conversation.preview_version += 1
+        conversation.draft_expires_at = now + timedelta(minutes=30)
+        conversation.clarification_question = (
+            "Which exact entity or public source should I use to identify this subject?"
+        )
+        conversation.state = "NEEDS_CLARIFICATION"
+        reply = (
+            "I can’t prepare a reliable claim preview from that question without filling in "
+            "missing facts. Please share a public URL or enough context to identify the exact "
+            "subject. I won’t guess at a date or what kind of entity it is. "
+            "No investigation has started."
+        )
     elif output.intent == "INVESTIGATION_REQUEST":
         conversation.draft_text = (
             f"{draft_text}\nClarification: {command}"
@@ -1107,10 +1227,15 @@ async def _handle_turn(
                 reply = (
                     f"Here’s what I understand you want investigated:\n\n{claim_lines}\n\n"
                     "I’ll look for relevant public evidence and explain important gaps. "
-                    "No investigation has started yet. To approve this exact preview, reply "
-                    f"SUBMIT {conversation.confirmation_token}. You can also confirm naturally "
-                    "with that code, EDIT followed by your correction, or CANCEL."
+                    "No investigation has started. Choose an action below. If buttons aren’t "
+                    f"available, reply SUBMIT {conversation.confirmation_token}, EDIT followed "
+                    "by your correction, or CANCEL."
                 )
+                reply_buttons = [
+                    (f"SUBMIT {conversation.confirmation_token}", "Submit claim"),
+                    (f"EDIT {conversation.confirmation_token}", "Edit claim"),
+                    (f"CANCEL {conversation.confirmation_token}", "Cancel"),
+                ]
     else:
         reply = _conversation_reply(command, context=context)
 
@@ -1121,6 +1246,7 @@ async def _handle_turn(
         send_message=send_message,
         user_text=event.text,
         reply=reply,
+        buttons=reply_buttons,
     )
     return True
 

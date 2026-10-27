@@ -14,7 +14,7 @@ Agent Zero already has a ClickCast adapter that accepts text/URL submissions and
 - Accept events only for the configured phone-number ID. Ignore status callbacks and reject malformed or unauthenticated deliveries.
 - Support text and public-URL submissions in the first slice. Explain that media messages are not yet supported.
 - Accept numeric and plus-prefixed phone IDs, regular BSUIDs (`CC.<id>`), and parent BSUIDs (`CC.ENT.<id>`). `messages[].from` may be absent or non-string in username-era payloads, so fall back to message-level `from_user_id` / `from_parent_user_id`; if those are absent, use `contacts[].user_id`, `parent_user_id`, or `wa_id` only when there is exactly one contact. Never guess a contact in an ambiguous batch. Normalize plus-prefixed phone numbers to digits for Cloud API replies and sender HMACs, while preserving opaque BSUID values exactly.
-- Send only user-initiated text replies to the sender ID from the verified webhook event. The user can send `RESULT` or `RESULT AZ-YYMMDD-XXXXXX` to retrieve the latest or a specific result. No recipient identifier is persisted for later outbound messaging.
+- Send only user-initiated text replies and interactive reply buttons to the sender ID from the verified webhook event. Preview buttons use stable action IDs; Submit includes the current preview token. The user can send `RESULT` or `RESULT AZ-YYMMDD-XXXXXX` to retrieve the latest or a specific result. No recipient identifier is persisted for later outbound messaging.
 - Store sender ownership as an HMAC reference, never as the raw phone number or BSUID. Scope result lookup to the configured owner, WhatsApp channel, and sender reference.
 - Use the provider message ID, hashed into a bounded idempotency key, so webhook redelivery does not create a second investigation. Outbound acknowledgements are at-least-once; a delivery retry may repeat the acknowledgement.
 - Prevent automated feedback loops: reject messages whose sender matches `metadata.phone_number_id` or `display_phone_number` (`self_message`); reject incoming messages matching known Agent Zero or ClickCast bot output prefixes (`bot_echo`); suppress duplicate submissions with identical text from the same sender within 5 minutes; and throttle consecutive submissions from the same sender within 10 seconds.
@@ -40,7 +40,7 @@ The Meta callback is `https://sinaps-wa-webhook.sinaps-wa-webhooks.workers.dev/w
 - Meta Cloud API and ClickCast are separate transport adapters over the same investigation lifecycle.
 - The channel stores the original submitted text in the existing Submission record, as other channels do. It stores only a pseudonymous sender reference for retrieval authorization.
 - No database migration is required.
-- Text/URL intake, immediate acknowledgement, and user-requested result retrieval are supported for phone-number, regular BSUID, and parent BSUID senders. Media downloads, interactive messages, status-callback persistence, templates, and completion-time outbound pushes are not included.
+- Text/URL intake, immediate acknowledgement, preview-bound reply buttons, and user-requested result retrieval are supported for phone-number, regular BSUID, and parent BSUID senders. Media downloads, status-callback persistence, templates, and completion-time outbound pushes are not included.
 - The existing application cannot be considered production-ready solely because webhook signatures are verified. Production authentication, retention/deletion, and deployment controls remain open.
 
 ## Verification

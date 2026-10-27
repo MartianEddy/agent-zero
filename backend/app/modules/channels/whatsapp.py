@@ -216,7 +216,7 @@ def _message_event(
             for key in ("button_reply", "list_reply"):
                 value = interactive.get(key)
                 if isinstance(value, dict):
-                    reply = value.get("id") or value.get("title")
+                    reply = value.get("id")
                     if isinstance(reply, str):
                         break
         if not isinstance(reply, str) or not reply.strip():
@@ -434,11 +434,67 @@ class _NoRedirect(HTTPRedirectHandler):
 
 def send_text_message(recipient: str, body: str) -> None:
     """Send a user-initiated service reply through the configured phone number."""
-    settings = _configured_settings()
     if not _valid_whatsapp_user_id(recipient) or not body.strip() or len(body) > 4096:
         raise WhatsAppSendError("Outbound message is invalid")
+    _send_cloud_message(
+        recipient,
+        {
+            "messaging_product": "whatsapp",
+            "to": recipient,
+            "type": "text",
+            "text": {"body": body.strip()},
+        },
+    )
+
+
+def send_reply_buttons(
+    recipient: str, body: str, buttons: list[tuple[str, str]]
+) -> None:
+    """Send up to three Meta quick-reply buttons with stable application action IDs."""
+    if (
+        not _valid_whatsapp_user_id(recipient)
+        or not body.strip()
+        or len(body) > 1024
+        or not 1 <= len(buttons) <= 3
+    ):
+        raise WhatsAppSendError("Interactive WhatsApp message is invalid")
+    ids = [button_id for button_id, _title in buttons]
+    if len(ids) != len(set(ids)) or any(
+        not button_id
+        or len(button_id) > 256
+        or not title
+        or len(title) > 20
+        for button_id, title in buttons
+    ):
+        raise WhatsAppSendError("Interactive WhatsApp buttons are invalid")
+    _send_cloud_message(
+        recipient,
+        {
+            "messaging_product": "whatsapp",
+            "to": recipient,
+            "type": "interactive",
+            "interactive": {
+                "type": "button",
+                "body": {"text": body.strip()},
+                "action": {
+                    "buttons": [
+                        {
+                            "type": "reply",
+                            "reply": {"id": button_id, "title": title},
+                        }
+                        for button_id, title in buttons
+                    ]
+                },
+            },
+        },
+    )
+
+
+def _send_cloud_message(recipient: str, payload: dict) -> None:
+    settings = _configured_settings()
     if _E164_SENDER_PATTERN.fullmatch(recipient):
         recipient = recipient[1:]
+    payload["to"] = recipient
     phone_number_id = settings.whatsapp_phone_number_id
     endpoint = (
         f"https://graph.facebook.com/{settings.whatsapp_graph_api_version}/"
@@ -446,14 +502,7 @@ def send_text_message(recipient: str, body: str) -> None:
     )
     request = Request(
         endpoint,
-        data=json.dumps(
-            {
-                "messaging_product": "whatsapp",
-                "to": recipient,
-                "type": "text",
-                "text": {"body": body.strip()},
-            }
-        ).encode(),
+        data=json.dumps(payload).encode(),
         headers={
             "Authorization": f"Bearer {settings.whatsapp_access_token.get_secret_value()}",
             "Content-Type": "application/json",
@@ -473,6 +522,19 @@ def send_text_message(recipient: str, body: str) -> None:
         raise WhatsAppSendError("Meta message delivery failed") from exc
 
 
+def _send_whatsapp_reply(
+    recipient: str, body: str, buttons: list[tuple[str, str]] | None = None
+) -> None:
+    if buttons:
+        if len(body) <= 1024:
+            send_reply_buttons(recipient, body, buttons)
+        else:
+            send_text_message(recipient, body)
+            send_reply_buttons(recipient, "Choose an action for the preview above.", buttons)
+    else:
+        send_text_message(recipient, body)
+
+
 async def _handle_message(
     session: Session, event: IncomingWhatsAppMessage, settings
 ) -> bool:
@@ -486,7 +548,7 @@ async def _handle_message(
         message_type=event.message_type,
         text=event.text,
     )
-    return await ConversationService(session, settings).handle_turn(turn, send_text_message)
+    return await ConversationService(session, settings).handle_turn(turn, _send_whatsapp_reply)
 
 
 @router.get("/webhook", response_class=PlainTextResponse)

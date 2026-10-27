@@ -275,6 +275,47 @@ def test_parser_ignores_non_message_webhook_fields() -> None:
     assert parse_message_events(payload) == []
 
 
+def test_parser_uses_meta_reply_button_id_as_the_inbound_action() -> None:
+    from app.modules.channels.whatsapp import _message_event
+
+    event, rejection = _message_event(
+        {
+            "id": "wamid.button-reply",
+            "from": "254700000000",
+            "type": "interactive",
+            "interactive": {
+                "type": "button_reply",
+                "button_reply": {"id": "SUBMIT 1234ABCD", "title": "Submit claim"},
+            },
+        },
+        "12345",
+    )
+
+    assert rejection is None
+    assert event is not None
+    assert event.text == "SUBMIT 1234ABCD"
+
+
+def test_parser_rejects_interactive_reply_without_a_stable_action_id() -> None:
+    from app.modules.channels.whatsapp import _message_event
+
+    event, rejection = _message_event(
+        {
+            "id": "wamid.button-without-id",
+            "from": "254700000000",
+            "type": "interactive",
+            "interactive": {
+                "type": "button_reply",
+                "button_reply": {"title": "Submit claim"},
+            },
+        },
+        "12345",
+    )
+
+    assert event is None
+    assert rejection == "invalid_interactive_reply"
+
+
 def test_cloud_api_send_uses_configured_version_and_bearer_auth() -> None:
     from app.modules.channels.whatsapp import send_text_message
 
@@ -319,6 +360,74 @@ def test_cloud_api_send_uses_configured_version_and_bearer_auth() -> None:
             "type": "text",
             "text": {"body": "Received"},
         }
+
+
+def test_cloud_api_send_reply_buttons_with_stable_action_ids() -> None:
+    from app.modules.channels.whatsapp import send_reply_buttons
+
+    response = type("Response", (), {"status": 200, "read": lambda self, _size: b"{}"})()
+    with (
+        patch("app.modules.channels.whatsapp.get_settings") as get_settings,
+        patch("app.modules.channels.whatsapp.build_opener") as build_opener,
+    ):
+        get_settings.return_value = SimpleNamespace(
+            whatsapp_access_token=SimpleNamespace(get_secret_value=lambda: "access-token"),
+            whatsapp_app_secret=SimpleNamespace(get_secret_value=lambda: "app-secret"),
+            whatsapp_verify_token=SimpleNamespace(get_secret_value=lambda: "verify-token"),
+            whatsapp_identity_key=SimpleNamespace(get_secret_value=lambda: "i" * 32),
+            whatsapp_phone_number_id="12345",
+            whatsapp_graph_api_version="v25.0",
+        )
+        build_opener.return_value.open.return_value.__enter__.return_value = response
+
+        send_reply_buttons(
+            "254700000000",
+            "Review this preview.",
+            [("SUBMIT 1234ABCD", "Submit claim"), ("EDIT", "Edit claim"), ("CANCEL", "Cancel")],
+        )
+
+        request = build_opener.return_value.open.call_args.args[0]
+        assert json.loads(request.data) == {
+            "messaging_product": "whatsapp",
+            "to": "254700000000",
+            "type": "interactive",
+            "interactive": {
+                "type": "button",
+                "body": {"text": "Review this preview."},
+                "action": {
+                    "buttons": [
+                        {
+                            "type": "reply",
+                            "reply": {"id": "SUBMIT 1234ABCD", "title": "Submit claim"},
+                        },
+                        {
+                            "type": "reply",
+                            "reply": {"id": "EDIT", "title": "Edit claim"},
+                        },
+                        {
+                            "type": "reply",
+                            "reply": {"id": "CANCEL", "title": "Cancel"},
+                        },
+                    ]
+                },
+            },
+        }
+
+
+def test_long_interactive_preview_keeps_full_text_and_sends_separate_actions() -> None:
+    from app.modules.channels.whatsapp import _send_whatsapp_reply
+
+    buttons = [("SUBMIT 1234ABCD", "Submit claim"), ("EDIT", "Edit claim")]
+    with (
+        patch("app.modules.channels.whatsapp.send_text_message") as send_text,
+        patch("app.modules.channels.whatsapp.send_reply_buttons") as send_buttons,
+    ):
+        _send_whatsapp_reply("254700000000", "x" * 1025, buttons)
+
+    send_text.assert_called_once_with("254700000000", "x" * 1025)
+    send_buttons.assert_called_once_with(
+        "254700000000", "Choose an action for the preview above.", buttons
+    )
 
 
 def test_cloud_api_send_accepts_business_scoped_user_id() -> None:
@@ -731,6 +840,11 @@ def test_natural_confirmation_requires_the_code_for_the_active_preview() -> None
     investigations.return_value.create.assert_not_called()
     assert "SUBMIT 89ABCDEF" in send.call_args.args[1]
     assert "No investigation has started" in send.call_args.args[1]
+    assert send.call_args.args[2] == [
+        ("SUBMIT 89ABCDEF", "Submit claim"),
+        ("EDIT 89ABCDEF", "Edit claim"),
+        ("CANCEL 89ABCDEF", "Cancel"),
+    ]
 
 
 def test_previous_preview_code_cannot_approve_replacement_preview() -> None:
@@ -810,7 +924,7 @@ def test_inbound_text_uses_luna_to_create_preview_without_creating_case() -> Non
         patch("app.modules.conversations.service._complete_inbound_event"),
         patch("app.modules.conversations.service.InvestigationService") as service,
         patch("app.modules.conversations.service.ModelGateway") as gateway,
-        patch("app.modules.channels.whatsapp.send_text_message") as send,
+        patch("app.modules.channels.whatsapp.send_reply_buttons") as send,
         patch(
             "app.modules.conversations.service.run_in_threadpool",
             side_effect=immediate_in_threadpool,
@@ -827,7 +941,190 @@ def test_inbound_text_uses_luna_to_create_preview_without_creating_case() -> Non
     preview = send.call_args.args[1]
     assert "SUBMIT " in preview
     assert conversation.confirmation_token in preview
-    assert "No investigation has started yet" in send.call_args.args[1]
+    assert "No investigation has started" in send.call_args.args[1]
+    assert send.call_args.args[2] == [
+        (f"SUBMIT {conversation.confirmation_token}", "Submit claim"),
+        (f"EDIT {conversation.confirmation_token}", "Edit claim"),
+        (f"CANCEL {conversation.confirmation_token}", "Cancel"),
+    ]
+
+
+def test_placeholder_claim_from_luna_is_rejected_before_preview() -> None:
+    session = MagicMock()
+    conversation = _conversation_fixture()
+    session.scalar.return_value = conversation
+    session.get.return_value = SimpleNamespace(id=UUID(int=1))
+    event = IncomingWhatsAppMessage(
+        message_id="wamid.placeholder-claim",
+        sender="254700000000",
+        phone_number_id="12345",
+        message_type="text",
+        text="When was it founded?",
+    )
+    output = SimpleNamespace(
+        intent="INVESTIGATION_REQUEST",
+        reply="",
+        claims=[
+            SimpleNamespace(
+                text="Sinaps Technology was founded on a particular date.",
+                claim_type="CHECKABLE_EVENT",
+            )
+        ],
+        queries=[],
+        clarification_question=None,
+        reference=None,
+    )
+
+    async def immediate_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    with (
+        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service._complete_inbound_event"),
+        patch("app.modules.conversations.service.InvestigationService") as investigations,
+        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch("app.modules.channels.whatsapp.send_text_message") as send,
+        patch(
+            "app.modules.conversations.service.run_in_threadpool",
+            side_effect=immediate_in_threadpool,
+        ),
+    ):
+        gateway.return_value.interpret_whatsapp_turn = AsyncMock(
+            return_value=SimpleNamespace(output=output)
+        )
+        assert asyncio.run(_handle_message(session, event, _settings()))
+
+    investigations.return_value.create.assert_not_called()
+    assert conversation.state == "NEEDS_CLARIFICATION"
+    assert conversation.proposed_claims == []
+    assert conversation.confirmation_token is None
+    assert "particular date" not in send.call_args.args[1]
+    assert "No investigation has started" in send.call_args.args[1]
+
+
+def test_edit_button_reopens_draft_without_preserving_old_preview() -> None:
+    from app.modules.conversations.service import ConversationService
+
+    session = MagicMock()
+    conversation = _conversation_fixture(
+        state="AWAITING_CONFIRMATION",
+        draft_text="Check the founding date of Sinaps Technology",
+        proposed_claims=[{"text": "Old claim text", "claim_type": "CHECKABLE_EVENT"}],
+        proposed_queries=[{"text": "old query"}],
+        confirmation_token="1234ABCD",
+        preview_version=1,
+        draft_expires_at=datetime.now(UTC) + timedelta(minutes=10),
+    )
+    session.scalar.return_value = conversation
+    turn = ConversationTurn(
+        message_id="wamid.edit-button",
+        sender="254700000000",
+        message_type="interactive",
+        text="EDIT 1234ABCD",
+    )
+    send = MagicMock()
+
+    async def immediate_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    with (
+        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service._complete_inbound_event"),
+        patch(
+            "app.modules.conversations.service.run_in_threadpool",
+            side_effect=immediate_in_threadpool,
+        ),
+    ):
+        assert asyncio.run(ConversationService(session, _settings()).handle_turn(turn, send))
+
+    assert conversation.state == "NEEDS_CLARIFICATION"
+    assert conversation.proposed_claims == []
+    assert conversation.proposed_queries == []
+    assert conversation.confirmation_token is None
+    assert conversation.preview_version == 2
+    assert "Send the corrected claim" in send.call_args.args[1]
+
+
+def test_stale_edit_button_cannot_change_a_newer_preview() -> None:
+    from app.modules.conversations.service import ConversationService
+
+    session = MagicMock()
+    conversation = _conversation_fixture(
+        state="AWAITING_CONFIRMATION",
+        draft_text="Check the founding date",
+        proposed_claims=[{"text": "Current claim", "claim_type": "CHECKABLE_EVENT"}],
+        confirmation_token="1234ABCD",
+        preview_version=2,
+        draft_expires_at=datetime.now(UTC) + timedelta(minutes=10),
+    )
+    session.scalar.return_value = conversation
+    turn = ConversationTurn(
+        message_id="wamid.stale-edit-button",
+        sender="254700000000",
+        message_type="interactive",
+        text="EDIT DEADBEEF",
+    )
+    send = MagicMock()
+
+    async def immediate_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    with (
+        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service._complete_inbound_event"),
+        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch(
+            "app.modules.conversations.service.run_in_threadpool",
+            side_effect=immediate_in_threadpool,
+        ),
+    ):
+        assert asyncio.run(ConversationService(session, _settings()).handle_turn(turn, send))
+
+    gateway.return_value.interpret_whatsapp_turn.assert_not_called()
+    assert conversation.state == "AWAITING_CONFIRMATION"
+    assert conversation.confirmation_token == "1234ABCD"
+    assert conversation.proposed_claims[0]["text"] == "Current claim"
+    assert "older preview" in send.call_args.args[1]
+
+
+def test_stale_cancel_button_cannot_discard_a_newer_preview() -> None:
+    from app.modules.conversations.service import ConversationService
+
+    session = MagicMock()
+    conversation = _conversation_fixture(
+        state="AWAITING_CONFIRMATION",
+        draft_text="Check the founding date",
+        proposed_claims=[{"text": "Current claim", "claim_type": "CHECKABLE_EVENT"}],
+        confirmation_token="1234ABCD",
+        preview_version=2,
+        draft_expires_at=datetime.now(UTC) + timedelta(minutes=10),
+    )
+    session.scalar.return_value = conversation
+    turn = ConversationTurn(
+        message_id="wamid.stale-cancel-button",
+        sender="254700000000",
+        message_type="interactive",
+        text="CANCEL DEADBEEF",
+    )
+    send = MagicMock()
+
+    async def immediate_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    with (
+        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service._complete_inbound_event"),
+        patch(
+            "app.modules.conversations.service.run_in_threadpool",
+            side_effect=immediate_in_threadpool,
+        ),
+    ):
+        assert asyncio.run(ConversationService(session, _settings()).handle_turn(turn, send))
+
+    assert conversation.state == "AWAITING_CONFIRMATION"
+    assert conversation.confirmation_token == "1234ABCD"
+    assert conversation.proposed_claims[0]["text"] == "Current claim"
+    assert "older preview" in send.call_args.args[1]
 
 
 def test_explicit_submit_creates_one_investigation_from_approved_claims() -> None:
@@ -1115,7 +1412,7 @@ def test_greeting_is_conversational_and_does_not_create_an_investigation() -> No
 def test_factual_question_without_question_mark_gets_a_useful_safe_response() -> None:
     reply = _conversation_reply("What is Sinaps Technology")
 
-    assert "can’t provide general company profiles yet" in reply
+    assert "can’t provide a sourced general overview yet" in reply
     assert "specific factual claim" in reply
     assert "No investigation has started" in reply
 
@@ -1140,5 +1437,5 @@ def test_short_topic_follow_up_is_acknowledged_instead_of_repeating_generic_prom
 def test_factual_question_with_question_mark_uses_same_scope_and_safety_copy() -> None:
     reply = _conversation_reply("What is Sinaps Technology?")
 
-    assert "can’t provide general company profiles yet" in reply
+    assert "can’t provide a sourced general overview yet" in reply
     assert "No investigation has started" in reply
