@@ -15,6 +15,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -51,6 +52,7 @@ from app.modules.investigations.schemas import (
     TriageRequest,
 )
 from app.modules.investigations.service import DEV_USER_ID, InvestigationService
+from app.modules.investigations.triage import normalize_claim_text
 from app.modules.sources.registry import classify_source
 from app.storage.s3 import delete_private_object, get_private_object, put_private_object
 
@@ -203,7 +205,7 @@ def continue_triaged_investigation(
                 Claim(
                     investigation_id=investigation.id,
                     text=item.text,
-                    normalized_text=" ".join(item.text.casefold().split()),
+                    normalized_text=normalize_claim_text(item.text),
                     claim_type=item.claim_type,
                     needs_deep_investigation=item.needs_deep_investigation,
                 )
@@ -492,7 +494,7 @@ async def create_media_investigation(
                     Claim(
                         investigation_id=investigation.id,
                         text=item.text,
-                        normalized_text=" ".join(item.text.casefold().split()),
+                        normalized_text=normalize_claim_text(item.text),
                         claim_type=item.claim_type,
                         needs_deep_investigation=item.needs_deep_investigation,
                     )
@@ -884,3 +886,39 @@ def get_investigation_results(investigation_id: UUID, session: DbSession) -> dic
             else None
         ),
     }
+
+
+@router.get("/{investigation_id}/export")
+def export_investigation_json(investigation_id: UUID, session: DbSession) -> Response:
+    """Download the saved results projection without reconstructing case data."""
+    owner_id = current_owner_id()
+    investigation = InvestigationService(session).get(
+        investigation_id=investigation_id,
+        owner_id=owner_id,
+    )
+    if investigation is None:
+        raise HTTPException(status_code=404, detail="Investigation not found")
+
+    case_data = get_investigation_results(investigation_id, session)
+    document = {
+        "schema_version": 1,
+        "investigation": {
+            "id": str(investigation.id),
+            "reference": investigation.reference,
+            "created_at": investigation.created_at,
+            "updated_at": investigation.updated_at,
+            "status": investigation.status.value,
+            "current_stage": investigation.current_stage,
+        },
+        "case": case_data,
+    }
+    filename = f"agent-zero-case-{investigation.reference}.json"
+    return Response(
+        content=json.dumps(jsonable_encoder(document), ensure_ascii=False, indent=2),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )

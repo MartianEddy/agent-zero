@@ -15,6 +15,7 @@ from urllib.parse import parse_qsl, quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from app.core.config import get_settings
+from app.core.tracing import tracer
 
 MAX_PAGE_BYTES = 300_000
 MAX_PAGE_CHARS = 60_000
@@ -168,19 +169,28 @@ def read_public_page(url: str, *, timeout_seconds: float = READ_TIMEOUT_SECONDS)
         reader_url,
         headers=headers,
     )
-    try:
-        opener = build_opener(_NoRedirect)
-        with opener.open(request, timeout=max(0.1, min(READ_TIMEOUT_SECONDS, timeout_seconds))) as response:
-            if response.status != 200:
-                raise SourceRetrievalError(f"Source reader returned HTTP {response.status}")
-            content_type = response.headers.get_content_type()
-            if content_type not in {"text/plain", "text/markdown", "text/html"}:
-                raise SourceRetrievalError("Source reader returned an unsupported content type")
-            payload = response.read(MAX_PAGE_BYTES + 1)
-    except HTTPError as exc:
-        raise SourceRetrievalError(f"Source reader returned HTTP {exc.code}") from exc
-    except (URLError, TimeoutError, OSError) as exc:
-        raise SourceRetrievalError("Source reader request failed") from exc
+    with tracer(__name__).start_as_current_span(
+        "source.retrieve", record_exception=False, set_status_on_exception=False
+    ) as span:
+        span.set_attribute("agent_zero.source.reader", "jina_reader")
+        try:
+            opener = build_opener(_NoRedirect)
+            request_timeout = max(0.1, min(READ_TIMEOUT_SECONDS, timeout_seconds))
+            with opener.open(request, timeout=request_timeout) as response:
+                span.set_attribute("http.response.status_code", response.status)
+                if response.status != 200:
+                    raise SourceRetrievalError(f"Source reader returned HTTP {response.status}")
+                content_type = response.headers.get_content_type()
+                if content_type not in {"text/plain", "text/markdown", "text/html"}:
+                    raise SourceRetrievalError("Source reader returned an unsupported content type")
+                payload = response.read(MAX_PAGE_BYTES + 1)
+        except HTTPError as exc:
+            span.set_attribute("http.response.status_code", exc.code)
+            span.set_attribute("error", True)
+            raise SourceRetrievalError(f"Source reader returned HTTP {exc.code}") from exc
+        except (URLError, TimeoutError, OSError) as exc:
+            span.set_attribute("error", True)
+            raise SourceRetrievalError("Source reader request failed") from exc
 
     if len(payload) > MAX_PAGE_BYTES:
         raise SourceRetrievalError("Retrieved page exceeds the configured size limit")

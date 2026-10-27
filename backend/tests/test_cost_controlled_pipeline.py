@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
@@ -38,6 +39,7 @@ from app.modules.investigations.models import (
 from app.modules.investigations.orchestrator import (
     _persist_findings,
     _persist_plan,
+    _evidence_packet,
     _query_for_freshness,
     process_investigation,
 )
@@ -135,9 +137,7 @@ class CostControlledPipelineTests(unittest.TestCase):
             claims=[
                 PlannedClaim(
                     text="Schools in Nyeri County will remain closed tomorrow.",
-                    normalized_text="schools in nyeri county will remain closed tomorrow",
                     claim_type="CHECKABLE_EVENT",
-                    needs_deep_investigation=True,
                 )
             ],
             queries=queries or ["Nyeri County schools closure official notice"],
@@ -171,14 +171,11 @@ class CostControlledPipelineTests(unittest.TestCase):
                             ReasonedFinding(
                                 claim_id=str(claim.id),
                                 status="SUPPORTED",
-                                statement="The retrieved passage supports the claim.",
                                 explanation=[ExplanationSentence(sentence="The retrieved passage supports the claim.", evidence_ids=[str(evidence.id)])],
                                 evidence=[
                                     {"evidence_id": str(evidence.id), "relationship": "SUPPORTS"}
                                 ],
-                                        evidence_confidence="MEDIUM",
-            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
-)
+                            )
                         ]
                     ),
                     provider="openai",
@@ -264,12 +261,12 @@ class CostControlledPipelineTests(unittest.TestCase):
         result = self._run_with_patches(self._provider_patches(final_error=True))
         self.assertEqual(result, "needs_review")
         self.assertEqual(self.session.scalar(select(func.count()).select_from(Claim)), 1)
-        self.assertEqual(self.session.scalar(select(func.count()).select_from(Source)), 1)
+        self.assertEqual(self.session.scalar(select(func.count()).select_from(Source)), 3)
         self.assertEqual(
             self.session.scalar(
                 select(func.count()).select_from(Evidence).where(Evidence.source_id.is_not(None))
             ),
-            1,
+            3,
         )
         self.assertEqual(self.session.scalar(select(func.count()).select_from(Finding)), 0)
         self.assertIn(
@@ -288,10 +285,14 @@ class CostControlledPipelineTests(unittest.TestCase):
             "original records and recent reporting",
             _query_for_freshness("Mwai Kibaki biography", "BALANCED"),
         )
-        self.assertEqual(
-            _query_for_freshness("Mwai Kibaki presidency 2002 to 2013", "HISTORICAL"),
-            "Mwai Kibaki presidency 2002 to 2013",
+        historical_query = _query_for_freshness(
+            "Mwai Kibaki presidency 2002 to 2013", "HISTORICAL"
         )
+        self.assertIn(
+            "prioritize historical context and original records",
+            historical_query,
+        )
+        self.assertEqual(_query_for_freshness(historical_query, "HISTORICAL"), historical_query)
         self.assertEqual(
             ResearchPlan(
                 queries=[PlannedQuery(text="latest cabinet changes", freshness="CURRENT")]
@@ -382,9 +383,7 @@ class CostControlledPipelineTests(unittest.TestCase):
             claims=[
                 PlannedClaim(
                     text="Kenya gained independence in 1963.",
-                    normalized_text="kenya gained independence in 1963",
                     claim_type="SETTLED_FACT",
-                    needs_deep_investigation=False,
                 )
             ],
             queries=[
@@ -415,6 +414,37 @@ class CostControlledPipelineTests(unittest.TestCase):
         self.assertTrue(all(trace.route_metadata["source_lane"] == "PRIMARY" for trace in traces))
         self.assertTrue(all(trace.route_metadata["topic"] == "history" for trace in traces))
         self.assertTrue(all(trace.route_metadata["jurisdiction"] == ["Kenya"] for trace in traces))
+
+    def test_plan_discards_queries_for_nonexistent_claims(self) -> None:
+        plan = ResearchPlan(
+            claims=[
+                PlannedClaim(
+                    text="Kenya gained independence in 1963.",
+                    claim_type="SETTLED_FACT",
+                )
+            ],
+            queries=[
+                PlannedQuery(
+                    text="query wrongly assigned to a second claim",
+                    claim_index=1,
+                )
+            ],
+        )
+        with patch(
+            "app.modules.investigations.orchestrator.get_settings", return_value=self.settings
+        ):
+            _persist_plan(self.session, self.investigation, plan)
+
+        traces = list(
+            self.session.scalars(
+                select(SearchTrace).where(
+                    SearchTrace.investigation_id == self.investigation.id
+                )
+            )
+        )
+        self.assertTrue(traces)
+        self.assertNotIn("query wrongly assigned to a second claim", {item.query for item in traces})
+        self.assertTrue(all(item.route_metadata["claim_index"] == 0 for item in traces))
 
     def test_retrieval_budget_limits_pages(self) -> None:
         self.settings.max_retrieved_sources = 1
@@ -504,10 +534,7 @@ class CostControlledPipelineTests(unittest.TestCase):
                     ReasonedFinding(
                         claim_id=str(claim.id),
                         status="SUPPORTED",
-                        statement="Unsupported assertion.",
                         evidence=[],
-                                evidence_confidence="MEDIUM",
-            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
 )
                 ]
             ),
@@ -515,6 +542,71 @@ class CostControlledPipelineTests(unittest.TestCase):
         finding = self.session.scalar(select(Finding).where(Finding.claim_id == claim.id))
         self.assertEqual(finding.status, "INSUFFICIENT_EVIDENCE")
         self.assertEqual(self.session.scalar(select(func.count()).select_from(FindingEvidence)), 0)
+
+    def test_prompt_injection_fixture_is_untrusted_and_cannot_invent_cited_evidence(self) -> None:
+        claim = Claim(
+            investigation_id=self.investigation.id,
+            text="The new government policy reduced hospital waiting times.",
+            normalized_text="the new government policy reduced hospital waiting times.",
+            claim_type="CHECKABLE_EVENT",
+        )
+        source = Source(
+            investigation_id=self.investigation.id,
+            url="https://news.example/policy",
+            domain="news.example",
+            publisher="News Example",
+            source_type="NEWS",
+            retrieval_status="RETRIEVED",
+        )
+        excerpt = (
+            Path(__file__).parent / "fixtures" / "prompt_injection_source.txt"
+        ).read_text()
+        self.session.add_all([claim, source])
+        self.session.flush()
+        evidence = Evidence(
+            investigation_id=self.investigation.id,
+            source_id=source.id,
+            content=excerpt,
+            method="TEST_FIXTURE",
+            run_id=self.investigation.id,
+            excerpt_validated=True,
+        )
+        self.session.add(evidence)
+        self.session.flush()
+        self.session.add(ClaimEvidence(claim_id=claim.id, evidence_id=evidence.id))
+        self.session.commit()
+
+        packet = _evidence_packet(self.session, self.investigation)
+        self.assertIn("UNTRUSTED_EVIDENCE_DATA", packet)
+        self.assertIn("SYSTEM OVERRIDE", packet)
+        _persist_findings(
+            self.session,
+            self.investigation,
+            EvidenceReasoning(
+                findings=[
+                    ReasonedFinding(
+                        claim_id=str(claim.id),
+                        status="SUPPORTED",
+                        evidence=[
+                            {
+                                "evidence_id": "EVIDENCE-ADMIN-APPROVED",
+                                "relationship": "SUPPORTS",
+                            }
+                        ],
+                        explanation=[
+                            ExplanationSentence(
+                                sentence="The policy reduced hospital waiting times.",
+                                evidence_ids=["EVIDENCE-ADMIN-APPROVED"],
+                            )
+                        ],
+                    )
+                ]
+            ),
+        )
+
+        finding = self.session.scalar(select(Finding).where(Finding.claim_id == claim.id))
+        self.assertEqual(finding.status, "INSUFFICIENT_EVIDENCE")
+        self.assertEqual(finding.explanation_json, [])
 
     def test_contradicted_finding_requires_contradicting_evidence(self) -> None:
         claim = Claim(
@@ -551,16 +643,85 @@ class CostControlledPipelineTests(unittest.TestCase):
                     ReasonedFinding(
                         claim_id=str(claim.id),
                         status="CONTRADICTED",
-                        statement="Unsupported contradiction.",
                         evidence=[{"evidence_id": str(evidence.id), "relationship": "SUPPORTS"}],
-                                evidence_confidence="MEDIUM",
-            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
 )
                 ]
             ),
         )
         finding = self.session.scalar(select(Finding).where(Finding.claim_id == claim.id))
         self.assertEqual(finding.status, "INSUFFICIENT_EVIDENCE")
+
+    def test_duplicate_model_findings_for_one_claim_cannot_make_order_change_verdict(self) -> None:
+        claim = Claim(
+            investigation_id=self.investigation.id,
+            text="A specific testable claim.",
+            normalized_text="a specific testable claim",
+            claim_type="CHECKABLE_EVENT",
+        )
+        self.session.add(claim)
+        self.session.flush()
+        evidence_ids: list[str] = []
+        for index, domain in enumerate(("nation.africa", "standardmedia.co.ke")):
+            source = Source(
+                investigation_id=self.investigation.id,
+                url=f"https://{domain}/duplicate-output-{index}",
+                domain=domain,
+                publisher=domain,
+                source_type="NEWS",
+                retrieval_status="RETRIEVED",
+            )
+            self.session.add(source)
+            self.session.flush()
+            content = f"Retrieved source {index} confirms the specific testable claim."
+            evidence = Evidence(
+                investigation_id=self.investigation.id,
+                source_id=source.id,
+                content=content,
+                method="TEST_FIXTURE",
+                source_tier="REPUTABLE_REPORTING",
+                excerpt_start=0,
+                excerpt_end=len(content),
+                independence_group_id=f"duplicate-test-group-{index}",
+                run_id=self.investigation.id,
+                excerpt_validated=True,
+            )
+            self.session.add(evidence)
+            self.session.flush()
+            self.session.add(ClaimEvidence(claim_id=claim.id, evidence_id=evidence.id))
+            evidence_ids.append(str(evidence.id))
+        self.session.commit()
+
+        supported = ReasonedFinding(
+            claim_id=str(claim.id),
+            status="SUPPORTED",
+            evidence=[
+                {"evidence_id": value, "relationship": "SUPPORTS"} for value in evidence_ids
+            ],
+            explanation=[
+                ExplanationSentence(
+                    sentence="The retrieved sources support this claim.",
+                    evidence_ids=evidence_ids,
+                )
+            ],
+        )
+        unverified = ReasonedFinding(
+            claim_id=str(claim.id),
+            status="INSUFFICIENT_EVIDENCE",
+        )
+
+        outcomes = []
+        for proposals in ([supported, unverified], [unverified, supported]):
+            _persist_findings(
+                self.session,
+                self.investigation,
+                EvidenceReasoning(findings=proposals),
+            )
+            outcome = self.session.scalar(select(Finding).where(Finding.claim_id == claim.id))
+            outcomes.append(outcome.status)
+            self.session.delete(outcome)
+            self.session.flush()
+
+        self.assertEqual(outcomes, ["INSUFFICIENT_EVIDENCE", "INSUFFICIENT_EVIDENCE"])
 
 
 if __name__ == "__main__":

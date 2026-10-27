@@ -10,3 +10,8 @@ ClaimType = Literal[
     "CONTESTED",
     "OPINION_OR_PREDICTION",
 ]
+
+
+def normalize_claim_text(value: str) -> str:
+    """Return the canonical comparison form; never trust an LLM-supplied form."""
+    return " ".join(value.casefold().split())

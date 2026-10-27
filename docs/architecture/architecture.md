@@ -14,7 +14,7 @@ Design goals:
 - Treat submissions as private by default. Do not publish them or use them for model training by default.
 - Allow search providers, models, media analyzers and channels to be replaced behind narrow internal interfaces.
 
-Assumptions pending product/security decisions: single-tenant MVP; web workspace is the primary review surface; WhatsApp is a later adapter; initial users authenticate; submitted material may contain personal or sensitive information; no production-grade universal deepfake determination is promised.
+Assumptions pending product/security decisions: single-tenant MVP; web workspace is the primary review surface; WhatsApp uses channel adapters over the same investigation service (ClickCast and direct Meta Cloud API); initial users authenticate; submitted material may contain personal or sensitive information; no production-grade universal deepfake determination is promised. The direct Meta adapter currently supports signed text/URL intake and sender-scoped, user-requested result retrieval; see ADR-008.
 
 ## System shape
 
@@ -107,13 +107,17 @@ Transitions are explicit and persisted with timestamps and stage/job IDs. Repeat
 
 Expose versioned `/api/v1/` endpoints. Initial web contract: create investigation from text/URL; fetch investigation and progress; list claims, sources, evidence, findings and brief; request retry when allowed. Use opaque IDs, cursor pagination for collections, request IDs, stable error codes and authorization checks in every handler. Return `202 Accepted` for processing intake with investigation ID/status; use polling initially, with server-sent events as a later progress enhancement.
 
-WhatsApp webhook adapter verifies provider signatures, validates size/type, retrieves media server-side and delegates intake. It acknowledges promptly and sends a short result only after the shared Investigation workflow produces a brief. Web and messaging use the same access-controlled investigation records. A channel is never trusted as identity proof beyond the provider's verified identity context.
+WhatsApp channel adapters verify their transport's identity/authentication and delegate investigations to the shared service. The direct Meta Cloud API adapter currently accepts text and public URLs and supports sender-scoped result requests; it does not download media or send completion-time pushes. The ClickCast adapter remains a separate integration. These channel paths use the configured single workspace owner; production use remains blocked on the unresolved authentication and tenancy decision.
 
 ### ClickCast WhatsApp intake MVP
 
 For the MVP, ClickCast owns Meta Embedded Signup, WhatsApp webhook registration, and inbox/bot delivery. Its HTTP API builder calls two Agent 0 endpoints; do not subscribe Agent 0 directly to Meta for the same account. Configure the builder's Authorization header with a bearer integration token. The intake endpoint accepts a stable event ID, sender identifier and message text, maps the integration to its configured workspace owner, derives a stable HMAC sender reference, and calls the shared `InvestigationService` with `Channel.WHATSAPP`. Event IDs form the idempotency key. Persist only the event ID and HMAC sender reference in submission metadata; do not persist raw sender/receiver numbers. Return `202` with the normal investigation reference/status for response mapping.
 
 The result endpoint accepts a sender identifier and an optional investigation reference. When a reference is supplied, it checks that exact investigation; when omitted, it selects the sender's latest WhatsApp investigation in the configured workspace. It verifies the sender against the HMAC reference stored on the original submission, then returns a bounded status, journalist-facing summary, limitations and up to five findings. The summary is generated from persisted finding statuses at read time as well as at brief creation, so existing WhatsApp investigations receive current plain-language copy without a data migration. `ready` means an assessment is available; it does not mean the claim is proven. Terminal statuses (`COMPLETE`, `NEEDS_REVIEW`, `FAILED`, `CANCELLED`) are reported as ready so the bot does not label a finished investigation as pending. ClickCast must send the same sender identifier form on intake and result requests (for example, WhatsApp chat ID in both). Confirm the builder's event/message variables and response mappings using Test & Verify before live traffic.
+
+### Direct Meta WhatsApp Cloud API
+
+The direct Meta adapter is separate from ClickCast and is documented in [ADR-008](../decisions/ADR-008-meta-whatsapp-cloud-api.md). Meta verifies the GET subscription challenge with `WHATSAPP_VERIFY_TOKEN`; Agent Zero verifies POST deliveries against the exact raw body using `X-Hub-Signature-256` and `WHATSAPP_APP_SECRET`. The configured phone-number ID is checked before handling messages. A WhatsApp `messages[].id` becomes an idempotency key, so redelivery does not create duplicate investigations. Sender IDs are persisted only as HMAC references. The direct channel currently supports text/URL intake, short immediate acknowledgement, and `RESULT`/`RESULT <reference>` responses to a new user message. The Cloudflare Worker configured in Meta must forward the query, raw body, and signature header unchanged to `/api/v1/channels/whatsapp/webhook`; its deployed configuration is not managed by this repository. No live send has been verified.
 
 ## Security, privacy and failure model
 

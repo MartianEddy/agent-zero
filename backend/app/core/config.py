@@ -1,3 +1,4 @@
+import re
 from functools import lru_cache
 from typing import Literal
 from uuid import UUID
@@ -20,6 +21,7 @@ class Settings(BaseSettings):
     object_storage_region: str = "us-east-1"
     object_storage_secure: bool = False
     log_level: str = "INFO"
+    otel_exporter_otlp_endpoint: str | None = None
     openai_api_key: SecretStr | None = None
     openai_model: str = "gpt-6-luna"
     openai_reasoning_effort: Literal["low", "medium"] = "low"
@@ -51,6 +53,13 @@ class Settings(BaseSettings):
     clickcast_api_token: SecretStr | None = None
     clickcast_identity_key: SecretStr | None = None
     clickcast_owner_id: UUID | None = None
+    whatsapp_access_token: SecretStr | None = None
+    whatsapp_app_secret: SecretStr | None = None
+    whatsapp_verify_token: SecretStr | None = None
+    whatsapp_phone_number_id: str | None = None
+    whatsapp_identity_key: SecretStr | None = None
+    whatsapp_owner_id: UUID | None = None
+    whatsapp_graph_api_version: str = "v25.0"
 
     @model_validator(mode="after")
     def require_auth_outside_development(self) -> "Settings":
@@ -79,6 +88,34 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "CLICKCAST_IDENTITY_KEY must be at least 32 characters when intake is enabled"
                 )
+        whatsapp_values = (
+            self.whatsapp_access_token,
+            self.whatsapp_app_secret,
+            self.whatsapp_verify_token,
+            self.whatsapp_phone_number_id,
+            self.whatsapp_identity_key,
+        )
+        if any(whatsapp_values):
+            if not all(whatsapp_values):
+                raise ValueError(
+                    "WhatsApp Cloud API requires access token, app secret, verify token, "
+                    "phone number ID, and identity key"
+                )
+            required_secrets = (
+                self.whatsapp_access_token,
+                self.whatsapp_app_secret,
+                self.whatsapp_verify_token,
+                self.whatsapp_identity_key,
+            )
+            if any(not value.get_secret_value().strip() for value in required_secrets):
+                raise ValueError("WhatsApp Cloud API secret settings must not be empty")
+            phone_number_id = self.whatsapp_phone_number_id
+            if not phone_number_id.isascii() or not phone_number_id.isdigit():
+                raise ValueError("WHATSAPP_PHONE_NUMBER_ID must contain only digits")
+            if len(self.whatsapp_identity_key.get_secret_value()) < 32:
+                raise ValueError("WHATSAPP_IDENTITY_KEY must be at least 32 characters")
+        if not re.fullmatch(r"v[0-9]+\.[0-9]+", self.whatsapp_graph_api_version):
+            raise ValueError("WHATSAPP_GRAPH_API_VERSION must look like v25.0")
         return self
 
 

@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -32,7 +33,7 @@ from app.modules.investigations.orchestrator import (
     _persist_findings,
     _persist_visual_observations,
 )
-from app.modules.investigations.routes import get_investigation_results
+from app.modules.investigations.routes import export_investigation_json, get_investigation_results
 from app.modules.investigations.service import InvestigationService
 
 
@@ -377,6 +378,39 @@ class MediaEvidenceGraphTests(unittest.TestCase):
         self.assertNotIn("storage_key", serialized_asset)
         self.assertNotIn("sha256", serialized_asset)
 
+    def test_json_export_contains_saved_case_and_omits_private_storage_metadata(self) -> None:
+        evidence = self.add_evidence(
+            source=True,
+            media=False,
+            content="Persisted source passage with an exact quotation.",
+        )
+        with patch(
+            "app.modules.investigations.routes.current_owner_id",
+            return_value=self.investigation.owner_id,
+        ):
+            response = export_investigation_json(self.investigation.id, self.session)
+
+        exported = json.loads(response.body)
+        self.assertEqual(response.media_type, "application/json")
+        self.assertIn("attachment; filename=", response.headers["content-disposition"])
+        self.assertEqual(exported["schema_version"], 1)
+        self.assertEqual(exported["investigation"]["id"], str(self.investigation.id))
+        self.assertEqual(exported["case"]["evidence"][0]["id"], str(evidence.id))
+        self.assertEqual(
+            exported["case"]["evidence"][0]["content"],
+            "Persisted source passage with an exact quotation.",
+        )
+        self.assertNotIn("storage_key", response.body.decode())
+
+    def test_json_export_preserves_owner_scope(self) -> None:
+        with patch(
+            "app.modules.investigations.routes.current_owner_id",
+            return_value=UUID("00000000-0000-4000-8000-000000000099"),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                export_investigation_json(self.investigation.id, self.session)
+        self.assertEqual(error.exception.status_code, 404)
+
     def test_unrelated_media_evidence_cannot_magically_support_claim(self) -> None:
         evidence = self.add_evidence(source=False, media=True)
         self.persist_finding(evidence, "UNKNOWN", "SUPPORTED")
@@ -440,11 +474,8 @@ class MediaEvidenceGraphTests(unittest.TestCase):
                     ReasonedFinding(
                         claim_id=str(self.claim.id),
                         status=status,
-                        statement="Model proposed assessment.",
                         explanation=[ExplanationSentence(sentence="The evidence is relevant to this claim.", evidence_ids=[evidence_id])],
                         evidence=[{"evidence_id": evidence_id, "relationship": relationship}],
-                                evidence_confidence="MEDIUM",
-            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
 )
                 ]
             ),

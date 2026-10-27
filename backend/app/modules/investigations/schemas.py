@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 from app.domain.investigation import InputType, InvestigationStatus
-from app.modules.investigations.triage import ClaimType
+from app.modules.investigations.triage import ClaimType, normalize_claim_text
 
 
 class CreateInvestigationRequest(BaseModel):
@@ -81,7 +81,7 @@ class ContinueInvestigationRequest(BaseModel):
     @field_validator("claims")
     @classmethod
     def require_distinct_atomic_claims(cls, claims: list[TriageClaimInput]) -> list[TriageClaimInput]:
-        normalized = [" ".join(item.text.casefold().split()) for item in claims]
+        normalized = [normalize_claim_text(item.text) for item in claims]
         if len(normalized) != len(set(normalized)):
             raise ValueError("Each claim must be distinct. Remove or combine duplicate claims.")
         return claims

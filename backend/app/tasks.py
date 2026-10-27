@@ -4,8 +4,15 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from app.core.config import get_settings
+from app.core.tracing import configure_tracing, tracer
 from app.db.session import SessionLocal
 from app.domain.investigation import InvestigationStatus
+from app.modules.investigations.job_lease import (
+    claim_processing_job,
+    protect_job_lease,
+    release_processing_job_lease,
+)
 from app.modules.investigations.models import AuditEvent, Investigation, OutboxEvent, ProcessingJob
 from app.modules.investigations.orchestrator import process_investigation as run_pipeline
 from app.worker import celery_app
@@ -44,7 +51,8 @@ def dispatch_outbox() -> int:
 @celery_app.task(name="agent_zero.recover_stalled_investigations")
 def recover_stalled_investigations() -> int:
     """Stop reporting work as active when its worker has disappeared."""
-    cutoff = datetime.now(UTC) - timedelta(minutes=10)
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(minutes=10)
     recovered = 0
     active_statuses = (
         InvestigationStatus.RECEIVED,
@@ -61,8 +69,21 @@ def recover_stalled_investigations() -> int:
                 .join(ProcessingJob, ProcessingJob.investigation_id == Investigation.id)
                 .where(
                     Investigation.status.in_(active_statuses),
-                    Investigation.updated_at < cutoff,
                     ProcessingJob.status.in_(["QUEUED", "RUNNING"]),
+                    (
+                        (ProcessingJob.status == "RUNNING")
+                        & ProcessingJob.lease_expires_at.is_not(None)
+                        & (ProcessingJob.lease_expires_at <= now)
+                    )
+                    | (
+                        (ProcessingJob.status == "QUEUED")
+                        & (Investigation.updated_at < cutoff)
+                    )
+                    | (
+                        (ProcessingJob.status == "RUNNING")
+                        & ProcessingJob.lease_expires_at.is_(None)
+                        & (Investigation.updated_at < cutoff)
+                    ),
                 )
                 .order_by(Investigation.updated_at)
                 .limit(50)
@@ -72,7 +93,17 @@ def recover_stalled_investigations() -> int:
         for investigation, job in rows:
             # Recheck under lock; a worker may have advanced the stage while
             # the sweep query was being assembled.
-            if investigation.updated_at >= cutoff or job.status not in {"QUEUED", "RUNNING"}:
+            lease_expires_at = job.lease_expires_at
+            if lease_expires_at is not None and lease_expires_at.tzinfo is None:
+                lease_expires_at = lease_expires_at.replace(tzinfo=UTC)
+            lease_expired = lease_expires_at is not None and lease_expires_at <= now
+            stale_legacy_or_queued = (
+                job.lease_expires_at is None and investigation.updated_at < cutoff
+            )
+            if (
+                job.status not in {"QUEUED", "RUNNING"}
+                or not (lease_expired or stale_legacy_or_queued)
+            ):
                 continue
             investigation.status = InvestigationStatus.FAILED
             investigation.current_stage = InvestigationStatus.FAILED.value
@@ -82,6 +113,8 @@ def recover_stalled_investigations() -> int:
             )
             job.status = "BLOCKED"
             job.error_code = "WORKER_STALLED"
+            job.lease_token = None
+            job.lease_expires_at = None
             job.attempts += 1
             session.add(
                 AuditEvent(
@@ -107,12 +140,33 @@ def recover_stalled_investigations() -> int:
 )
 def process_investigation(_task, job_id: str) -> str:
     """Run the channel-neutral investigation workflow in the worker process."""
+    configure_tracing(get_settings().otel_exporter_otlp_endpoint)
     logger.info("Starting investigation job job_id=%s", job_id)
     try:
-        with SessionLocal() as session:
-            result = run_pipeline(session, job_id=UUID(job_id))
+        with tracer(__name__).start_as_current_span(
+            "investigation.process", record_exception=False, set_status_on_exception=False
+        ) as span:
+            span.set_attribute("agent_zero.job_id", job_id)
+            with SessionLocal() as session:
+                lease = claim_processing_job(session, UUID(job_id))
+                if lease is None:
+                    logger.info("Skipped duplicate investigation delivery job_id=%s", job_id)
+                    span.set_attribute("agent_zero.job.duplicate", True)
+                    return "already_claimed"
+                result: str | None = None
+                try:
+                    with protect_job_lease(session, lease, SessionLocal) as lease_lost:
+                        result = run_pipeline(session, job_id=UUID(job_id))
+                        if lease_lost.is_set():
+                            result = "lease_lost"
+                finally:
+                    session.rollback()
+                    if result is not None and result != "lease_lost":
+                        release_processing_job_lease(session, lease)
     except Exception:
         logger.exception("Investigation job failed job_id=%s", job_id)
         raise
+    if result is None:
+        raise RuntimeError("Investigation pipeline returned without a result")
     logger.info("Finished investigation job job_id=%s result=%s", job_id, result)
     return result

@@ -66,6 +66,14 @@ Agent 0 is an evidence-verification platform. Web, WhatsApp and future integrati
 - ClickCast maps the intake response into an immediate acknowledgement. A later “check result” interaction calls Agent 0's result endpoint and maps its bounded status/brief response into a WhatsApp reply.
 - Sender identity is HMAC-pseudonymized; raw sender numbers are not persisted. Each ClickCast integration maps to one configured workspace owner. Configure the bearer token in the HTTP API builder's Authorization header.
 - Use ClickCast Test & Verify to confirm the available message, sender and event ID variables, and response mappings before live traffic.
+
+### Direct Meta WhatsApp Cloud API channel
+
+- Meta can deliver WhatsApp messages to a separate signed webhook adapter. This does not replace the optional ClickCast HTTP API integration; both call the same investigation service.
+- Verify GET subscription challenges with a dedicated verify token and verify POST bodies using Meta's `X-Hub-Signature-256` signature and the app secret. Reject malformed signatures and events for an unconfigured phone-number ID.
+- Use the stable provider message ID to prevent webhook redelivery from creating a second investigation. Persist only an HMAC sender reference, not the sender's raw number.
+- Support text and public URL intake, send a brief immediate acknowledgement, and let the sender request the saved result with `RESULT` or `RESULT <reference>`. Send free-form replies only to the sender of a verified inbound message. Do not persist recipient numbers for later pushes.
+- Media, interactive messages, status callbacks, templates, and completion-time proactive messages are not supported by this slice. Production enablement still requires the documented auth, retention, and deployment decisions.
 - This authorizes local implementation and sandboxed integration only. Production multi-user use remains blocked until authentication/tenant ownership, retention/deletion, provider handling and deployment decisions are resolved.
 
 ### Evidence answer and confidence presentation

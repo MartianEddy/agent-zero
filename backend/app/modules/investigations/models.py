@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     Boolean,
+    Index,
     String,
     Text,
     UniqueConstraint,
@@ -371,7 +372,10 @@ class VerificationBrief(Base):
 
 class ProcessingJob(Base):
     __tablename__ = "processing_jobs"
-    __table_args__ = (UniqueConstraint("idempotency_key"),)
+    __table_args__ = (
+        UniqueConstraint("idempotency_key"),
+        Index("ix_processing_jobs_lease_expires_at", "lease_expires_at"),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     investigation_id: Mapped[UUID] = mapped_column(
@@ -382,6 +386,9 @@ class ProcessingJob(Base):
     idempotency_key: Mapped[str] = mapped_column(String(100))
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    lease_token: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    lease_generation: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

@@ -506,6 +506,9 @@ export default function InvestigatePage() {
               <a href="#evidence">Evidence</a>
               {(originalMedia || originalVideo) && <a href="#media">Media</a>}
               {finished && results.brief && <a href="#brief">Brief</a>}
+              <a href={`/api/investigations/${investigation.id}/export`} download>
+                Export JSON
+              </a>
               <a className={styles.whatsappSectionLink} href={WHATSAPP_CONTACT_URL} target="_blank" rel="noopener noreferrer">WhatsApp help ↗</a>
             </nav>
 

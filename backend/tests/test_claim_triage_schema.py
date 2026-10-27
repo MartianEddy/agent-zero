@@ -6,29 +6,28 @@ from app.modules.investigations.investigator import PlannedClaim
 
 
 class ClaimTriageSchemaTests(unittest.TestCase):
-    def test_accepts_only_supported_claim_types_and_requires_route_flag(self) -> None:
+    def test_model_claim_schema_contains_only_model_owned_fields(self) -> None:
+        self.assertEqual(set(PlannedClaim.model_fields), {"text", "claim_type"})
+
+    def test_model_normalized_claim_text_is_recomputed_from_the_claim(self) -> None:
+        item = PlannedClaim(
+            text="  KENYA gained independence   in 1963. ",
+            claim_type="SETTLED_FACT",
+        )
+
+        self.assertEqual(item.text, "  KENYA gained independence   in 1963. ")
+
+    def test_accepts_only_supported_claim_types(self) -> None:
         item = PlannedClaim(
             text="Kenya gained independence in 1963.",
-            normalized_text="kenya gained independence in 1963",
             claim_type="SETTLED_FACT",
-            needs_deep_investigation=False,
         )
         self.assertEqual(item.claim_type, "SETTLED_FACT")
-        self.assertFalse(item.needs_deep_investigation)
 
         with self.assertRaises(ValidationError):
             PlannedClaim(
                 text="Kenya gained independence in 1963.",
-                normalized_text="kenya gained independence in 1963",
                 claim_type="FACTUAL",
-                needs_deep_investigation=True,
-            )
-
-        with self.assertRaises(ValidationError):
-            PlannedClaim(
-                text="Kenya gained independence in 1963.",
-                normalized_text="kenya gained independence in 1963",
-                claim_type="SETTLED_FACT",
             )
 
 

@@ -170,11 +170,7 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
                         claims=[
                             PlannedClaim(
                                 text="Schools in Nyeri County will remain closed tomorrow.",
-                                normalized_text=(
-                                    "schools in nyeri county will remain closed tomorrow"
-                                ),
                                 claim_type="CHECKABLE_EVENT",
-                                needs_deep_investigation=True,
                             )
                         ],
                         queries=["Nyeri school closure official notice"],
@@ -438,7 +434,6 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
                     ReasonedFinding(
                         claim_id=str(claim.id),
                         status="PARTLY_TRUE",
-                        statement="Evidence supports and contradicts different interpretations.",
                         explanation=[
                             ExplanationSentence(
                                 sentence="One report supports the claim while another challenges it.",
@@ -458,9 +453,7 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
                                 "relationship": "CONTRADICTS",
                             },
                         ],
-                                evidence_confidence="MEDIUM",
-            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
-)
+                    )
                 ]
             ),
         )
@@ -511,9 +504,6 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
                     ReasonedFinding(
                         claim_id=str(claim.id),
                         status="SUPPORTED",
-                        statement="A trusted registry domain says it is true.",
-                                evidence_confidence="MEDIUM",
-            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
 )
                 ]
             ),

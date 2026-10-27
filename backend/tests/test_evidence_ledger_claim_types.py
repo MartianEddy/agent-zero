@@ -87,11 +87,6 @@ def test_mocked_evidence_packet_is_validated_for_each_claim_type():
                         ReasonedFinding(
                             claim_id=str(claim.id),
                             status="SUPPORTED",
-                            statement="The retrieved sources support the claim.",
-                            evidence_confidence="MEDIUM",
-                            confidence_rationale=(
-                                "Two distinct retrieved fixture sources are linked."
-                            ),
                             explanation=[
                                 ExplanationSentence(
                                     sentence="The retrieved sources support the claim.",

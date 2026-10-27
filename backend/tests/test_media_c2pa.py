@@ -390,14 +390,11 @@ def test_c2pa_analysis_uses_original_and_retry_reuses_run(
                     ReasonedFinding(
                         claim_id=str(claim.id),
                         status="SUPPORTED",
-                        statement="This image is real.",
                         explanation=[ExplanationSentence(sentence="The credentials describe provenance, not whether the event is real.", evidence_ids=[str(c2pa_evidence.id)])],
                         evidence=[
                             {"evidence_id": str(c2pa_evidence.id), "relationship": "SUPPORTS"}
                         ],
-                                evidence_confidence="MEDIUM",
-            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
-)
+                    )
                 ]
             ),
         )
@@ -428,14 +425,11 @@ def test_c2pa_analysis_uses_original_and_retry_reuses_run(
                     ReasonedFinding(
                         claim_id=str(declaration_claim.id),
                         status="SUPPORTED",
-                        statement="The image is AI-generated.",
                         explanation=[ExplanationSentence(sentence="The credentials declare generative AI involvement.", evidence_ids=[str(c2pa_evidence.id)])],
                         evidence=[
                             {"evidence_id": str(c2pa_evidence.id), "relationship": "SUPPORTS"}
                         ],
-                                evidence_confidence="MEDIUM",
-            confidence_rationale="Mock finding includes its fixture evidence for contract testing.",
-)
+                    )
                 ]
             ),
         )
