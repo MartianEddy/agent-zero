@@ -688,3 +688,163 @@ def test_result_lookup_is_scoped_to_the_hmac_sender_and_includes_saved_limits() 
     assert "not establish this claim" in response
     assert "Only accessible public sources were reviewed." in response
     assert "AZ-261026-ABC123" in response
+
+
+def test_parser_rejects_self_messages_from_business_number() -> None:
+    from app.modules.channels.whatsapp import _parse_message_events
+
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "changes": [
+                    {
+                        "field": "messages",
+                        "value": {
+                            "metadata": {
+                                "phone_number_id": "12345",
+                                "display_phone_number": "254750288942",
+                            },
+                            "messages": [
+                                {
+                                    "id": "wamid.self1",
+                                    "from": "12345",
+                                    "type": "text",
+                                    "text": {"body": "echo message"},
+                                },
+                                {
+                                    "id": "wamid.self2",
+                                    "from": "254750288942",
+                                    "type": "text",
+                                    "text": {"body": "echo message"},
+                                },
+                                {
+                                    "id": "wamid.self3",
+                                    "from": "+254750288942",
+                                    "type": "text",
+                                    "text": {"body": "echo message"},
+                                },
+                            ],
+                        },
+                    }
+                ]
+            }
+        ],
+    }
+
+    events, summary = _parse_message_events(payload)
+    assert events == []
+    assert summary["parsed_messages"] == 0
+    assert "self_message:3" in summary["rejections"]
+
+
+def test_parser_rejects_bot_echo_messages() -> None:
+    from app.modules.channels.whatsapp import _parse_message_events
+
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "changes": [
+                    {
+                        "field": "messages",
+                        "value": {
+                            "metadata": {"phone_number_id": "12345"},
+                            "messages": [
+                                {
+                                    "id": "wamid.echo1",
+                                    "from": "254700000000",
+                                    "type": "text",
+                                    "text": {
+                                        "body": (
+                                            "Received. Agent Zero is investigating this request. "
+                                            "Send RESULT or RESULT AZ-261026-ABC123"
+                                        )
+                                    },
+                                },
+                                {
+                                    "id": "wamid.echo2",
+                                    "from": "254700000000",
+                                    "type": "text",
+                                    "text": {
+                                        "body": "This check is still underway. No conclusion yet."
+                                    },
+                                },
+                                {
+                                    "id": "wamid.echo3",
+                                    "from": "254700000000",
+                                    "type": "text",
+                                    "text": {
+                                        "body": "Check started.\n\nReference: AZ-261026-ABC123"
+                                    },
+                                },
+                            ],
+                        },
+                    }
+                ]
+            }
+        ],
+    }
+
+    events, summary = _parse_message_events(payload)
+    assert events == []
+    assert summary["parsed_messages"] == 0
+    assert "bot_echo:3" in summary["rejections"]
+
+
+def test_handle_message_ignores_duplicate_submission_within_window() -> None:
+    from datetime import UTC, datetime
+
+    session = MagicMock()
+    session.scalar.return_value = None
+    recent_sub = SimpleNamespace(
+        original_text="Check this claim",
+        received_at=datetime.now(UTC),
+    )
+    session.scalars.return_value = [recent_sub]
+
+    event = IncomingWhatsAppMessage(
+        message_id="wamid.new_id",
+        sender="254700000000",
+        phone_number_id="12345",
+        message_type="text",
+        text="Check this claim",
+    )
+
+    with (
+        patch("app.modules.channels.whatsapp.InvestigationService") as service,
+        patch("app.modules.channels.whatsapp.send_text_message") as send,
+    ):
+        result = asyncio.run(_handle_message(session, event, _settings()))
+        assert result is True
+        service.return_value.create.assert_not_called()
+        send.assert_not_called()
+
+
+def test_handle_message_throttles_rapid_fire_submissions() -> None:
+    from datetime import UTC, datetime
+
+    session = MagicMock()
+    session.scalar.return_value = None
+    recent_sub = SimpleNamespace(
+        original_text="Earlier different claim",
+        received_at=datetime.now(UTC),
+    )
+    session.scalars.return_value = [recent_sub]
+
+    event = IncomingWhatsAppMessage(
+        message_id="wamid.rapid_id",
+        sender="254700000000",
+        phone_number_id="12345",
+        message_type="text",
+        text="A new claim immediately after",
+    )
+
+    with (
+        patch("app.modules.channels.whatsapp.InvestigationService") as service,
+        patch("app.modules.channels.whatsapp.send_text_message") as send,
+    ):
+        result = asyncio.run(_handle_message(session, event, _settings()))
+        assert result is True
+        service.return_value.create.assert_not_called()
+        send.assert_not_called()

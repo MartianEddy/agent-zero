@@ -13,6 +13,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -47,6 +48,22 @@ GRAPH_SEND_TIMEOUT_SECONDS = 8
 _PHONE_SENDER_PATTERN = re.compile(r"[0-9]{5,20}")
 _E164_SENDER_PATTERN = re.compile(r"\+[0-9]{5,20}")
 _BSUID_PATTERN = re.compile(r"[A-Za-z]{2}\.(?:ENT\.)?[A-Za-z0-9]{1,128}")
+_BOT_MESSAGE_PREFIXES = (
+    "received. agent zero is investigating",
+    "use result or result az-",
+    "i couldn't find a check for this whatsapp number",
+    "this check could not be completed",
+    "this check was cancelled",
+    "this check needs a human review",
+    "this check finished without a saved summary",
+    "this check is still processing",
+    "this check is still underway",
+    "i can currently investigate text claims and public urls",
+    "that message is too long",
+    "that url is invalid",
+    "check started",
+    "your result is ready",
+)
 
 
 def _valid_whatsapp_user_id(value: str) -> bool:
@@ -166,7 +183,10 @@ def verify_webhook_signature(body: bytes, signature: str | None, app_secret: str
 
 
 def _message_event(
-    message: dict, phone_number_id: str, contacts: object = None
+    message: dict,
+    phone_number_id: str,
+    contacts: object = None,
+    display_phone_number: str | None = None,
 ) -> tuple[IncomingWhatsAppMessage | None, str | None]:
     message_id = message.get("id")
     sender = _sender_identifier(message, contacts)
@@ -179,6 +199,13 @@ def _message_event(
         return None, "invalid_sender_format"
     if not isinstance(message_type, str):
         return None, "invalid_message_type"
+
+    business_identifiers = {phone_number_id}
+    if isinstance(display_phone_number, str) and display_phone_number:
+        business_identifiers.add(display_phone_number.lstrip("+"))
+    if sender in business_identifiers:
+        return None, "self_message"
+
     text: str | None = None
     if message_type == "text":
         text_value = message.get("text")
@@ -186,6 +213,9 @@ def _message_event(
             text = text_value["body"].strip()
             if not text:
                 return None, "empty_text"
+            normalized_body = text.casefold()
+            if any(normalized_body.startswith(p) for p in _BOT_MESSAGE_PREFIXES):
+                return None, "bot_echo"
         else:
             return None, "invalid_text_body"
     return (
@@ -294,6 +324,9 @@ def _parse_message_events(
             phone_number_id = (
                 metadata.get("phone_number_id") if isinstance(metadata, dict) else None
             )
+            display_phone_number = (
+                metadata.get("display_phone_number") if isinstance(metadata, dict) else None
+            )
             contacts = value.get("contacts")
             if not isinstance(phone_number_id, str) or not phone_number_id:
                 rejection_counts["missing_phone_number_id"] = (
@@ -332,7 +365,12 @@ def _parse_message_events(
                     )
                 else:
                     message_types.add("other")
-                event, rejection = _message_event(message, phone_number_id, contacts)
+                event, rejection = _message_event(
+                    message,
+                    phone_number_id,
+                    contacts,
+                    display_phone_number=display_phone_number,
+                )
                 if event is not None:
                     events.append(event)
                     if len(events) >= MAX_MESSAGES_PER_WEBHOOK:
@@ -571,6 +609,35 @@ async def _handle_message(session: Session, event: IncomingWhatsAppMessage, sett
                 f"RESULT {existing.reference} to check progress and read the saved result.",
             )
         return True
+
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(minutes=5)
+    recent_submissions = list(
+        session.scalars(
+            select(Submission)
+            .where(
+                Submission.channel == Channel.WHATSAPP,
+                Submission.source_metadata["sender_ref"].as_string() == sender_ref,
+                Submission.received_at >= cutoff,
+            )
+            .order_by(Submission.received_at.desc())
+            .limit(5)
+        )
+    )
+    if recent_submissions:
+        for prev in recent_submissions:
+            if prev.original_text and prev.original_text.strip() == command:
+                logger.info("Ignoring duplicate WhatsApp submission within 5 minutes for sender")
+                return True
+        most_recent = recent_submissions[0]
+        most_recent_time = most_recent.received_at
+        if most_recent_time:
+            if most_recent_time.tzinfo is None:
+                most_recent_time = most_recent_time.replace(tzinfo=UTC)
+            if (now - most_recent_time).total_seconds() < 10:
+                logger.warning("Throttling rapid-fire WhatsApp submission from same sender")
+                return True
+
     investigation = InvestigationService(session).create(
         owner_id=_owner_id(settings),
         content=command,
