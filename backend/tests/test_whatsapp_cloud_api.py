@@ -23,7 +23,7 @@ from app.modules.channels.whatsapp import (
     verify_webhook_signature,
 )
 from app.modules.conversations.schemas import ConversationTurn
-from app.modules.conversations.service import _result_message
+from app.modules.conversations.service import _conversation_reply, _result_message
 
 
 def test_meta_signature_is_verified_against_raw_request_body() -> None:
@@ -1110,3 +1110,35 @@ def test_greeting_is_conversational_and_does_not_create_an_investigation() -> No
         "Hi, I’m Agent Zero. I can talk through what you’ve shared or help investigate a "
         "factual claim using public evidence. What are you looking into?"
     )
+
+
+def test_factual_question_without_question_mark_gets_a_useful_safe_response() -> None:
+    reply = _conversation_reply("What is Sinaps Technology")
+
+    assert "can’t provide general company profiles yet" in reply
+    assert "specific factual claim" in reply
+    assert "No investigation has started" in reply
+
+
+def test_short_topic_follow_up_is_acknowledged_instead_of_repeating_generic_prompt() -> None:
+    context = [
+        {"role": "user", "content": "What is Sinaps Technology"},
+        {
+            "role": "assistant",
+            "content": "What would you like me to help investigate?",
+        },
+    ]
+
+    reply = _conversation_reply("Sinaps Technology", context=context)
+
+    assert "Sinaps Technology" in reply
+    assert "specific factual claim" in reply
+    assert "No investigation has started" in reply
+    assert "Thanks for the context" not in reply
+
+
+def test_factual_question_with_question_mark_uses_same_scope_and_safety_copy() -> None:
+    reply = _conversation_reply("What is Sinaps Technology?")
+
+    assert "can’t provide general company profiles yet" in reply
+    assert "No investigation has started" in reply

@@ -416,7 +416,9 @@ def _looks_like_confirmation(text: str) -> bool:
     )
 
 
-def _conversation_reply(text: str) -> str:
+def _conversation_reply(
+    text: str, *, context: list[dict[str, str]] | None = None
+) -> str:
     normalized = " ".join(text.casefold().split())
     standard_greeting = normalized in {
         "hi",
@@ -437,10 +439,53 @@ def _conversation_reply(text: str) -> str:
             "evidence supports and what remains uncertain. I won’t start an investigation until "
             "you approve its preview."
         )
-    if "?" in text:
+    subject = text.strip().rstrip("?.! ")[:160]
+    question_starts = (
+        "what ",
+        "who ",
+        "where ",
+        "when ",
+        "why ",
+        "how ",
+        "which ",
+        "is ",
+        "are ",
+        "was ",
+        "were ",
+        "does ",
+        "do ",
+        "did ",
+        "can ",
+        "could ",
+        "would ",
+        "will ",
+        "has ",
+        "have ",
+        "tell me ",
+        "explain ",
+        "describe ",
+    )
+    if "?" in text or normalized.startswith(question_starts):
         return (
-            "I haven’t checked that yet. If you’d like an evidence-based answer, ask me to "
-            "investigate the claim and I’ll show you a preview first."
+            f"I haven’t researched “{subject}” yet. This chat can investigate specific factual "
+            "claims using public evidence, but it can’t provide general company profiles yet. "
+            "Tell me the claim you want checked and I’ll show you a preview before anything "
+            "starts. No investigation has started."
+        )
+    last_assistant = next(
+        (
+            item.get("content", "")
+            for item in reversed(context or [])
+            if item.get("role") == "assistant"
+        ),
+        "",
+    )
+    if len(normalized.split()) <= 8 and "?" in last_assistant and subject:
+        return (
+            f"Got it — {subject} is the topic. I haven’t researched it yet. This chat can’t "
+            "provide general company profiles, but I can check a specific factual claim "
+            "using public evidence and show you a preview first. What claim would you like me "
+            "to check? No investigation has started."
         )
     return "Thanks for the context. What would you like me to help investigate?"
 
@@ -935,6 +980,11 @@ async def _handle_turn(
         return True
 
     output = model_run.output
+    logger.info(
+        "WhatsApp conversation classified intent=%s draft_pending=%s",
+        output.intent,
+        pending,
+    )
     if output.intent == "CONFIRM_DRAFT":
         code = _preview_code_in(command)
         if not pending or conversation.state != "AWAITING_CONFIRMATION":
@@ -1062,7 +1112,7 @@ async def _handle_turn(
                     "with that code, EDIT followed by your correction, or CANCEL."
                 )
     else:
-        reply = _conversation_reply(command)
+        reply = _conversation_reply(command, context=context)
 
     await _send_saved_reply(
         session,

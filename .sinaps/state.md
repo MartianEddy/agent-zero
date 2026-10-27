@@ -3,12 +3,15 @@ project: agent-zero
 current_stage: VERIFY
 tier: major
 tier_reason: Persistent WhatsApp conversation drafts, GPT Luna triage, and explicit case creation alter the user-facing intake contract and database state; local single-owner channel auth is used pending production identity decisions.
-last_updated: 2026-10-27T14:15:00Z
-current_session_deliverable: Implemented Phase 1 review fixes: durable unique inbound-event receipts committed before Luna with saved-reply replay and conversation-row serialization; confirmation codes bound to each displayed preview; typed CONFIRM_DRAFT with application-side code validation; a channel-neutral ConversationService behind the Meta adapter; capability/context-only no-case responses; and the default-off WHATSAPP_CONVERSATION_ENABLED kill switch. Added migration 0017, focused regression cases, and updated ADR, architecture, requirements, plan, and open questions. Static compilation, scoped Ruff, and git diff --check pass; the focused WhatsApp suite passes (36 tests). The isolated migration/sandbox journey remains blocked by sinaps health at 6% disk; OpenAI 401 remains owner-reported resolved and unverified by provider call. Next: run the isolated migration exercise and sandbox journey when health permits; owner will run live WhatsApp flow. Do not start Phase 2 or cross-case knowledge before recorded verification evidence.
+last_updated: 2026-10-27T15:20:00Z
+current_session_deliverable: Owner-run WhatsApp journey at 15:02–15:03 UTC confirmed an engineering fallback defect: successful OpenAI Responses calls and delivered replies were followed by a generic reply because question recognition depended on a literal question mark and the application rendered its own fallback. Fixed question detection for common punctuation-free forms, added context-aware short-topic replies, and added privacy-safe intent logging. Regression test failed before the fix and the WhatsApp suite now passes (39); scoped Ruff, compileall, and git diff --check pass. Current stage remains VERIFY; Render should be redeployed and owner should repeat the natural conversation journey. General factual/company overview support remains out of scope pending an evidence/freshness contract. Cross-case knowledge and Phase 2 remain deferred. Machine health is still BLOCKED at 6% free disk; isolated migration and complete preview/approval/status journey evidence remain pending.
 ---
 
 ## Current feature
 WhatsApp natural conversation and investigation confirmation
+
+## Latest verification finding
+See [WhatsApp conversation fallback incident](../docs/operations/incidents/2026-10-27-whatsapp-conversation-fallback.md). Root cause was deterministic reply fallback behavior, not a Luna authentication failure or stale deploy.
 
 ## Approved artifacts
 - [x] docs/product/problem.md

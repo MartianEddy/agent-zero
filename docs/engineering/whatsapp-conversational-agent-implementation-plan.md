@@ -1,6 +1,6 @@
 # WhatsApp conversational agent implementation plan
 
-**Status:** Approved for the first direct Meta implementation by product owner on 2026-10-27; Phase 1 integrity findings have been implemented and are awaiting focused verification and the owner-run live WhatsApp journey. This approval does not authorize production rollout, a live provider smoke test, n8n adoption, or ClickCast parity.
+**Status:** Approved for the first direct Meta implementation by product owner on 2026-10-27. The owner-run WhatsApp journey exposed a conversational fallback defect on 2026-10-27; the question recognition and contextual follow-up fix is implemented and locally verified. A fresh owner-run live journey is required before Phase 1 acceptance. This approval does not authorize n8n adoption or ClickCast parity.
 **Authoritative execution plan:** This file. The product direction and architecture rationale live in [Conversational investigative intelligence proposal](../architecture/conversational-investigative-intelligence-proposal.md); the user journey lives in [WhatsApp conversational investigation journey](../ux/whatsapp-journey-v1.md).
 **Priority boundary:** Implement core conversational and investigative domain logic first. Cross-investigation knowledge, claim graphing, and evidence reuse are explicitly deferred until the core lifecycle and data ownership are implemented and validated.
 
@@ -29,6 +29,7 @@ The initial implementation covers one authorized user's private cases through on
 - Greeting, capability question, context sharing, and discussion do not create a case or queue research.
 - A bounded GPT Luna conversation task may respond naturally or ask what the user wants to do. It must not claim that fresh research happened unless the research pipeline actually ran.
 - General factual answers require a defined evidence/freshness policy. If that policy is not yet approved, keep responses to capability/context and offer to investigate rather than inventing a researched answer.
+- Recognize factual question wording with or without punctuation. A short topic answer to a preceding assistant question must be acknowledged contextually rather than sent through the same generic fallback. General entity/company profiles remain unsupported until a sourced answer path is approved.
 
 ### Investigation request
 

@@ -20,6 +20,8 @@ Natural conversation by default. Explicit approval before creating a persistent 
 
 - Do not create cases from greetings, general discussion, or ambiguous intent.
 - Do not imply that fresh research occurred if it did not.
+- Recognize common factual question forms even when WhatsApp text has no question mark. If a factual answer has not been researched, say so and offer the supported claim-check path; do not answer from model memory. General company profiles are outside the current chat scope.
+- Treat a short topic reply after an assistant question as context, acknowledge the topic, and ask one useful follow-up instead of repeating a generic investigation prompt.
 - Treat submitted links and user statements as context until evidence is retrieved and validated.
 - Distinguish cancelling a draft from cancelling a persisted investigation; the latter requires backend support.
 - Keep natural language as the main path and commands as optional shortcuts.
