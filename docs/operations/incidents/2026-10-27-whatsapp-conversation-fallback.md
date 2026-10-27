@@ -32,7 +32,8 @@ This was an application behavior defect, not a replaced model, stale deployment,
 
 - The new regression tests failed before the fix and pass after it.
 - The complete focused WhatsApp suite passes: 39 tests. Scoped Ruff, compilation, and `git diff --check` pass.
-- Deploy the fix and have the owner repeat a natural conversation test. Phase 1 remains in VERIFY until the live journey and the remaining migration/preview/approval/status evidence are recorded.
+- Fix commit `04c00d2d7ea04dcf1ed50dbf768a2302464fdc2a` is live on the Render API; `/api/v1/ready` reports `ready` with database, Redis, and object storage healthy.
+- Have the owner repeat a natural conversation test. Phase 1 remains in VERIFY until the live journey and the remaining migration/preview/approval/status evidence are recorded.
 - Decide separately whether WhatsApp should support source-backed general entity/company overviews. The current fix does not add memory-based factual answers or start investigations automatically.
 
 ## Rollback
