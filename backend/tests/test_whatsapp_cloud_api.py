@@ -116,6 +116,56 @@ def test_parser_accepts_business_scoped_user_id_as_sender() -> None:
     assert events[0].sender == "KE.opaqueABC123"
 
 
+def test_parser_accepts_parent_business_scoped_user_id_as_sender() -> None:
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "changes": [{
+                "field": "messages",
+                "value": {
+                    "metadata": {"phone_number_id": "12345"},
+                    "messages": [{
+                        "id": "wamid.parent-bsuid",
+                        "from": "KE.ENT.opaqueABC123",
+                        "type": "text",
+                        "text": {"body": "Check this claim"},
+                    }],
+                },
+            }],
+        }],
+    }
+
+    events = parse_message_events(payload)
+
+    assert len(events) == 1
+    assert events[0].sender == "KE.ENT.opaqueABC123"
+
+
+def test_parser_normalizes_e164_sender_for_cloud_api_reply() -> None:
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "changes": [{
+                "field": "messages",
+                "value": {
+                    "metadata": {"phone_number_id": "12345"},
+                    "messages": [{
+                        "id": "wamid.plus-phone",
+                        "from": "+254700000000",
+                        "type": "text",
+                        "text": {"body": "Check this claim"},
+                    }],
+                },
+            }],
+        }],
+    }
+
+    events = parse_message_events(payload)
+
+    assert len(events) == 1
+    assert events[0].sender == "254700000000"
+
+
 @pytest.mark.parametrize("sender", ["KE.", "KE.has-dash", "K.opaque", "2547-00000000"])
 def test_parser_rejects_malformed_sender_identifiers(sender: str) -> None:
     payload = {
@@ -216,6 +266,54 @@ def test_cloud_api_send_accepts_business_scoped_user_id() -> None:
 
         request = build_opener.return_value.open.call_args.args[0]
         assert json.loads(request.data)["to"] == "KE.opaqueABC123"
+
+
+def test_cloud_api_send_accepts_parent_business_scoped_user_id() -> None:
+    from app.modules.channels.whatsapp import send_text_message
+
+    response = type("Response", (), {"status": 200, "read": lambda self, _size: b"{}"})()
+    with (
+        patch("app.modules.channels.whatsapp.get_settings") as get_settings,
+        patch("app.modules.channels.whatsapp.build_opener") as build_opener,
+    ):
+        get_settings.return_value = SimpleNamespace(
+            whatsapp_access_token=SimpleNamespace(get_secret_value=lambda: "access-token"),
+            whatsapp_app_secret=SimpleNamespace(get_secret_value=lambda: "app-secret"),
+            whatsapp_verify_token=SimpleNamespace(get_secret_value=lambda: "verify-token"),
+            whatsapp_identity_key=SimpleNamespace(get_secret_value=lambda: "i" * 32),
+            whatsapp_phone_number_id="12345",
+            whatsapp_graph_api_version="v25.0",
+        )
+        build_opener.return_value.open.return_value.__enter__.return_value = response
+
+        send_text_message("KE.ENT.opaqueABC123", "Received")
+
+        request = build_opener.return_value.open.call_args.args[0]
+        assert json.loads(request.data)["to"] == "KE.ENT.opaqueABC123"
+
+
+def test_cloud_api_send_normalizes_plus_prefixed_phone_recipient() -> None:
+    from app.modules.channels.whatsapp import send_text_message
+
+    response = type("Response", (), {"status": 200, "read": lambda self, _size: b"{}"})()
+    with (
+        patch("app.modules.channels.whatsapp.get_settings") as get_settings,
+        patch("app.modules.channels.whatsapp.build_opener") as build_opener,
+    ):
+        get_settings.return_value = SimpleNamespace(
+            whatsapp_access_token=SimpleNamespace(get_secret_value=lambda: "access-token"),
+            whatsapp_app_secret=SimpleNamespace(get_secret_value=lambda: "app-secret"),
+            whatsapp_verify_token=SimpleNamespace(get_secret_value=lambda: "verify-token"),
+            whatsapp_identity_key=SimpleNamespace(get_secret_value=lambda: "i" * 32),
+            whatsapp_phone_number_id="12345",
+            whatsapp_graph_api_version="v25.0",
+        )
+        build_opener.return_value.open.return_value.__enter__.return_value = response
+
+        send_text_message("+254700000000", "Received")
+
+        request = build_opener.return_value.open.call_args.args[0]
+        assert json.loads(request.data)["to"] == "254700000000"
 
 
 def test_cloud_api_configuration_rejects_partial_credentials() -> None:
@@ -369,6 +467,39 @@ def test_webhook_logs_parser_rejection_reason_without_message_values(caplog) -> 
     assert "raw_messages=1" in caplog.text
     assert "parsed_messages=0" in caplog.text
     assert "rejections=invalid_message_id:1" in caplog.text
+    assert private_text not in caplog.text
+    assert private_sender not in caplog.text
+
+
+def test_webhook_logs_only_a_low_cardinality_invalid_sender_shape(caplog) -> None:
+    private_text = "A private test claim"
+    private_sender = "private-sender-123"
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"field": "messages", "value": {
+            "metadata": {"phone_number_id": "12345"},
+            "messages": [{
+                "id": "wamid.sender-shape",
+                "from": private_sender,
+                "type": "text",
+                "text": {"body": private_text},
+            }],
+        }}]}],
+    }
+    raw_body = json.dumps(payload).encode()
+    signature = "sha256=" + hmac.new(b"app-secret", raw_body, hashlib.sha256).hexdigest()
+    caplog.set_level(logging.INFO, logger="app.modules.channels.whatsapp")
+
+    with (
+        patch("app.modules.channels.whatsapp.get_settings", return_value=_settings()),
+        patch("app.modules.channels.whatsapp._handle_message") as handle,
+    ):
+        result = asyncio.run(receive_webhook(_request_with_body(raw_body), MagicMock(), signature))
+
+    assert result == {"status": "ok"}
+    handle.assert_not_called()
+    assert "rejections=invalid_sender_format:1" in caplog.text
+    assert "sender_shapes=other_string:1" in caplog.text
     assert private_text not in caplog.text
     assert private_sender not in caplog.text
 

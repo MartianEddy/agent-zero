@@ -45,12 +45,40 @@ MAX_MESSAGE_CHARS = 20_000
 MAX_MESSAGES_PER_WEBHOOK = 25
 GRAPH_SEND_TIMEOUT_SECONDS = 8
 _PHONE_SENDER_PATTERN = re.compile(r"[0-9]{5,20}")
-_BSUID_PATTERN = re.compile(r"[A-Z]{2}\.[A-Za-z0-9]{1,128}")
+_E164_SENDER_PATTERN = re.compile(r"\+[0-9]{5,20}")
+_BSUID_PATTERN = re.compile(r"[A-Za-z]{2}\.(?:ENT\.)?[A-Za-z0-9]{1,128}")
 
 
 def _valid_whatsapp_user_id(value: str) -> bool:
     """Accept Cloud API phone-number IDs and username-era business-scoped IDs."""
-    return bool(_PHONE_SENDER_PATTERN.fullmatch(value) or _BSUID_PATTERN.fullmatch(value))
+    return bool(
+        _PHONE_SENDER_PATTERN.fullmatch(value)
+        or _E164_SENDER_PATTERN.fullmatch(value)
+        or _BSUID_PATTERN.fullmatch(value)
+    )
+
+
+def _sender_shape(value: object) -> str:
+    """Describe an invalid sender with a low-cardinality, value-free category."""
+    if not isinstance(value, str):
+        return "non_string"
+    if not value:
+        return "empty"
+    if _PHONE_SENDER_PATTERN.fullmatch(value):
+        return "numeric_phone"
+    if _E164_SENDER_PATTERN.fullmatch(value):
+        return "plus_phone"
+    if _BSUID_PATTERN.fullmatch(value):
+        return "bsuid"
+    if value.startswith("whatsapp:"):
+        return "provider_prefixed"
+    if re.match(r"[A-Za-z]{2}\.", value):
+        return "country_prefixed_other"
+    if re.fullmatch(r"[0-9+(). -]+", value):
+        return "phone_with_separators"
+    if re.fullmatch(r"[A-Za-z0-9]+", value):
+        return "alphanumeric_without_country"
+    return "other_string"
 
 
 @dataclass(frozen=True)
@@ -100,8 +128,12 @@ def _message_event(
     message_type = message.get("type")
     if not isinstance(message_id, str) or not message_id or len(message_id) > 200:
         return None, "invalid_message_id"
-    if not isinstance(sender, str) or not _valid_whatsapp_user_id(sender):
-        return None, "invalid_sender"
+    if not isinstance(sender, str):
+        return None, "invalid_sender_type"
+    if not _valid_whatsapp_user_id(sender):
+        return None, "invalid_sender_format"
+    if _E164_SENDER_PATTERN.fullmatch(sender):
+        sender = sender[1:]
     if not isinstance(message_type, str):
         return None, "invalid_message_type"
     text: str | None = None
@@ -133,6 +165,7 @@ def _parse_message_events(
     callback_fields: set[str] = set()
     message_types: set[str] = set()
     rejection_counts: dict[str, int] = {}
+    sender_shapes: dict[str, int] = {}
     summary: dict[str, object] = {
         "fields": "none",
         "raw_messages": 0,
@@ -224,6 +257,9 @@ def _parse_message_events(
                         break
                 elif rejection is not None:
                     rejection_counts[rejection] = rejection_counts.get(rejection, 0) + 1
+                    if rejection in {"invalid_sender_type", "invalid_sender_format"}:
+                        shape = _sender_shape(message.get("from"))
+                        sender_shapes[shape] = sender_shapes.get(shape, 0) + 1
             if len(events) >= MAX_MESSAGES_PER_WEBHOOK:
                 break
         if len(events) >= MAX_MESSAGES_PER_WEBHOOK:
@@ -236,6 +272,10 @@ def _parse_message_events(
             "message_types": ",".join(sorted(message_types)) or "none",
             "rejections": ",".join(
                 f"{reason}:{count}" for reason, count in sorted(rejection_counts.items())
+            )
+            or "none",
+            "sender_shapes": ",".join(
+                f"{shape}:{count}" for shape, count in sorted(sender_shapes.items())
             )
             or "none",
         }
@@ -259,6 +299,8 @@ def send_text_message(recipient: str, body: str) -> None:
     settings = _configured_settings()
     if not _valid_whatsapp_user_id(recipient) or not body.strip() or len(body) > 4096:
         raise WhatsAppSendError("Outbound message is invalid")
+    if _E164_SENDER_PATTERN.fullmatch(recipient):
+        recipient = recipient[1:]
     phone_number_id = settings.whatsapp_phone_number_id
     endpoint = (
         f"https://graph.facebook.com/{settings.whatsapp_graph_api_version}/"
@@ -507,13 +549,14 @@ async def receive_webhook(
     events, summary = _parse_message_events(payload)
     logger.info(
         "WhatsApp webhook payload fields=%s raw_messages=%d statuses=%d "
-        "parsed_messages=%d message_types=%s rejections=%s",
+        "parsed_messages=%d message_types=%s rejections=%s sender_shapes=%s",
         summary["fields"],
         summary["raw_messages"],
         summary["statuses"],
         summary["parsed_messages"],
         summary["message_types"],
         summary["rejections"],
+        summary["sender_shapes"],
     )
     if len(events) == MAX_MESSAGES_PER_WEBHOOK:
         raise HTTPException(status_code=413, detail="Too many messages in one webhook")

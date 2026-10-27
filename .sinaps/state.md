@@ -3,12 +3,12 @@ project: agent-zero
 current_stage: OPERATE
 tier: major
 tier_reason: WhatsApp sender identity handling affects inbound sender routing and Cloud API replies; strict provider-ID validation and live webhook verification are required.
-last_updated: 2026-10-27T11:25:00Z
-current_session_deliverable: Root cause isolated: the live Meta message was rejected as `invalid_sender`; the sender validator accepted only numeric phone IDs. WhatsApp username-era Business-Scoped User IDs (BSUIDs) can also appear in `from`, so Agent Zero now validates phone IDs or strict country-prefixed alphanumeric BSUIDs for inbound parsing and direct replies. Added parser, malformed-ID, and outbound-recipient regression tests (20 focused WhatsApp tests pass; Ruff and diff checks pass). Next: commit/push the fix, confirm Render API deployment, and verify a fresh live message is queued, processed, and acknowledged. Render services remain online. Zetaris/Nightshift remain out of scope.
+last_updated: 2026-10-27T11:35:00Z
+current_session_deliverable: The API was explicitly deployed on `b284cf1`; a callback at 11:32:44 UTC still failed sender validation. That revision accepted regular BSUIDs but not parent BSUIDs or plus-prefixed phone IDs. The worker was also stale at `0e8ab40` and has now been deployed on `b284cf1`. The next local fix accepts numeric and plus-prefixed phone identifiers (normalizing `+` before HMAC/reply), regular and parent BSUID formats, and adds value-free sender-shape diagnostics for unknown formats. Focused WhatsApp tests: 25 passed; Ruff and diff checks pass. Next: commit/push, deploy the API revision (and align worker), then run a new message through parsing, acknowledgement, queue, and worker completion. Render services remain online. Zetaris/Nightshift remain out of scope.
 ---
 
 ## Current feature
-WhatsApp Cloud API sender identifier compatibility (phone IDs and BSUIDs)
+WhatsApp Cloud API sender identifier compatibility and live delivery diagnosis
 
 ## Approved artifacts
 - [x] docs/product/problem.md

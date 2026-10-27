@@ -13,7 +13,7 @@ Agent Zero already has a ClickCast adapter that accepts text/URL submissions and
 - Verify GET subscription challenges with a dedicated verify token. Verify POST deliveries with `X-Hub-Signature-256` over the exact raw request bytes and the Meta App Secret.
 - Accept events only for the configured phone-number ID. Ignore status callbacks and reject malformed or unauthenticated deliveries.
 - Support text and public-URL submissions in the first slice. Explain that media messages are not yet supported.
-- Accept either a numeric WhatsApp sender ID or a business-scoped user ID (BSUID) in the Cloud API `from` field. Validate BSUIDs as a two-letter country code, a period, and 1–128 alphanumeric characters; preserve the exact value because it is an opaque provider identifier.
+- Accept numeric and plus-prefixed phone IDs, regular BSUIDs (`CC.<id>`), and parent BSUIDs (`CC.ENT.<id>`) in the Cloud API `from` field. Validate the identifier structure and alphanumeric suffix; normalize plus-prefixed phone numbers to digits for Cloud API replies and sender HMACs, while preserving opaque BSUID values exactly.
 - Send only user-initiated text replies to the sender ID from the verified webhook event. The user can send `RESULT` or `RESULT AZ-YYMMDD-XXXXXX` to retrieve the latest or a specific result. No recipient identifier is persisted for later outbound messaging.
 - Store sender ownership as an HMAC reference, never as the raw phone number or BSUID. Scope result lookup to the configured owner, WhatsApp channel, and sender reference.
 - Use the provider message ID, hashed into a bounded idempotency key, so webhook redelivery does not create a second investigation. Outbound acknowledgements are at-least-once; a delivery retry may repeat the acknowledgement.
@@ -39,7 +39,7 @@ The Meta callback is `https://sinaps-wa-webhook.sinaps-wa-webhooks.workers.dev/w
 - Meta Cloud API and ClickCast are separate transport adapters over the same investigation lifecycle.
 - The channel stores the original submitted text in the existing Submission record, as other channels do. It stores only a pseudonymous sender reference for retrieval authorization.
 - No database migration is required.
-- Text/URL intake, immediate acknowledgement, and user-requested result retrieval are supported for phone-number and BSUID senders. Media downloads, interactive messages, status-callback persistence, templates, and completion-time outbound pushes are not included.
+- Text/URL intake, immediate acknowledgement, and user-requested result retrieval are supported for phone-number, regular BSUID, and parent BSUID senders. Media downloads, interactive messages, status-callback persistence, templates, and completion-time outbound pushes are not included.
 - The existing application cannot be considered production-ready solely because webhook signatures are verified. Production authentication, retention/deletion, and deployment controls remain open.
 
 ## Verification
