@@ -91,6 +91,54 @@ def test_parser_extracts_only_supported_text_messages_with_stable_ids() -> None:
     ]
 
 
+def test_parser_accepts_business_scoped_user_id_as_sender() -> None:
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "changes": [{
+                "field": "messages",
+                "value": {
+                    "metadata": {"phone_number_id": "12345"},
+                    "messages": [{
+                        "id": "wamid.bsuid",
+                        "from": "KE.opaqueABC123",
+                        "type": "text",
+                        "text": {"body": "Check this claim"},
+                    }],
+                },
+            }],
+        }],
+    }
+
+    events = parse_message_events(payload)
+
+    assert len(events) == 1
+    assert events[0].sender == "KE.opaqueABC123"
+
+
+@pytest.mark.parametrize("sender", ["KE.", "KE.has-dash", "K.opaque", "2547-00000000"])
+def test_parser_rejects_malformed_sender_identifiers(sender: str) -> None:
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "changes": [{
+                "field": "messages",
+                "value": {
+                    "metadata": {"phone_number_id": "12345"},
+                    "messages": [{
+                        "id": "wamid.bad-sender",
+                        "from": sender,
+                        "type": "text",
+                        "text": {"body": "Check this claim"},
+                    }],
+                },
+            }],
+        }],
+    }
+
+    assert parse_message_events(payload) == []
+
+
 def test_parser_ignores_non_message_webhook_fields() -> None:
     payload = {
         "object": "whatsapp_business_account",
@@ -144,6 +192,30 @@ def test_cloud_api_send_uses_configured_version_and_bearer_auth() -> None:
             "type": "text",
             "text": {"body": "Received"},
         }
+
+
+def test_cloud_api_send_accepts_business_scoped_user_id() -> None:
+    from app.modules.channels.whatsapp import send_text_message
+
+    response = type("Response", (), {"status": 200, "read": lambda self, _size: b"{}"})()
+    with (
+        patch("app.modules.channels.whatsapp.get_settings") as get_settings,
+        patch("app.modules.channels.whatsapp.build_opener") as build_opener,
+    ):
+        get_settings.return_value = SimpleNamespace(
+            whatsapp_access_token=SimpleNamespace(get_secret_value=lambda: "access-token"),
+            whatsapp_app_secret=SimpleNamespace(get_secret_value=lambda: "app-secret"),
+            whatsapp_verify_token=SimpleNamespace(get_secret_value=lambda: "verify-token"),
+            whatsapp_identity_key=SimpleNamespace(get_secret_value=lambda: "i" * 32),
+            whatsapp_phone_number_id="12345",
+            whatsapp_graph_api_version="v25.0",
+        )
+        build_opener.return_value.open.return_value.__enter__.return_value = response
+
+        send_text_message("KE.opaqueABC123", "Received")
+
+        request = build_opener.return_value.open.call_args.args[0]
+        assert json.loads(request.data)["to"] == "KE.opaqueABC123"
 
 
 def test_cloud_api_configuration_rejects_partial_credentials() -> None:

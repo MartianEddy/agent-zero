@@ -44,6 +44,13 @@ MAX_WEBHOOK_BYTES = 1_000_000
 MAX_MESSAGE_CHARS = 20_000
 MAX_MESSAGES_PER_WEBHOOK = 25
 GRAPH_SEND_TIMEOUT_SECONDS = 8
+_PHONE_SENDER_PATTERN = re.compile(r"[0-9]{5,20}")
+_BSUID_PATTERN = re.compile(r"[A-Z]{2}\.[A-Za-z0-9]{1,128}")
+
+
+def _valid_whatsapp_user_id(value: str) -> bool:
+    """Accept Cloud API phone-number IDs and username-era business-scoped IDs."""
+    return bool(_PHONE_SENDER_PATTERN.fullmatch(value) or _BSUID_PATTERN.fullmatch(value))
 
 
 @dataclass(frozen=True)
@@ -93,7 +100,7 @@ def _message_event(
     message_type = message.get("type")
     if not isinstance(message_id, str) or not message_id or len(message_id) > 200:
         return None, "invalid_message_id"
-    if not isinstance(sender, str) or not re.fullmatch(r"[0-9]{5,20}", sender):
+    if not isinstance(sender, str) or not _valid_whatsapp_user_id(sender):
         return None, "invalid_sender"
     if not isinstance(message_type, str):
         return None, "invalid_message_type"
@@ -250,7 +257,7 @@ class _NoRedirect(HTTPRedirectHandler):
 def send_text_message(recipient: str, body: str) -> None:
     """Send a user-initiated service reply through the configured phone number."""
     settings = _configured_settings()
-    if not re.fullmatch(r"[0-9]{5,20}", recipient) or not body.strip() or len(body) > 4096:
+    if not _valid_whatsapp_user_id(recipient) or not body.strip() or len(body) > 4096:
         raise WhatsAppSendError("Outbound message is invalid")
     phone_number_id = settings.whatsapp_phone_number_id
     endpoint = (

@@ -2,13 +2,13 @@
 project: agent-zero
 current_stage: OPERATE
 tier: major
-tier_reason: Core claim/verdict workflow changes across API, persistence, and UI; schema migration required
-last_updated: 2026-10-27T11:13:41Z
-current_session_deliverable: Deployed privacy-safe WhatsApp callback diagnostics in commit `55ec0e2`. The latest user-initiated callback reached the API as a `messages` event with one raw `text` item, but parsed zero messages; no investigation/outbox/Celery job followed. WABA subscription and callback override were checked read-only and appear correct. Added local parser rejection-category diagnostics and tests (14 WhatsApp tests pass; Ruff passes); follow-up is not deployed. Deploy it, identify the failed validation gate without logging values, then fix and verify parsing through worker completion. Render services remain online. No outbound message was sent by the agent. Zetaris/Nightshift remain out of scope.
+tier_reason: WhatsApp sender identity handling affects inbound sender routing and Cloud API replies; strict provider-ID validation and live webhook verification are required.
+last_updated: 2026-10-27T11:25:00Z
+current_session_deliverable: Root cause isolated: the live Meta message was rejected as `invalid_sender`; the sender validator accepted only numeric phone IDs. WhatsApp username-era Business-Scoped User IDs (BSUIDs) can also appear in `from`, so Agent Zero now validates phone IDs or strict country-prefixed alphanumeric BSUIDs for inbound parsing and direct replies. Added parser, malformed-ID, and outbound-recipient regression tests (20 focused WhatsApp tests pass; Ruff and diff checks pass). Next: commit/push the fix, confirm Render API deployment, and verify a fresh live message is queued, processed, and acknowledged. Render services remain online. Zetaris/Nightshift remain out of scope.
 ---
 
 ## Current feature
-WhatsApp Cloud API inbound investigation diagnostics
+WhatsApp Cloud API sender identifier compatibility (phone IDs and BSUIDs)
 
 ## Approved artifacts
 - [x] docs/product/problem.md
