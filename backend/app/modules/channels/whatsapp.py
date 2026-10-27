@@ -148,6 +148,71 @@ def parse_message_events(payload: object) -> list[IncomingWhatsAppMessage]:
     return events
 
 
+def _webhook_payload_summary(
+    payload: dict[str, object], events: list[IncomingWhatsAppMessage]
+) -> dict[str, object]:
+    """Return bounded callback-shape metadata without message content or identities."""
+    callback_fields: set[str] = set()
+    raw_message_count = 0
+    status_count = 0
+    message_types: set[str] = set()
+    known_message_types = {
+        "audio",
+        "button",
+        "contacts",
+        "document",
+        "image",
+        "interactive",
+        "location",
+        "order",
+        "reaction",
+        "sticker",
+        "system",
+        "text",
+        "unknown",
+        "video",
+    }
+
+    entries = payload.get("entry")
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("changes"), list):
+                continue
+            for change in entry["changes"]:
+                if not isinstance(change, dict):
+                    continue
+                field = change.get("field")
+                callback_fields.add(
+                    field
+                    if isinstance(field, str) and field in {"messages", "statuses"}
+                    else "other"
+                )
+                value = change.get("value")
+                if not isinstance(value, dict):
+                    continue
+                messages = value.get("messages")
+                if isinstance(messages, list):
+                    raw_message_count += len(messages)
+                    for message in messages:
+                        message_type = message.get("type") if isinstance(message, dict) else None
+                        message_types.add(
+                            message_type
+                            if isinstance(message_type, str) and message_type in known_message_types
+                            else "other"
+                        )
+                statuses = value.get("statuses")
+                if isinstance(statuses, list):
+                    status_count += len(statuses)
+
+    return {
+        "fields": ",".join(sorted(callback_fields)) or "none",
+        "raw_messages": raw_message_count,
+        "statuses": status_count,
+        "parsed_messages": len(events),
+        "message_types": ",".join(sorted(message_types)) or "none",
+    }
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
         return None
@@ -404,11 +469,22 @@ async def receive_webhook(
     if not isinstance(payload, dict) or payload.get("object") != "whatsapp_business_account":
         raise HTTPException(status_code=400, detail="Unexpected webhook object")
     events = parse_message_events(payload)
+    summary = _webhook_payload_summary(payload, events)
+    logger.info(
+        "WhatsApp webhook payload fields=%s raw_messages=%d statuses=%d "
+        "parsed_messages=%d message_types=%s",
+        summary["fields"],
+        summary["raw_messages"],
+        summary["statuses"],
+        summary["parsed_messages"],
+        summary["message_types"],
+    )
     if len(events) == MAX_MESSAGES_PER_WEBHOOK:
         raise HTTPException(status_code=413, detail="Too many messages in one webhook")
+    handled_messages = 0
     for event in events:
         try:
-            await _handle_message(session, event, settings)
+            handled_messages += await _handle_message(session, event, settings)
         except WhatsAppSendError as exc:
             # If Meta retries after this error, the provider message ID keeps
             # the investigation idempotent and the existing job can be used to
@@ -420,4 +496,10 @@ async def receive_webhook(
             raise HTTPException(
                 status_code=500, detail="Message processing failed"
             ) from exc
+    if events:
+        logger.info(
+            "WhatsApp webhook messages handled=%d parsed_messages=%d",
+            handled_messages,
+            len(events),
+        )
     return {"status": "ok"}

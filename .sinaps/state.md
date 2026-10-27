@@ -3,12 +3,12 @@ project: agent-zero
 current_stage: OPERATE
 tier: major
 tier_reason: Core claim/verdict workflow changes across API, persistence, and UI; schema migration required
-last_updated: 2026-10-27T09:40:34Z
-current_session_deliverable: Deployed the repository-managed Meta WhatsApp forwarding Worker to Cloudflare version `f6a95135-21e2-4727-b3b0-f21a2c3ff06a`. Authenticated, read-only Render CLI inspection confirmed the API URL `https://agent-zero-api.onrender.com`; Render reports the API and its database, Redis, and worker dependencies suspended. Wrangler preserved the existing `WA_APP_SECRET` and `WA_VERIFY_TOKEN` secrets, added `AGENT_ZERO_WEBHOOK_URL`, and enabled query-redacted observability. Dry run succeeded. No Render services were resumed and no live Meta message was sent. End-to-end delivery awaits backend service resumption and confirmation of API `WHATSAPP_*` configuration. Zetaris/Nightshift remain out of scope.
+last_updated: 2026-10-27T11:03:00Z
+current_session_deliverable: Diagnosed the live WhatsApp path. User-initiated Cloudflare POST and Render API webhook returned HTTP 200, but no Celery investigation task/outbox dispatch followed. Read-only Meta check confirmed the WABA has one `Sinaps Technology` app subscription and no callback override; the app dashboard shows `messages` subscribed. Added privacy-safe callback-shape logging locally (field categories, counts, allow-listed message types only) and regression tests; focused suite passes. This diagnostic is not yet deployed. Do not call the WhatsApp investigation flow fixed until a text event is observed parsed and queued. Render services remain online. No outbound message was sent by the agent. Zetaris/Nightshift remain out of scope.
 ---
 
 ## Current feature
-Persisted investigation export and architecture audit
+WhatsApp Cloud API inbound investigation diagnostics
 
 ## Approved artifacts
 - [x] docs/product/problem.md
