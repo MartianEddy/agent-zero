@@ -28,7 +28,7 @@ The user submitted the displayed preview code at approximately 16:14 UTC and rec
 
 - The regression test failed before the fix because `ProcessingJob.id` was `None` and passed after the job UUID was assigned before building the outbox payload.
 - Focused WhatsApp suite: 49 passed. Scoped Ruff, compilation, and `git diff --check` pass.
-- The code fix still needs commit, push, and Render API deployment. The worker code itself does not need a change; it correctly rejected the malformed task argument.
+- Fix commit `9f168fd893d7b4e3d1e8b6a6dae57b6925bab7e9` is pushed and live on Render API as `dep-dbgd9vd9fdbs73dvu3h0`; `/api/v1/ready` reports database, Redis, and object storage healthy. The worker code itself does not need a change; it correctly rejected the malformed task argument.
 - The failed case remains terminal and has no assessment. Do not imply it can be revived; after deployment the user can resubmit the original claim and approve a new preview to create a fresh case.
 - Repeat a controlled WhatsApp claim, confirm it once, then verify that worker logs show a non-empty UUID and `process_investigation` reaches the pipeline. Check `RESULT <reference>` while active and after completion.
 
