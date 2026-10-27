@@ -58,8 +58,12 @@ def _valid_whatsapp_user_id(value: str) -> bool:
     )
 
 
-def _sender_shape(value: object) -> str:
+def _sender_shape(value: object, *, present: bool) -> str:
     """Describe an invalid sender with a low-cardinality, value-free category."""
+    if not present:
+        return "missing"
+    if value is None:
+        return "null"
     if not isinstance(value, str):
         return "non_string"
     if not value:
@@ -79,6 +83,47 @@ def _sender_shape(value: object) -> str:
     if re.fullmatch(r"[A-Za-z0-9]+", value):
         return "alphanumeric_without_country"
     return "other_string"
+
+
+def _sender_identifier(message: dict, contacts: object) -> str | None:
+    """Select an addressable sender from phone and username-era webhook fields."""
+    sender = message.get("from")
+    if isinstance(sender, str) and _valid_whatsapp_user_id(sender):
+        return sender[1:] if _E164_SENDER_PATTERN.fullmatch(sender) else sender
+
+    for key in ("from_parent_user_id", "from_user_id"):
+        identifier = message.get(key)
+        if isinstance(identifier, str) and _valid_whatsapp_user_id(identifier):
+            return identifier
+
+    # The single-contact fallback is unambiguous. Never guess among several
+    # contacts in a batched webhook when no message-level sender is available.
+    if isinstance(contacts, list) and len(contacts) == 1 and isinstance(contacts[0], dict):
+        contact = contacts[0]
+        for key in ("parent_user_id", "user_id", "wa_id"):
+            identifier = contact.get(key)
+            if isinstance(identifier, str) and _valid_whatsapp_user_id(identifier):
+                return identifier[1:] if _E164_SENDER_PATTERN.fullmatch(identifier) else identifier
+    return None
+
+
+def _sender_fallback_fields(message: dict, contacts: object) -> list[str]:
+    """Return only known sender-ID field names for safe rejection diagnostics."""
+    fields = [
+        key for key in ("from_parent_user_id", "from_user_id") if key in message
+    ]
+    if isinstance(contacts, list):
+        for contact in contacts:
+            if not isinstance(contact, dict):
+                continue
+            for key, label in (
+                ("parent_user_id", "contact_parent_user_id"),
+                ("user_id", "contact_user_id"),
+                ("wa_id", "contact_wa_id"),
+            ):
+                if key in contact:
+                    fields.append(label)
+    return sorted(set(fields))
 
 
 @dataclass(frozen=True)
@@ -121,19 +166,17 @@ def verify_webhook_signature(body: bytes, signature: str | None, app_secret: str
 
 
 def _message_event(
-    message: dict, phone_number_id: str
+    message: dict, phone_number_id: str, contacts: object = None
 ) -> tuple[IncomingWhatsAppMessage | None, str | None]:
     message_id = message.get("id")
-    sender = message.get("from")
+    sender = _sender_identifier(message, contacts)
     message_type = message.get("type")
     if not isinstance(message_id, str) or not message_id or len(message_id) > 200:
         return None, "invalid_message_id"
-    if not isinstance(sender, str):
-        return None, "invalid_sender_type"
-    if not _valid_whatsapp_user_id(sender):
+    if sender is None:
+        if not isinstance(message.get("from"), str):
+            return None, "invalid_sender_type"
         return None, "invalid_sender_format"
-    if _E164_SENDER_PATTERN.fullmatch(sender):
-        sender = sender[1:]
     if not isinstance(message_type, str):
         return None, "invalid_message_type"
     text: str | None = None
@@ -166,6 +209,7 @@ def _parse_message_events(
     message_types: set[str] = set()
     rejection_counts: dict[str, int] = {}
     sender_shapes: dict[str, int] = {}
+    sender_fallback_fields: set[str] = set()
     summary: dict[str, object] = {
         "fields": "none",
         "raw_messages": 0,
@@ -213,6 +257,7 @@ def _parse_message_events(
             phone_number_id = (
                 metadata.get("phone_number_id") if isinstance(metadata, dict) else None
             )
+            contacts = value.get("contacts")
             if not isinstance(phone_number_id, str) or not phone_number_id:
                 rejection_counts["missing_phone_number_id"] = (
                     rejection_counts.get("missing_phone_number_id", 0) + len(messages)
@@ -250,7 +295,7 @@ def _parse_message_events(
                     )
                 else:
                     message_types.add("other")
-                event, rejection = _message_event(message, phone_number_id)
+                event, rejection = _message_event(message, phone_number_id, contacts)
                 if event is not None:
                     events.append(event)
                     if len(events) >= MAX_MESSAGES_PER_WEBHOOK:
@@ -258,8 +303,13 @@ def _parse_message_events(
                 elif rejection is not None:
                     rejection_counts[rejection] = rejection_counts.get(rejection, 0) + 1
                     if rejection in {"invalid_sender_type", "invalid_sender_format"}:
-                        shape = _sender_shape(message.get("from"))
+                        shape = _sender_shape(
+                            message.get("from"), present="from" in message
+                        )
                         sender_shapes[shape] = sender_shapes.get(shape, 0) + 1
+                        sender_fallback_fields.update(
+                            _sender_fallback_fields(message, contacts)
+                        )
             if len(events) >= MAX_MESSAGES_PER_WEBHOOK:
                 break
         if len(events) >= MAX_MESSAGES_PER_WEBHOOK:
@@ -278,6 +328,7 @@ def _parse_message_events(
                 f"{shape}:{count}" for shape, count in sorted(sender_shapes.items())
             )
             or "none",
+            "sender_fallback_fields": ",".join(sorted(sender_fallback_fields)) or "none",
         }
     )
     return events, summary
@@ -549,7 +600,8 @@ async def receive_webhook(
     events, summary = _parse_message_events(payload)
     logger.info(
         "WhatsApp webhook payload fields=%s raw_messages=%d statuses=%d "
-        "parsed_messages=%d message_types=%s rejections=%s sender_shapes=%s",
+        "parsed_messages=%d message_types=%s rejections=%s sender_shapes=%s "
+        "sender_fallback_fields=%s",
         summary["fields"],
         summary["raw_messages"],
         summary["statuses"],
@@ -557,6 +609,7 @@ async def receive_webhook(
         summary["message_types"],
         summary["rejections"],
         summary["sender_shapes"],
+        summary["sender_fallback_fields"],
     )
     if len(events) == MAX_MESSAGES_PER_WEBHOOK:
         raise HTTPException(status_code=413, detail="Too many messages in one webhook")

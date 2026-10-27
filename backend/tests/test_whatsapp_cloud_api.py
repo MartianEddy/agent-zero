@@ -141,6 +141,81 @@ def test_parser_accepts_parent_business_scoped_user_id_as_sender() -> None:
     assert events[0].sender == "KE.ENT.opaqueABC123"
 
 
+def test_parser_uses_message_scoped_bsuid_when_phone_sender_is_omitted() -> None:
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "changes": [{
+                "field": "messages",
+                "value": {
+                    "metadata": {"phone_number_id": "12345"},
+                    "messages": [{
+                        "id": "wamid.message-user-id",
+                        "from_user_id": "KE.opaqueABC123",
+                        "type": "text",
+                        "text": {"body": "Check this claim"},
+                    }],
+                },
+            }],
+        }],
+    }
+
+    events = parse_message_events(payload)
+
+    assert len(events) == 1
+    assert events[0].sender == "KE.opaqueABC123"
+
+
+def test_parser_uses_contact_scoped_parent_bsuid_when_phone_sender_is_omitted() -> None:
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "changes": [{
+                "field": "messages",
+                "value": {
+                    "metadata": {"phone_number_id": "12345"},
+                    "contacts": [{"parent_user_id": "KE.ENT.opaqueABC123"}],
+                    "messages": [{
+                        "id": "wamid.contact-user-id",
+                        "type": "text",
+                        "text": {"body": "Check this claim"},
+                    }],
+                },
+            }],
+        }],
+    }
+
+    events = parse_message_events(payload)
+
+    assert len(events) == 1
+    assert events[0].sender == "KE.ENT.opaqueABC123"
+
+
+def test_parser_does_not_guess_between_multiple_contacts_without_message_sender() -> None:
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "changes": [{
+                "field": "messages",
+                "value": {
+                    "metadata": {"phone_number_id": "12345"},
+                    "contacts": [
+                        {"user_id": "KE.opaqueOne"},
+                        {"user_id": "KE.opaqueTwo"},
+                    ],
+                    "messages": [{
+                        "id": "wamid.ambiguous-contact",
+                        "type": "text",
+                        "text": {"body": "Check this claim"},
+                    }],
+                },
+            }],
+        }],
+    }
+
+    assert parse_message_events(payload) == []
+
+
 def test_parser_normalizes_e164_sender_for_cloud_api_reply() -> None:
     payload = {
         "object": "whatsapp_business_account",
@@ -500,6 +575,7 @@ def test_webhook_logs_only_a_low_cardinality_invalid_sender_shape(caplog) -> Non
     handle.assert_not_called()
     assert "rejections=invalid_sender_format:1" in caplog.text
     assert "sender_shapes=other_string:1" in caplog.text
+    assert "sender_fallback_fields=none" in caplog.text
     assert private_text not in caplog.text
     assert private_sender not in caplog.text
 
