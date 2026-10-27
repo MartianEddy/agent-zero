@@ -1128,6 +1128,8 @@ def test_stale_cancel_button_cannot_discard_a_newer_preview() -> None:
 
 
 def test_explicit_submit_creates_one_investigation_from_approved_claims() -> None:
+    from app.modules.investigations.models import OutboxEvent, ProcessingJob
+
     session = MagicMock()
     conversation = _conversation_fixture(
         state="AWAITING_CONFIRMATION",
@@ -1191,12 +1193,12 @@ def test_explicit_submit_creates_one_investigation_from_approved_claims() -> Non
     gateway.return_value.interpret_whatsapp_turn.assert_awaited_once()
     assert conversation.state == "IDLE"
     assert "AZ-261027-ABC123" in send.call_args.args[1]
-    queued = [
-        item
-        for item in session.add_all.call_args.args[0]
-        if getattr(item, "status", None) == "QUEUED"
-    ]
+    added = [item for call in session.add_all.call_args_list for item in call.args[0]]
+    queued = [item for item in added if isinstance(item, ProcessingJob)]
     assert len(queued) == 1
+    outbox = next(item for item in added if isinstance(item, OutboxEvent))
+    assert queued[0].id is not None
+    assert outbox.payload["job_id"] == str(queued[0].id)
 
 
 def test_meta_redelivery_repeats_saved_conversation_reply_without_retriage() -> None:
@@ -1257,6 +1259,53 @@ def test_result_lookup_is_scoped_to_the_hmac_sender_and_includes_saved_limits() 
     assert "not establish this claim" in response
     assert "Only accessible public sources were reviewed." in response
     assert "AZ-261026-ABC123" in response
+
+
+def test_processing_result_shows_actual_stage_and_discourages_resubmitting_claim() -> None:
+    from app.domain.investigation import InvestigationStatus
+
+    session = MagicMock()
+    investigation = SimpleNamespace(
+        id=UUID(int=43),
+        reference="AZ-261027-55065A",
+        status=InvestigationStatus.RESEARCHING,
+        current_stage="RESEARCHING",
+    )
+    session.scalar.side_effect = [investigation, None]
+
+    response = _result_message(
+        session,
+        settings=_settings(),
+        sender_ref="private-hmac-reference",
+        reference="AZ-261027-55065A",
+    )
+
+    assert "gathering public evidence" in response
+    assert "don’t need to resend the claim" in response
+    assert "RESULT AZ-261027-55065A" in response
+
+
+def test_failed_result_makes_clear_that_no_assessment_was_produced() -> None:
+    from app.domain.investigation import InvestigationStatus
+
+    session = MagicMock()
+    investigation = SimpleNamespace(
+        id=UUID(int=44),
+        reference="AZ-261027-55065A",
+        status=InvestigationStatus.FAILED,
+        current_stage="FAILED",
+    )
+    session.scalar.side_effect = [investigation, None]
+
+    response = _result_message(
+        session,
+        settings=_settings(),
+        sender_ref="private-hmac-reference",
+        reference="AZ-261027-55065A",
+    )
+
+    assert "stopped before an assessment was ready" in response
+    assert "No conclusion is available" in response
 
 
 def test_parser_rejects_self_messages_from_business_number() -> None:

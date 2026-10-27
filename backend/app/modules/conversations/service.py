@@ -9,7 +9,7 @@ import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
@@ -94,7 +94,11 @@ def _result_message(
     )
     if brief is None:
         if investigation.status == InvestigationStatus.FAILED:
-            message = "This check could not be completed. You can send the claim again later."
+            message = (
+                "This check stopped before an assessment was ready. No conclusion is available. "
+                "Send the original claim again to start a new check, or review this case "
+                "in Agent Zero."
+            )
         elif investigation.status == InvestigationStatus.CANCELLED:
             message = "This check was cancelled before an assessment was ready."
         elif investigation.status == InvestigationStatus.NEEDS_REVIEW:
@@ -108,7 +112,23 @@ def _result_message(
                 "please review the case in Agent Zero."
             )
         else:
-            message = "This check is still processing. Send RESULT again in a little while."
+            stage_messages = {
+                "RECEIVED": "Your check is queued for research.",
+                "PROCESSING": "Research is underway on your check.",
+                "ANALYZING": "I’m reviewing the claim and preparing the research plan.",
+                "RESEARCHING": "I’m gathering public evidence for your check.",
+                "CORROBORATING": "I’m comparing the available evidence.",
+                "GENERATING_BRIEF": "I’m preparing your evidence summary.",
+            }
+            stage = getattr(investigation, "current_stage", None)
+            message = stage_messages.get(
+                stage,
+                "Your check is still in progress.",
+            )
+            message = (
+                f"{message} You don’t need to resend the claim. "
+                f"Check again later with RESULT {investigation.reference}."
+            )
         return f"{message}\nReference: {investigation.reference}"
 
     findings = list(
@@ -685,6 +705,7 @@ async def _confirm_conversation_draft(
                 )
             )
     job = ProcessingJob(
+        id=uuid4(),
         investigation_id=investigation.id,
         stage="RECEIVED",
         status="QUEUED",
