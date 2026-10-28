@@ -15,6 +15,16 @@ from app.modules.investigations.models import (
     Submission,
     User,
 )
+from app.modules.investigations.provider_errors import FailureCategory, is_retryable
+
+
+def is_retryable_failure_code(error_code: str | None) -> bool:
+    if error_code is None:
+        return False
+    try:
+        return is_retryable(FailureCategory(error_code))
+    except ValueError:
+        return False
 
 
 class InvestigationRetryUnavailable(RuntimeError):

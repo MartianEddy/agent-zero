@@ -28,6 +28,7 @@ from app.modules.conversations.service import (
     _result_message,
     _retry_message,
 )
+from app.modules.investigations.service import is_retryable_failure_code
 from app.modules.investigations.usage import ModelCallBudgetExceeded
 
 
@@ -1310,8 +1311,8 @@ def test_failed_result_makes_clear_that_no_assessment_was_produced() -> None:
     session.scalar.side_effect = [
         investigation,
         None,
-        SimpleNamespace(error_code="PIPELINE_ERROR", status="BLOCKED"),
-        SimpleNamespace(error_code="PIPELINE_ERROR", status="BLOCKED"),
+        SimpleNamespace(error_code="AUTHENTICATION_FAILED", status="BLOCKED"),
+        SimpleNamespace(error_code="AUTHENTICATION_FAILED", status="BLOCKED"),
         SimpleNamespace(model_calls=0),
     ]
     session.scalars.side_effect = [
@@ -1337,11 +1338,11 @@ def test_failed_result_makes_clear_that_no_assessment_was_produced() -> None:
     assert "stopped before an assessment was ready" in response
     assert "No conclusion is available" in response
     assert "Who owns Sinaps Technology in Kenya?" in response
-    assert "processing step stopped unexpectedly" in response
+    assert "could not authorize this check" in response
     assert "not yet confirmed as supporting evidence" in response
     assert "https://registry.example/company/123" in response
     assert "tracking=private" not in response
-    assert "RETRY AZ-261027-55065A" in response
+    assert "RETRY AZ-261027-55065A" not in response
 
 
 def test_completed_result_includes_only_sources_linked_to_saved_findings() -> None:
@@ -1400,7 +1401,10 @@ def test_retry_command_queues_same_sender_case_and_reuses_its_reference() -> Non
         reference="AZ-261027-ABC123",
         status=InvestigationStatus.NEEDS_REVIEW,
     )
-    session.scalar.return_value = investigation
+    session.scalar.side_effect = [
+        investigation,
+        SimpleNamespace(error_code="PROVIDER_UNAVAILABLE", status="BLOCKED"),
+    ]
 
     with patch(
         "app.modules.conversations.service.queue_investigation_retry"
@@ -1416,6 +1420,45 @@ def test_retry_command_queues_same_sender_case_and_reuses_its_reference() -> Non
     assert retry.call_args.kwargs["investigation"] is investigation
     assert "queued another run" in response
     assert "AZ-261027-ABC123" in response
+
+
+def test_retry_command_does_not_queue_authentication_failure() -> None:
+    from app.domain.investigation import InvestigationStatus
+
+    session = MagicMock()
+    investigation = SimpleNamespace(
+        id=UUID(int=47),
+        reference="AZ-261027-ABC123",
+        status=InvestigationStatus.NEEDS_REVIEW,
+    )
+    session.scalar.side_effect = [
+        investigation,
+        SimpleNamespace(error_code="AUTHENTICATION_FAILED", status="BLOCKED"),
+    ]
+
+    with patch(
+        "app.modules.conversations.service.queue_investigation_retry"
+    ) as retry:
+        response = _retry_message(
+            session,
+            settings=_settings(),
+            sender_ref="private-hmac-reference",
+            reference="AZ-261027-ABC123",
+        )
+
+    retry.assert_not_called()
+    assert "not transient" in response
+    assert "AZ-261027-ABC123" in response
+
+
+def test_retry_policy_only_offers_retries_for_transient_failure_categories() -> None:
+    assert is_retryable_failure_code("RATE_LIMITED")
+    assert is_retryable_failure_code("PROVIDER_UNAVAILABLE")
+    assert is_retryable_failure_code("TIMEOUT")
+    assert not is_retryable_failure_code("AUTHENTICATION_FAILED")
+    assert not is_retryable_failure_code("QUOTA_EXHAUSTED")
+    assert not is_retryable_failure_code("BUDGET_EXCEEDED")
+    assert not is_retryable_failure_code("PIPELINE_ERROR")
 
 
 def test_parser_rejects_self_messages_from_business_number() -> None:

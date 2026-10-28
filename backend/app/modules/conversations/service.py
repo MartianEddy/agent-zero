@@ -42,6 +42,7 @@ from app.modules.investigations.service import (
     DEV_USER_ID,
     InvestigationRetryUnavailable,
     InvestigationService,
+    is_retryable_failure_code,
     queue_investigation_retry,
 )
 from app.modules.investigations.summary import finding_result_summary
@@ -124,6 +125,7 @@ def _retry_available(session: Session, investigation: Investigation) -> bool:
         investigation.status not in {InvestigationStatus.NEEDS_REVIEW, InvestigationStatus.FAILED}
         or job is None
         or job.status in {"QUEUED", "RUNNING"}
+        or not is_retryable_failure_code(job.error_code)
     ):
         return False
     usage = session.scalar(
@@ -383,6 +385,18 @@ def _retry_message(
             "Send RETRY with its case reference."
         )
 
+    latest_job = session.scalar(
+        select(ProcessingJob)
+        .where(ProcessingJob.investigation_id == investigation.id)
+        .order_by(ProcessingJob.created_at.desc())
+    )
+    if latest_job is not None and not is_retryable_failure_code(latest_job.error_code):
+        return (
+            "This failure is not transient, so I can't retry it from WhatsApp. "
+            "After the service issue is corrected, start a fresh check or contact support.\n"
+            f"Reference: {investigation.reference}"
+        )
+
     try:
         queue_investigation_retry(
             session,
@@ -393,7 +407,8 @@ def _retry_message(
     except InvestigationRetryUnavailable as exc:
         messages = {
             "not_retryable": (
-                "This check is not in a stopped state, so I haven't queued another run."
+                "This failure type cannot be safely retried here. Open the case in Agent Zero "
+                "or contact support."
             ),
             "job_missing": (
                 "I couldn't find a saved run to retry. Please open the case in Agent Zero."
