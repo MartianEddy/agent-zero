@@ -1298,6 +1298,63 @@ def test_processing_result_shows_actual_stage_and_discourages_resubmitting_claim
     assert "RESULT AZ-261027-55065A" in response
 
 
+def test_result_without_reference_selects_latest_case_for_sender() -> None:
+    from app.domain.investigation import InvestigationStatus
+
+    session = MagicMock()
+    investigation = SimpleNamespace(
+        id=UUID(int=47),
+        reference="AZ-261028-ED24C0",
+        status=InvestigationStatus.RESEARCHING,
+        current_stage="RESEARCHING",
+    )
+    session.scalar.side_effect = [investigation, None, None]
+
+    response = _result_message(
+        session,
+        settings=_settings(),
+        sender_ref="private-hmac-reference",
+        reference=None,
+    )
+
+    query = session.scalar.call_args_list[0].args[0]
+    sql = str(query.compile())
+    assert "investigations.reference IS NULL" not in sql
+    assert "ORDER BY investigations.created_at DESC" in sql
+    assert "RESULT AZ-261028-ED24C0" in response
+
+
+def test_plural_results_command_uses_deterministic_result_lookup() -> None:
+    session = MagicMock()
+    event = IncomingWhatsAppMessage(
+        message_id="wamid.results",
+        sender="254700000000",
+        phone_number_id="12345",
+        message_type="text",
+        text="Results",
+    )
+    conversation = _conversation_fixture()
+    session.scalar.return_value = conversation
+
+    with (
+        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service._complete_inbound_event"),
+        patch(
+            "app.modules.conversations.service._result_message", return_value="latest result"
+        ) as result,
+        patch("app.modules.channels.whatsapp.send_text_message") as send,
+        patch(
+            "app.modules.conversations.service.run_in_threadpool",
+            side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs),
+        ),
+    ):
+        assert asyncio.run(_handle_message(session, event, _settings()))
+
+    result.assert_called_once()
+    assert result.call_args.kwargs["reference"] is None
+    send.assert_called_once_with(event.sender, "latest result")
+
+
 def test_failed_result_makes_clear_that_no_assessment_was_produced() -> None:
     from app.domain.investigation import InvestigationStatus
 

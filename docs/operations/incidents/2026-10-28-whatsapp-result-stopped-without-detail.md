@@ -2,7 +2,16 @@
 
 **Date:** 2026-10-28  
 **Case:** `AZ-261028-F4AEA3`  
-**Status:** Root cause identified; result/recovery improvements are deployed. WhatsApp retry suppression for authentication failures is verified locally and awaiting deployment. The worker credential requires owner-side correction/confirmation.
+**Status:** Root cause identified; result/recovery improvements and WhatsApp retry suppression are deployed. The worker credential requires owner-side correction/confirmation.
+
+## Follow-up anomaly: latest case not found by RESULT
+
+**Case:** `AZ-261028-ED24C0`
+**Observed:** After submitting the approved claim, both `Results` and `Result` replied that no check existed for the WhatsApp number.
+
+The direct `RESULT` path always added `Investigation.reference == reference`, even when the user omitted a reference. With `reference=None`, SQLAlchemy emitted `investigations.reference IS NULL`; valid cases always have a reference, so the lookup could never match. The plural spelling `Results` was also not a deterministic command and fell through to model interpretation.
+
+The fix makes an unqualified `RESULT` select the newest case scoped to the sender's HMAC identity, retains exact reference lookup when supplied, and recognizes both `RESULT` and `RESULTS` with or without a reference. Regression tests cover the null-reference query and plural command routing.
 
 ## Observed
 
@@ -23,4 +32,4 @@ The case record is `NEEDS_REVIEW` with no saved finding or brief. Its persisted 
 
 ## Remaining verification
 
-Resource health is BLOCKED (5% disk free, RAM above 90%, swap full). Result/recovery commit `1ac2556` is deployed as `dep-dbgrsd61egvs73e1nup0`; readiness returned healthy. The auth-failure retry guard passes local suites (53 WhatsApp tests; 17 cost-controlled pipeline tests), static Ruff F/I, compileall, and `git diff --check`, but has not been deployed yet. Correct/confirm the worker OpenAI credential without exposing its value, deploy the retry guard, then complete a fresh owner-run WhatsApp journey. Phase 1 remains in VERIFY.
+Resource health is BLOCKED (5% disk free, RAM 91%, swap full). Result/recovery commit `1ac2556` is deployed as `dep-dbgrsd61egvs73e1nup0`; auth retry guard `a69cd56` is deployed as `dep-dbgs0d6c6qcc73cgdpng`; API readiness is healthy. Local suites pass (53 WhatsApp tests; 17 cost-controlled pipeline tests), as do static Ruff F/I, compileall, and `git diff --check`. Correct/confirm the worker OpenAI credential without exposing its value, then complete a fresh owner-run WhatsApp journey. Phase 1 remains in VERIFY.

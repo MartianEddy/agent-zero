@@ -185,7 +185,10 @@ def _result_message(
             Submission.source_metadata["sender_ref"].as_string() == sender_ref,
         )
     )
-    statement = statement.where(Investigation.reference == reference)
+    if reference is not None:
+        statement = statement.where(Investigation.reference == reference)
+    else:
+        statement = statement.order_by(Investigation.created_at.desc()).limit(1)
     investigation = session.scalar(statement)
     if investigation is None:
         return (
@@ -1136,8 +1139,8 @@ async def _handle_turn(
             reply=reply,
         )
         return True
-    if folded == "result" or folded.startswith("result "):
-        reference = command[6:].strip() or None
+    if folded in {"result", "results"} or folded.startswith(("result ", "results ")):
+        reference = re.sub(r"^results?\s*", "", command, flags=re.IGNORECASE).strip() or None
         if reference and not re.fullmatch(
             r"AZ-[0-9]{6}-[A-F0-9]{6}", reference, re.IGNORECASE
         ):
