@@ -11,7 +11,7 @@
 
 The direct `RESULT` path always added `Investigation.reference == reference`, even when the user omitted a reference. With `reference=None`, SQLAlchemy emitted `investigations.reference IS NULL`; valid cases always have a reference, so the lookup could never match. The plural spelling `Results` was also not a deterministic command and fell through to model interpretation.
 
-The fix makes an unqualified `RESULT` select the newest case scoped to the sender's HMAC identity, retains exact reference lookup when supplied, and recognizes both `RESULT` and `RESULTS` with or without a reference. Regression tests cover the null-reference query and plural command routing.
+The fix makes an unqualified `RESULT` select the newest case scoped to the sender's HMAC identity, retains exact reference lookup when supplied, and recognizes both `RESULT` and `RESULTS` with or without a reference. Regression tests cover the null-reference query and plural command routing. Commit `9d2c2ca` is deployed as `dep-dbgukd0u01pc73b46e7g`; API readiness is healthy. The owner should query `RESULT AZ-261028-ED24C0` to confirm the saved case's processing outcome.
 
 ## Observed
 
