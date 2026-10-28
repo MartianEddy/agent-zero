@@ -1,4 +1,7 @@
 import unittest
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import UUID
 
 from sqlalchemy import create_engine, event, select
@@ -6,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.db.base import Base
 from app.domain.investigation import Channel, InputType, InvestigationStatus
-from app.modules.investigations.models import Investigation, InvestigationUsage
+from app.modules.conversations.models import WhatsAppConversation
+from app.modules.investigations.models import Investigation, InvestigationUsage, ModelUsageRecord
 from app.modules.investigations.provider_errors import (
     FailureCategory,
     classify_provider_error,
@@ -95,6 +99,7 @@ class ModelUsageBudgetTests(unittest.TestCase):
         )
         self.session.add(InvestigationUsage(investigation_id=self.investigation_id))
         self.session.commit()
+        self.owner_id = owner
 
     def tearDown(self) -> None:
         self.session.close()
@@ -118,6 +123,80 @@ class ModelUsageBudgetTests(unittest.TestCase):
 
     def test_token_usage_is_unknown_when_provider_does_not_return_it(self) -> None:
         self.assertEqual(token_usage([]), (None, None, None, None))
+
+    def test_whatsapp_budget_resets_after_rolling_24_hour_window(self) -> None:
+        now = datetime.now(UTC)
+        conversation = WhatsAppConversation(
+            owner_id=self.owner_id,
+            sender_ref="sender-ref",
+            expires_at=now + timedelta(days=1),
+            model_calls=12,
+        )
+        self.session.add(conversation)
+        self.session.flush()
+        self.session.add(
+            ModelUsageRecord(
+                conversation_id=conversation.id,
+                provider="openai",
+                model="gpt-6-luna",
+                purpose="WHATSAPP_CONVERSATION",
+                status="FAILED",
+                created_at=now - timedelta(hours=25),
+            )
+        )
+        self.session.commit()
+
+        with patch(
+            "app.modules.investigations.usage.get_settings",
+            return_value=SimpleNamespace(
+                max_model_calls_per_whatsapp_conversation=2,
+                max_model_calls_per_investigation=4,
+            ),
+        ):
+            record = ModelCallBudget(
+                self.session, conversation_id=conversation.id
+            ).begin(provider="openai", model="gpt-6-luna", purpose="WHATSAPP_CONVERSATION")
+
+        self.assertEqual(record.conversation_id, conversation.id)
+        self.assertEqual(conversation.model_calls, 1)
+
+    def test_whatsapp_budget_error_reports_when_a_slot_will_open(self) -> None:
+        now = datetime.now(UTC)
+        conversation = WhatsAppConversation(
+            owner_id=self.owner_id,
+            sender_ref="sender-ref",
+            expires_at=now + timedelta(days=1),
+        )
+        self.session.add(conversation)
+        self.session.flush()
+        oldest = now - timedelta(hours=23)
+        for created_at in (oldest, now - timedelta(hours=22)):
+            self.session.add(
+                ModelUsageRecord(
+                    conversation_id=conversation.id,
+                    provider="openai",
+                    model="gpt-6-luna",
+                    purpose="WHATSAPP_CONVERSATION",
+                    status="FAILED",
+                    created_at=created_at,
+                )
+            )
+        self.session.commit()
+
+        with patch(
+            "app.modules.investigations.usage.get_settings",
+            return_value=SimpleNamespace(
+                max_model_calls_per_whatsapp_conversation=2,
+                max_model_calls_per_investigation=4,
+            ),
+        ):
+            with self.assertRaises(ModelCallBudgetExceeded) as raised:
+                ModelCallBudget(
+                    self.session, conversation_id=conversation.id
+                ).begin(provider="openai", model="gpt-6-luna", purpose="WHATSAPP_CONVERSATION")
+
+        self.assertIsNotNone(raised.exception.reset_at)
+        self.assertEqual(raised.exception.reset_at, oldest + timedelta(hours=24))
 
     def test_token_usage_reads_responses_api_usage(self) -> None:
         raw = {

@@ -1,7 +1,8 @@
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -14,7 +15,9 @@ from app.modules.investigations.models import (
 
 
 class ModelCallBudgetExceeded(RuntimeError):
-    pass
+    def __init__(self, message: str, *, reset_at: datetime | None = None) -> None:
+        self.reset_at = reset_at
+        super().__init__(message)
 
 
 def get_or_create_usage(session: Session, investigation_id: UUID) -> InvestigationUsage:
@@ -77,7 +80,23 @@ class ModelCallBudget:
         )
         if usage is None and conversation is None:
             raise ValueError("Model usage owner was not found")
-        model_calls = usage.model_calls if usage is not None else conversation.model_calls
+        reset_at = None
+        if usage is not None:
+            model_calls = usage.model_calls
+        else:
+            now = datetime.now(UTC)
+            model_calls, first_call_at = self.session.execute(
+                select(func.count(ModelUsageRecord.id), func.min(ModelUsageRecord.created_at))
+                .where(
+                    ModelUsageRecord.conversation_id == self.conversation_id,
+                    ModelUsageRecord.created_at >= now - timedelta(hours=24),
+                )
+            ).one()
+            conversation.model_calls = model_calls
+            if first_call_at is not None:
+                if first_call_at.tzinfo is None:
+                    first_call_at = first_call_at.replace(tzinfo=UTC)
+                reset_at = first_call_at + timedelta(hours=24)
         if model_calls >= self.limit:
             message = (
                 "Investigation model-call budget reached."
@@ -96,7 +115,7 @@ class ModelCallBudget:
                 )
                 if commit:
                     self.session.commit()
-            raise ModelCallBudgetExceeded(message)
+            raise ModelCallBudgetExceeded(message, reset_at=reset_at)
         if usage is not None:
             usage.model_calls += 1
         elif conversation is not None:

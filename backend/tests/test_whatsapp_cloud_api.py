@@ -23,7 +23,8 @@ from app.modules.channels.whatsapp import (
     verify_webhook_signature,
 )
 from app.modules.conversations.schemas import ConversationTurn
-from app.modules.conversations.service import _result_message
+from app.modules.conversations.service import _model_unavailable_reply, _result_message
+from app.modules.investigations.usage import ModelCallBudgetExceeded
 
 
 def test_meta_signature_is_verified_against_raw_request_body() -> None:
@@ -1545,3 +1546,16 @@ def test_start_without_preview_explains_next_step_without_calling_luna() -> None
     gateway.return_value.interpret_whatsapp_turn.assert_not_called()
     assert "There isn’t a claim preview to start yet" in send.call_args.args[1]
     assert "Nothing has started" in send.call_args.args[1]
+
+
+def test_chat_budget_error_gives_reset_time_instead_of_saying_retry_shortly() -> None:
+    error = ModelCallBudgetExceeded(
+        "WhatsApp conversation model-call budget reached.",
+        reset_at=datetime(2026, 10, 28, 12, 0, tzinfo=UTC),
+    )
+
+    reply = _model_unavailable_reply(error)
+
+    assert "3:00 PM EAT on Wed, Oct 28" in reply
+    assert "no investigation was started" in reply
+    assert "try again shortly" not in reply

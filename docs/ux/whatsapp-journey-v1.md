@@ -43,6 +43,7 @@ This needs a product/architecture decision about question-shaped cases and evide
 | Processing | Case reference and processing status | Ask for status later |
 | Assessment ready | Evidence-linked assessment and limitations | Read result or open the authorized case |
 | Needs human review | State that no final assessment is available and explain the next supported step | Open the referenced case |
+| AI reply limit reached | Explain that no investigation started and show when a conversational model-call slot will reopen, in EAT | Try again after the displayed reset time |
 
 Button replies must be idempotent and preview-bound. If interactive messages are unavailable, the text in the preview must include the matching confirmation code and text alternatives. Replaying a webhook may resend a text version; it must never approve a different preview.
 

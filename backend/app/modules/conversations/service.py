@@ -10,6 +10,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
@@ -51,6 +52,25 @@ _UNRESOLVED_CLAIM_PATTERN = re.compile(
 
 class ConversationTurnInProgress(RuntimeError):
     """A prior delivery of this inbound event is still being processed."""
+
+
+def _model_unavailable_reply(error: Exception) -> str:
+    if isinstance(error, ModelCallBudgetExceeded):
+        if error.reset_at is not None:
+            local_reset = error.reset_at.astimezone(ZoneInfo("Africa/Nairobi"))
+            reset_label = local_reset.strftime("%-I:%M %p EAT on %a, %b %-d")
+            return (
+                "I’ve reached the chat’s AI reply limit for now. It resets at "
+                f"{reset_label}. Your message was received, but no investigation was started."
+            )
+        return (
+            "I’ve reached the chat’s AI reply limit for now. Your message was received, but no "
+            "investigation was started. Please try again later."
+        )
+    return (
+        "I’m temporarily unable to reach my reasoning service. Your message was received, but "
+        "no investigation was started. Please try again shortly."
+    )
 
 
 def _sender_reference(sender: str, identity_key: str) -> str:
@@ -1023,10 +1043,7 @@ async def _handle_turn(
         logger.warning(
             "WhatsApp conversational model unavailable category=%s", type(exc).__name__
         )
-        reply = (
-            "I’m having trouble understanding that message right now. "
-            "No investigation was started. Please try again shortly."
-        )
+        reply = _model_unavailable_reply(exc)
         await _send_saved_reply(
             session,
             conversation=conversation,
