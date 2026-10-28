@@ -4,8 +4,10 @@ import hmac
 import json
 import logging
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.error import HTTPError
 from uuid import UUID
 
 import pytest
@@ -16,7 +18,10 @@ from starlette.requests import Request
 from app.core.config import Settings
 from app.modules.channels.whatsapp import (
     IncomingWhatsAppMessage,
+    WhatsAppSendError,
     _handle_message,
+    _send_cloud_message,
+    _status_diagnostics,
     parse_message_events,
     receive_webhook,
     verify_webhook,
@@ -27,6 +32,7 @@ from app.modules.conversations.service import (
     _model_unavailable_reply,
     _result_message,
     _retry_message,
+    _sender_reference,
 )
 from app.modules.investigations.service import is_retryable_failure_code
 from app.modules.investigations.usage import ModelCallBudgetExceeded
@@ -41,6 +47,74 @@ def test_meta_signature_is_verified_against_raw_request_body() -> None:
     assert not verify_webhook_signature(body + b" ", f"sha256={digest}", secret)
     assert not verify_webhook_signature(body, f"sha1={digest}", secret)
     assert not verify_webhook_signature(body, None, secret)
+
+
+def test_outbound_rejection_log_keeps_meta_error_code_without_response_body() -> None:
+    response = BytesIO(
+        b'{"error":{"message":"recipient not allowed","code":131030,'
+        b'"fbtrace_id":"private-trace-value"}}'
+    )
+    settings = SimpleNamespace(
+        whatsapp_access_token=SimpleNamespace(get_secret_value=lambda: "token"),
+        whatsapp_phone_number_id="12345",
+        whatsapp_graph_api_version="v25.0",
+    )
+    opener = SimpleNamespace(
+        open=MagicMock(
+            side_effect=HTTPError(
+                "https://graph.facebook.com/", 400, "Bad Request", {}, response
+            )
+        )
+    )
+
+    with (
+        patch("app.modules.channels.whatsapp._configured_settings", return_value=settings),
+        patch("app.modules.channels.whatsapp.build_opener", return_value=opener),
+        pytest.raises(WhatsAppSendError, match="HTTP 400, provider code 131030") as error,
+    ):
+        _send_cloud_message("254700000000", {"to": "254700000000"})
+
+    assert "private-trace-value" not in str(error.value)
+    assert "recipient not allowed" not in str(error.value)
+
+
+def test_outbound_status_diagnostics_correlate_sender_without_logging_number() -> None:
+    identity_key = "private-test-identity-key"
+    recipient = "254700000000"
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "changes": [
+                    {
+                        "field": "messages",
+                        "value": {
+                            "statuses": [
+                                {
+                                    "id": "wamid.private-provider-id",
+                                    "recipient_id": recipient,
+                                    "status": "failed",
+                                    "errors": [{"code": 131026}],
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        ],
+    }
+
+    diagnostics = _status_diagnostics(payload, identity_key=identity_key)
+
+    assert diagnostics == [
+        {
+            "sender_ref": _sender_reference(recipient, identity_key),
+            "state": "failed",
+            "error_codes": [131026],
+        }
+    ]
+    assert recipient not in str(diagnostics)
+    assert "wamid.private-provider-id" not in str(diagnostics)
 
 
 def test_parser_extracts_only_supported_text_messages_with_stable_ids() -> None:
@@ -521,6 +595,7 @@ def _settings():
         whatsapp_identity_key=SimpleNamespace(get_secret_value=lambda: "i" * 32),
         whatsapp_phone_number_id="12345",
         whatsapp_graph_api_version="v25.0",
+        whatsapp_support_url="https://support.example.test/contact",
         whatsapp_conversation_enabled=True,
         max_search_queries=5,
         max_model_calls_per_investigation=4,
@@ -821,6 +896,7 @@ def test_natural_confirmation_requires_the_code_for_the_active_preview() -> None
     with (
         patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
         patch("app.modules.conversations.service._complete_inbound_event"),
+            patch("app.modules.conversations.service._notification_preference", return_value=None),
         patch("app.modules.conversations.service.ModelGateway") as gateway,
         patch("app.modules.channels.whatsapp.send_text_message") as send,
         patch(
@@ -929,6 +1005,7 @@ def test_inbound_text_uses_luna_to_create_preview_without_creating_case() -> Non
     with (
         patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
         patch("app.modules.conversations.service._complete_inbound_event"),
+        patch("app.modules.conversations.service._notification_preference", return_value=None),
         patch("app.modules.conversations.service.InvestigationService") as service,
         patch("app.modules.conversations.service.ModelGateway") as gateway,
         patch("app.modules.channels.whatsapp.send_reply_buttons") as send,
@@ -1152,7 +1229,7 @@ def test_explicit_submit_creates_one_investigation_from_approved_claims() -> Non
         preview_version=1,
         confirmation_token="1234ABCD",
     )
-    session.scalar.side_effect = [conversation, None]
+    session.scalar.side_effect = [conversation, None, None]
     investigation = SimpleNamespace(
         id=UUID(int=200), reference="AZ-261027-ABC123", current_stage="TRIAGE_PENDING"
     )
@@ -1200,6 +1277,9 @@ def test_explicit_submit_creates_one_investigation_from_approved_claims() -> Non
     gateway.return_value.interpret_whatsapp_turn.assert_awaited_once()
     assert conversation.state == "IDLE"
     assert "AZ-261027-ABC123" in send.call_args.args[1]
+    assert "message you here with the result" in send.call_args.args[1]
+    assert "RESULT <reference>" in send.call_args.args[1]
+    assert conversation.recipient_encrypted != event.sender
     added = [item for call in session.add_all.call_args_list for item in call.args[0]]
     queued = [item for item in added if isinstance(item, ProcessingJob)]
     assert len(queued) == 1
@@ -1322,6 +1402,32 @@ def test_result_without_reference_selects_latest_case_for_sender() -> None:
     assert "investigations.reference IS NULL" not in sql
     assert "ORDER BY investigations.created_at DESC" in sql
     assert "RESULT AZ-261028-ED24C0" in response
+
+
+def test_result_lookup_falls_back_to_approved_conversation_mapping() -> None:
+    from app.domain.investigation import InvestigationStatus
+
+    conversation_id = UUID(int=48)
+    investigation = SimpleNamespace(
+        id=UUID(int=49),
+        reference="AZ-261028-ED24C0",
+        status=InvestigationStatus.RESEARCHING,
+        current_stage="RESEARCHING",
+    )
+    session = MagicMock()
+    session.scalar.side_effect = [None, investigation, None, None]
+
+    response = _result_message(
+        session,
+        settings=_settings(),
+        sender_ref="current-sender-hmac",
+        reference="AZ-261028-ED24C0",
+        conversation_id=conversation_id,
+    )
+
+    fallback_query = session.scalar.call_args_list[1].args[0]
+    assert str(conversation_id) in str(fallback_query.compile().params.values())
+    assert "Reference: AZ-261028-ED24C0" in response
 
 
 def test_plural_results_command_uses_deterministic_result_lookup() -> None:

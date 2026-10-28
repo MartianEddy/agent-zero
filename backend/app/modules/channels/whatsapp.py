@@ -24,7 +24,11 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.modules.conversations.schemas import ConversationTurn
-from app.modules.conversations.service import ConversationService, ConversationTurnInProgress
+from app.modules.conversations.service import (
+    ConversationService,
+    ConversationTurnInProgress,
+    _sender_reference,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/channels/whatsapp", tags=["WhatsApp Cloud API"])
@@ -427,6 +431,51 @@ def parse_message_events(payload: object) -> list[IncomingWhatsAppMessage]:
     return events
 
 
+def _status_diagnostics(payload: object, *, identity_key: str) -> list[dict[str, object]]:
+    """Return status callbacks with sender HMACs and numeric errors only."""
+    diagnostics: list[dict[str, object]] = []
+    if not isinstance(payload, dict) or not isinstance(payload.get("entry"), list):
+        return diagnostics
+    for entry in payload["entry"]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("changes"), list):
+            continue
+        for change in entry["changes"]:
+            if not isinstance(change, dict) or change.get("field") != "messages":
+                continue
+            value = change.get("value")
+            statuses = value.get("statuses") if isinstance(value, dict) else None
+            if not isinstance(statuses, list):
+                continue
+            for status in statuses:
+                if not isinstance(status, dict):
+                    continue
+                state = status.get("status")
+                recipient = status.get("recipient_id")
+                if not isinstance(state, str) or not isinstance(recipient, str):
+                    continue
+                errors = status.get("errors")
+                codes = sorted(
+                    {
+                        error["code"]
+                        for error in errors
+                        if isinstance(errors, list)
+                        and isinstance(error, dict)
+                        and isinstance(error.get("code"), int)
+                        and not isinstance(error.get("code"), bool)
+                    }
+                ) if isinstance(errors, list) else []
+                diagnostics.append(
+                    {
+                        "sender_ref": _sender_reference(recipient, identity_key),
+                        "state": state
+                        if state in {"sent", "delivered", "read", "failed"}
+                        else "other",
+                        "error_codes": codes,
+                    }
+                )
+    return diagnostics
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
         return None
@@ -517,7 +566,21 @@ def _send_cloud_message(recipient: str, payload: dict) -> None:
                 raise WhatsAppSendError("Meta rejected the outbound message")
             response.read(64_000)
     except HTTPError as exc:
-        raise WhatsAppSendError(f"Meta rejected the outbound message (HTTP {exc.code})") from exc
+        provider_code = None
+        try:
+            error_payload = json.loads(exc.read(8192))
+            provider_error = (
+                error_payload.get("error") if isinstance(error_payload, dict) else None
+            )
+            raw_code = provider_error.get("code") if isinstance(provider_error, dict) else None
+            if isinstance(raw_code, int) and not isinstance(raw_code, bool):
+                provider_code = raw_code
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            pass
+        diagnostic = f"HTTP {exc.code}"
+        if provider_code is not None:
+            diagnostic += f", provider code {provider_code}"
+        raise WhatsAppSendError(f"Meta rejected the outbound message ({diagnostic})") from exc
     except (URLError, TimeoutError, OSError) as exc:
         raise WhatsAppSendError("Meta message delivery failed") from exc
 
@@ -618,6 +681,15 @@ async def receive_webhook(
         summary["status_states"],
         summary["status_error_codes"],
     )
+    for diagnostic in _status_diagnostics(
+        payload, identity_key=settings.whatsapp_identity_key.get_secret_value()
+    ):
+        logger.info(
+            "WhatsApp outbound status sender_ref=%s state=%s error_codes=%s",
+            diagnostic["sender_ref"],
+            diagnostic["state"],
+            ",".join(str(code) for code in diagnostic["error_codes"]) or "none",
+        )
     if len(events) == MAX_MESSAGES_PER_WEBHOOK:
         raise HTTPException(status_code=413, detail="Too many messages in one webhook")
     handled_messages = 0
@@ -632,7 +704,10 @@ async def receive_webhook(
             # If Meta retries after this error, the provider message ID keeps
             # the investigation idempotent and the existing job can be used to
             # retry only its acknowledgement.
-            logger.warning("WhatsApp outbound reply failed: %s", exc)
+            sender_ref = _sender_reference(
+                event.sender, settings.whatsapp_identity_key.get_secret_value()
+            )
+            logger.warning("WhatsApp outbound reply failed sender_ref=%s: %s", sender_ref, exc)
             raise HTTPException(status_code=502, detail="WhatsApp reply could not be sent") from exc
         except Exception as exc:
             logger.error("WhatsApp webhook message processing failed")

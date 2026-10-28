@@ -7,13 +7,21 @@ import re
 from datetime import datetime, timedelta, timezone
 from time import monotonic
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.domain.investigation import InputType, InvestigationStatus, validate_transition
+from app.domain.investigation import Channel, InputType, InvestigationStatus, validate_transition
+from app.modules.investigations.evidence_ledger import (
+    independence_groups as ledger_independence_groups,
+)
+from app.modules.investigations.evidence_ledger import (
+    staleness_flag,
+    validate_excerpt,
+    validate_sentence_citations,
+)
 from app.modules.investigations.image_safety import ImageValidationError
 from app.modules.investigations.investigator import (
     EvidenceReasoning,
@@ -36,6 +44,7 @@ from app.modules.investigations.models import (
     Investigation,
     InvestigationUsage,
     MediaAsset,
+    OutboxEvent,
     ProcessingJob,
     SearchTrace,
     Source,
@@ -52,6 +61,11 @@ from app.modules.investigations.usage import (
     add_limitation,
     get_or_create_usage,
 )
+from app.modules.investigations.verdict_policy import (
+    EvidenceSignal,
+    assess_verdict,
+    build_independence_groups,
+)
 from app.modules.sources.evidence_extraction import (
     extract_candidate_excerpts,
     select_claim_relevant_regions,
@@ -59,29 +73,19 @@ from app.modules.sources.evidence_extraction import (
 from app.modules.sources.exa_search import ExaSearchError, search_exa
 from app.modules.sources.openai_web_search import OpenAIWebSearchError, search_openai_web
 from app.modules.sources.registry import classify_source, role_for_claim
-from app.modules.sources.settled_fact import ReferenceExcerpt, lookup_settled_fact
 from app.modules.sources.retrieval import (
     SourceRetrievalError,
     excerpt_is_present,
     read_public_page,
 )
+from app.modules.sources.settled_fact import ReferenceExcerpt, lookup_settled_fact
 from app.modules.sources.source_prioritization import prioritize_sources
-from app.modules.sources.urls import extract_markdown_link_urls, normalize_source_url
 from app.modules.sources.tiers import source_tier_for_domain
-from app.modules.investigations.verdict_policy import (
-    EvidenceSignal,
-    assess_verdict,
-    build_independence_groups,
-)
-from app.modules.investigations.evidence_ledger import (
-    independence_groups as ledger_independence_groups,
-    staleness_flag,
-    validate_excerpt,
-    validate_sentence_citations,
-)
+from app.modules.sources.urls import extract_markdown_link_urls, normalize_source_url
 from app.storage.s3 import get_private_object, put_private_object
 
 logger = logging.getLogger(__name__)
+_WHATSAPP_NOTIFICATION_NAMESPACE = UUID("f4d50920-2994-46ee-92be-b50fed3a5eb3")
 ALLOWED_RELATIONSHIPS = {"SUPPORTS", "CONTRADICTS", "CONTEXTUALIZES", "MENTIONS", "UNKNOWN"}
 ALLOWED_FINDING_STATUSES = {
     "SUPPORTED", "CONTRADICTED", "PARTLY_TRUE", "INSUFFICIENT_EVIDENCE", "NOT_VERIFIABLE"
@@ -2226,9 +2230,9 @@ def _run_fast_path_claims(
                 investigation,
                 claim,
                 status="INSUFFICIENT_EVIDENCE",
-                statement="The reference check did not finish before the case deadline, so this claim was not assessed.",
-                confidence_reason="No authoritative reference text was retrieved within the five-second case deadline.",
-                limitation="Settled-fact reference lookup reached its five-second deadline.",
+                statement="The reference check did not finish in time to assess this claim.",
+                confidence_reason="No usable authoritative reference passage was retrieved.",
+                limitation="The reference-source check could not finish in time.",
             )
             continue
         result = lookup_settled_fact(claim.text, deadline_seconds=remaining)
@@ -2265,9 +2269,9 @@ def _run_fast_path_claims(
                 investigation,
                 claim,
                 status="INSUFFICIENT_EVIDENCE",
-                statement="The reference page was retrieved, but there was not enough time to assess it before the case deadline.",
-                confidence_reason="A reference page was retrieved but not assessed within the five-second case deadline.",
-                limitation="OpenAI evidence assessment was not completed before the five-second case deadline.",
+                statement="A reference page was retrieved, but the evidence assessment could not be completed in time.",
+                confidence_reason="The retrieved reference passage was not assessed.",
+                limitation="The evidence assessment could not be completed in time.",
             )
             continue
         try:
@@ -2283,7 +2287,7 @@ def _run_fast_path_claims(
             add_limitation(
                 session,
                 investigation.id,
-                "OpenAI evidence assessment was unavailable or exceeded the five-second settled-fact deadline.",
+                "The evidence-assessment step was unavailable or took too long to finish.",
             )
             _record_deterministic_finding(
                 session,
@@ -2294,8 +2298,6 @@ def _run_fast_path_claims(
                 confidence_reason="The retrieved reference was not assessed by the evidence-reasoning step.",
                 limitation=f"OpenAI evidence assessment unavailable ({getattr(getattr(exc, 'category', None), 'value', 'provider error')}).",
             )
-        if monotonic() > case_deadline:
-            add_limitation(session, investigation.id, "Settled-fact assessment exceeded its five-second worker deadline.")
     return fast_indexes
 
 
@@ -2474,6 +2476,23 @@ def _submitted_source_prompt(source: Source, retrieved_text: str, original_url: 
         retrieved_text,
     ]
     return "\n".join(metadata)
+
+
+def _queue_whatsapp_result_notification(
+    session: Session, investigation: Investigation, job: ProcessingJob
+) -> None:
+    if investigation.channel != Channel.WHATSAPP:
+        return
+    event_id = uuid5(_WHATSAPP_NOTIFICATION_NAMESPACE, str(job.id))
+    if session.get(OutboxEvent, event_id) is None:
+        session.add(
+            OutboxEvent(
+                id=event_id,
+                aggregate_id=investigation.id,
+                event_type="WHATSAPP_RESULT_READY",
+                payload={"job_id": str(job.id), "delivery_state": "PENDING"},
+            )
+        )
 
 
 def process_investigation(session: Session, *, job_id: UUID) -> str:
@@ -2794,6 +2813,7 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
         job.stage = "COMPLETE"
         job.error_code = None
         _audit(session, investigation.id, "INVESTIGATION_COMPLETED", {})
+        _queue_whatsapp_result_notification(session, investigation, job)
         session.commit()
         return "complete"
     except Exception as exc:
@@ -2844,5 +2864,6 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
                 "INVESTIGATION_NEEDS_REVIEW",
                 {"reason": category.value},
             )
+            _queue_whatsapp_result_notification(session, investigation, job)
             session.commit()
         return "needs_review"

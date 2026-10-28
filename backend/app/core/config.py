@@ -3,7 +3,7 @@ from functools import lru_cache
 from typing import Literal
 from uuid import UUID
 
-from pydantic import SecretStr, model_validator
+from pydantic import AnyHttpUrl, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     whatsapp_identity_key: SecretStr | None = None
     whatsapp_owner_id: UUID | None = None
     whatsapp_graph_api_version: str = "v25.0"
+    whatsapp_support_url: AnyHttpUrl | None = None
     whatsapp_conversation_enabled: bool = False
 
     @model_validator(mode="after")

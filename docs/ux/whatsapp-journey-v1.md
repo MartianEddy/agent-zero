@@ -12,10 +12,10 @@ Let people speak naturally. Keep discussion, research questions, and claim inves
 1. **Start a conversation.** GPT Luna writes a short response that fits the user's actual message and recent context. The application sends that reply directly; it does not replace ordinary conversation with a fixed greeting/topic script. No case or research job is created.
 2. **Clarify the task.** If the user names a subject without a checkable claim, Luna asks which specific fact or claim they want checked. Do not classify the subject as a company, person, event, or other entity type without evidence.
 3. **Triage the claim.** GPT Luna proposes a specific claim or asks one targeted clarification. The application rejects generic placeholders such as “a particular date”; it does not display them as claims.
-4. **Review the preview.** Show the exact proposed claim(s), make clear that no research has started, then offer **Submit claim**, **Edit claim**, and **Cancel** reply buttons. The submit button ID contains the current preview token, so tapping it approves only that preview. Keep `SUBMIT <code>`, `EDIT <correction>`, and `CANCEL` as text fallbacks.
+4. **Review the preview.** Show the exact proposed claim(s), make clear that no research has started, and explain result delivery. Automatic completion messages are enabled only when a human support URL is configured, the user has not opted out, and the 24-hour WhatsApp service window remains open. When enabled, submitting opts the user into one result message; `STOP` turns these messages off. Otherwise direct users to `HISTORY` and `RESULT <reference>`. Then offer **Submit claim**, **Edit claim**, and **Cancel** reply buttons. The submit button ID contains the current preview token, so tapping it approves only that preview. Keep `SUBMIT <code>`, `EDIT <correction>`, and `CANCEL` as text fallbacks.
 5. **Edit or cancel.** Edit invalidates the old preview and asks for a correction; the agent then creates a new preview that needs fresh approval. Cancel discards only the unconfirmed draft.
-6. **Start the case.** On a valid submit action, validate the token, owner, draft expiry, and idempotency; persist one case and queue the existing durable worker. Return the case reference.
-7. **Return to the case.** The user can ask naturally for status/results or use `STATUS <reference>` and `RESULT <reference>`. Every read is owner-scoped; a reference alone grants no access.
+6. **Start the case.** On a valid submit action, validate the token, owner, draft expiry, and idempotency; persist one case and queue the existing durable worker. Return the case reference and say Agent Zero will send the result when ready. If no message arrives, show `HISTORY` and `RESULT <reference>` as clear fallbacks.
+7. **Return to the case.** When configured, send one result message automatically when the case reaches a terminal state, the user has not opted out, and the latest user message is still inside WhatsApp's 24-hour service window. Send the saved evidence-grounded result, not only a “ready” alert. Never initiate a free-form message after the window closes; outside the window a pre-approved template is required and is not part of Phase 1. The user can send `HISTORY` to see the latest 10 references, `HISTORY <page>` for older cases, `STATUS <reference>` for progress, and `RESULT <reference>` for a specific result. `RESULT` without a reference selects the latest case. Every read is owner/sender scoped; a reference alone grants no access.
 
 ## Current behavior for open-ended factual questions
 
@@ -41,7 +41,11 @@ This needs a product/architecture decision about question-shaped cases and evide
 | Needs clarification | One precise question; no claim preview and no case | Reply with missing detail or Cancel |
 | Awaiting confirmation | Exact claim preview; research has not started | Submit claim, Edit claim, or Cancel |
 | Processing | Case reference and processing status | Ask for status later |
+| Case history | Latest 10 case references with status and short claim labels | Send `HISTORY <page>` for older cases; `RESULT <reference>` for details |
 | Assessment ready | Evidence-linked assessment and limitations | Read result or open the authorized case |
+| Automatic result message | Saved result and sources are sent only with a configured human support path and in the open WhatsApp service window | Reply naturally; use `HISTORY` or `RESULT <reference>` to return later |
+| Service window closed | No unsolicited message is sent; no approved template is configured in Phase 1 | User sends `HISTORY`, `STATUS`, or `RESULT` to reopen the window and continue |
+| Notifications stopped | No completion messages are sent, including for later cases | Send `ALERTS ON` to opt in again |
 | Automation stopped | Say no final assessment was saved; give a plain-language failure category, label retrieved pages as unassessed, and offer a bounded retry when available | Read the partial result or reply `RETRY <reference>` |
 | AI reply limit reached | Explain that no investigation started and show when a conversational model-call slot will reopen, in EAT | Try again after the displayed reset time |
 
@@ -76,6 +80,9 @@ Button replies must be idempotent and preview-bound. If interactive messages are
 - Recognize question wording without requiring punctuation.
 - Do not answer from model memory or describe a subject as a company/organization unless retrieved evidence supports it.
 - Do not present a model placeholder as a claim or as a user-visible fact.
+- Tell users at preview and submission that one completion message will arrive automatically when possible; `HISTORY`, `STATUS`, and `RESULT` remain available as explicit fallbacks.
+- Persist only a Fernet-encrypted recipient address in the 24-hour conversation record; delete it with expired context. Keep the opt-out keyed only by sender HMAC. Do not send outside the last inbound message's 24-hour window.
+- Configure `WHATSAPP_SUPPORT_URL` to a real human support path before enabling automated completion messages. If unset, retain manual history/result queries and do not send an automatic WhatsApp result. Meta allows free-form automated replies in the 24-hour customer service window; outside it, only an approved message template can initiate the message. See [WhatsApp Business Messaging Policy](https://whatsappbusiness.com/policy/).
 - Treat user statements and submitted links as context until evidence is retrieved and assessed.
 - Distinguish draft cancellation from cancellation of a persisted investigation; the latter requires backend support.
 - Use Luna's conversational `reply` directly for `CONVERSATION` turns. The application controls side effects and enforces explicit preview approval, but it must not rewrite ordinary Luna replies into a canned template.

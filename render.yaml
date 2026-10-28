@@ -70,6 +70,24 @@ services:
         value: jina_reader
       - key: JINA_API_KEY
         sync: false
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_IDENTITY_KEY
+        sync: false
+      - key: WHATSAPP_OWNER_ID
+        sync: false
+      - key: WHATSAPP_GRAPH_API_VERSION
+        sync: false
+      - key: WHATSAPP_CONVERSATION_ENABLED
+        sync: false
+      - key: WHATSAPP_SUPPORT_URL
+        sync: false
 
   - type: worker
     name: agent-zero-worker

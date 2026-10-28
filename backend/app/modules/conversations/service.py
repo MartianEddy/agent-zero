@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import logging
@@ -12,6 +13,7 @@ from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
+from cryptography.fernet import Fernet, InvalidToken
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -19,7 +21,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.domain.investigation import Channel, InputType, InvestigationStatus
-from app.modules.conversations.models import WhatsAppConversation, WhatsAppInboundEvent
+from app.modules.conversations.models import (
+    WhatsAppConversation,
+    WhatsAppInboundEvent,
+    WhatsAppNotificationPreference,
+)
 from app.modules.conversations.schemas import ConversationTurn
 from app.modules.investigations.investigator import ModelGateway, ModelInvocationFailed
 from app.modules.investigations.models import (
@@ -163,6 +169,32 @@ def _sender_reference(sender: str, identity_key: str) -> str:
     return hmac.new(identity_key.encode(), sender.encode(), hashlib.sha256).hexdigest()
 
 
+def _recipient_cipher(settings) -> Fernet:
+    identity_key = settings.whatsapp_identity_key.get_secret_value().encode()
+    key = hmac.new(identity_key, b"agent-zero:whatsapp-recipient:v1", hashlib.sha256).digest()
+    return Fernet(base64.urlsafe_b64encode(key))
+
+
+def _encrypt_recipient(sender: str, settings) -> str:
+    return _recipient_cipher(settings).encrypt(sender.encode()).decode()
+
+
+def _decrypt_recipient(value: str, settings) -> str | None:
+    try:
+        return _recipient_cipher(settings).decrypt(value.encode()).decode()
+    except (InvalidToken, UnicodeDecodeError, ValueError):
+        return None
+
+
+def _notification_preference(session: Session, *, settings, sender_ref: str):
+    return session.scalar(
+        select(WhatsAppNotificationPreference).where(
+            WhatsAppNotificationPreference.owner_id == _owner_id(settings),
+            WhatsAppNotificationPreference.sender_ref == sender_ref,
+        )
+    )
+
+
 def _owner_id(settings) -> UUID:
     return settings.whatsapp_owner_id or DEV_USER_ID
 
@@ -173,6 +205,7 @@ def _result_message(
     settings,
     sender_ref: str,
     reference: str | None,
+    conversation_id: UUID | None = None,
 ) -> str:
     reference = reference.upper() if reference else None
     statement = (
@@ -190,6 +223,30 @@ def _result_message(
     else:
         statement = statement.order_by(Investigation.created_at.desc()).limit(1)
     investigation = session.scalar(statement)
+    if investigation is None and conversation_id is not None:
+        # A persisted case is also bound to the conversation that approved it.
+        # Use that durable relation if legacy or malformed submission metadata
+        # omitted the sender HMAC; keep owner, channel, and exact reference scope.
+        conversation_statement = (
+            select(Investigation)
+            .join(Submission, Submission.investigation_id == Investigation.id)
+            .where(
+                Investigation.owner_id == _owner_id(settings),
+                Investigation.channel == Channel.WHATSAPP,
+                Submission.channel == Channel.WHATSAPP,
+                Submission.source_metadata["conversation_id"].as_string()
+                == str(conversation_id),
+            )
+        )
+        if reference is not None:
+            conversation_statement = conversation_statement.where(
+                Investigation.reference == reference
+            )
+        else:
+            conversation_statement = conversation_statement.order_by(
+                Investigation.created_at.desc()
+            ).limit(1)
+        investigation = session.scalar(conversation_statement)
     if investigation is None:
         return (
             "I couldn't find a check for this WhatsApp number. "
@@ -526,6 +583,7 @@ def _append_turn(
     processed.append({"message_id": message_id, "reply": reply[:3900]})
     conversation.processed_events = processed[-50:]
     conversation.expires_at = now + timedelta(hours=24)
+    conversation.last_inbound_at = now
 
 
 def _claim_inbound_event(
@@ -701,7 +759,9 @@ def _status_message(
     )
 
 
-def _case_list_message(session: Session, *, settings, sender_ref: str) -> str:
+def _case_list_message(
+    session: Session, *, settings, sender_ref: str, page: int = 1
+) -> str:
     cases = list(
         session.scalars(
             select(Investigation)
@@ -712,16 +772,30 @@ def _case_list_message(session: Session, *, settings, sender_ref: str) -> str:
                 Submission.channel == Channel.WHATSAPP,
                 Submission.source_metadata["sender_ref"].as_string() == sender_ref,
             )
-            .order_by(Investigation.created_at.desc())
-            .limit(5)
+            .order_by(Investigation.created_at.desc(), Investigation.id.desc())
+            .offset((page - 1) * 10)
+            .limit(10)
         )
     )
     if not cases:
+        if page > 1:
+            return "There are no older cases on that page. Send HISTORY to see your newest cases."
         return "You don't have an investigation yet. Tell me what you'd like me to look into."
-    lines = ["Your recent investigations:"]
+    lines = [f"Your checks, page {page} (newest first):"]
     for case in cases:
-        status = case.current_stage.replace("_", " ").lower()
-        lines.append(f"• {case.reference} — {status}")
+        status = case.status.value.replace("_", " ").lower()
+        claim = session.scalar(
+            select(Claim.text)
+            .where(Claim.investigation_id == case.id)
+            .order_by(Claim.created_at)
+            .limit(1)
+        )
+        detail = f" — {claim[:100]}" if claim else ""
+        lines.append(f"• {case.reference} — {status}{detail}")
+    lines.append(
+        f"Send RESULT <reference> for an assessment, STATUS <reference> for progress, "
+        f"or HISTORY {page + 1} for older cases."
+    )
     return "\n".join(lines)
 
 
@@ -944,6 +1018,13 @@ async def _confirm_conversation_draft(
         status="QUEUED",
         idempotency_key=idempotency_key,
     )
+    notification_preference = _notification_preference(
+        session, settings=settings, sender_ref=conversation.sender_ref
+    )
+    notification_enabled = (
+        notification_preference is None
+        or not notification_preference.notifications_disabled
+    ) and bool(getattr(settings, "whatsapp_support_url", None))
     session.add_all(
         [
             *claims,
@@ -963,6 +1044,14 @@ async def _confirm_conversation_draft(
                 event_metadata={
                     "conversation_id": str(conversation.id),
                     "preview_version": conversation.preview_version,
+                    "completion_notification_consent": (
+                        "opted_out"
+                        if notification_preference is not None
+                        and notification_preference.notifications_disabled
+                        else "preview_submit_v1"
+                        if notification_enabled
+                        else "support_path_unavailable"
+                    ),
                 },
             ),
         ]
@@ -970,9 +1059,25 @@ async def _confirm_conversation_draft(
     investigation.current_stage = "RECEIVED"
     reference = investigation.reference
     _clear_conversation_draft(conversation)
+    if notification_preference is not None and notification_preference.notifications_disabled:
+        update_expectation = (
+            "Automatic updates are off. Send HISTORY or RESULT <reference> when you want "
+            "the result."
+        )
+    elif not getattr(settings, "whatsapp_support_url", None):
+        update_expectation = (
+            "Automatic result messages are not available yet. Send HISTORY or "
+            "RESULT <reference> when you want an update."
+        )
+    else:
+        update_expectation = (
+            "I’ll message you here with the result when it’s ready, if it finishes within "
+            "WhatsApp’s 24-hour reply window. If you don’t receive it, send HISTORY or "
+            "RESULT <reference>."
+        )
     reply = (
-        "Your investigation has been registered. I’ll assess the available evidence and show "
-        f"what remains uncertain.\nReference: {reference}\nAsk me for an update at any time."
+        "Your investigation is registered. I’ll assess the available evidence and explain "
+        f"what remains uncertain.\nReference: {reference}\n{update_expectation}"
     )
     _append_turn(
         conversation,
@@ -1008,6 +1113,9 @@ async def _handle_turn(
         if saved_reply:
             await run_in_threadpool(send_message, event.sender, saved_reply)
         return True
+
+    conversation.recipient_encrypted = _encrypt_recipient(event.sender, settings)
+    conversation.last_inbound_at = now
 
     if event.message_type not in {"text", "interactive"} or event.text is None:
         await _send_saved_reply(
@@ -1108,9 +1216,63 @@ async def _handle_turn(
         reply = (
             "Hi, I’m Agent Zero. I can talk through a story or investigate a factual claim "
             "using public evidence. I’ll show you the claim before starting an investigation. "
-            "You can ask naturally, or send RESULT / STATUS to check your latest case and "
-            "RETRY with a case reference to restart a stopped check."
+            "Send HISTORY to see your recent case references, RESULT for the latest result "
+            "or RESULT <reference> for one case, "
+            "or STATUS <reference> for progress. Send STOP to turn off automatic result "
+            "messages."
         )
+        await _send_saved_reply(
+            session,
+            conversation=conversation,
+            event=event,
+            send_message=send_message,
+            user_text=command,
+            reply=reply,
+        )
+        return True
+    if folded in {"stop", "mute", "alerts off", "notifications off"}:
+        preference = _notification_preference(
+            session, settings=settings, sender_ref=sender_ref
+        )
+        if preference is None:
+            session.add(
+                WhatsAppNotificationPreference(
+                    owner_id=_owner_id(settings),
+                    sender_ref=sender_ref,
+                    notifications_disabled=True,
+                )
+            )
+        else:
+            preference.notifications_disabled = True
+        reply = (
+            "Automatic result messages are off. Your checks will continue. Send ALERTS ON "
+            "to turn them back on, or HISTORY to see your case references."
+        )
+        await _send_saved_reply(
+            session,
+            conversation=conversation,
+            event=event,
+            send_message=send_message,
+            user_text=command,
+            reply=reply,
+        )
+        return True
+    if folded in {"alerts on", "notifications on"}:
+        preference = _notification_preference(
+            session, settings=settings, sender_ref=sender_ref
+        )
+        if preference is not None:
+            session.delete(preference)
+        if getattr(settings, "whatsapp_support_url", None):
+            reply = (
+                "Automatic result messages are on for checks you submit. I’ll send the result "
+                "here if it finishes within WhatsApp’s 24-hour reply window. Send STOP any time."
+            )
+        else:
+            reply = (
+                "I’ve saved your preference, but automatic result messages are not available "
+                "yet. Send HISTORY or RESULT <reference> to check a case."
+            )
         await _send_saved_reply(
             session,
             conversation=conversation,
@@ -1147,7 +1309,11 @@ async def _handle_turn(
             reply = "Send RESULT or RESULT followed by the case reference."
         else:
             reply = _result_message(
-                session, settings=settings, sender_ref=sender_ref, reference=reference
+                session,
+                settings=settings,
+                sender_ref=sender_ref,
+                reference=reference,
+                conversation_id=conversation.id,
             )
         await _send_saved_reply(
             session,
@@ -1177,8 +1343,40 @@ async def _handle_turn(
             reply=reply,
         )
         return True
-    if folded in {"my investigations", "my cases", "list investigations"}:
-        reply = _case_list_message(session, settings=settings, sender_ref=sender_ref)
+    if folded in {
+        "history",
+        "case history",
+        "cases",
+        "my checks",
+        "my investigations",
+        "my cases",
+        "list investigations",
+    } or folded in {"history more", "cases more"} or folded.startswith("history "):
+        if folded in {"history more", "cases more"}:
+            page = 2
+        elif folded in {
+            "history",
+            "case history",
+            "cases",
+            "my checks",
+            "my investigations",
+            "my cases",
+            "list investigations",
+        }:
+            page = 1
+        else:
+            page_text = command.split(maxsplit=1)[1]
+            if page_text.isdigit() and 1 <= int(page_text) <= 100:
+                page = int(page_text)
+            else:
+                page = 0
+        reply = (
+            "Send HISTORY, HISTORY MORE, or HISTORY followed by a page number."
+            if page == 0
+            else _case_list_message(
+                session, settings=settings, sender_ref=sender_ref, page=page
+            )
+        )
         await _send_saved_reply(
             session,
             conversation=conversation,
@@ -1519,9 +1717,28 @@ async def _handle_turn(
                 conversation.state = "AWAITING_CONFIRMATION"
                 conversation.confirmation_token = secrets.token_hex(4).upper()
                 claim_lines = "\n".join(f"• {claim.text}" for claim in output.claims)
+                preference = _notification_preference(
+                    session, settings=settings, sender_ref=sender_ref
+                )
+                if preference is not None and preference.notifications_disabled:
+                    notification_notice = (
+                        "Automatic result messages are off. Send ALERTS ON to opt back in; "
+                        "otherwise use HISTORY or RESULT <reference>. "
+                    )
+                elif getattr(settings, "whatsapp_support_url", None):
+                    notification_notice = (
+                        "Submitting opts you into one WhatsApp result message when ready, "
+                        "while the 24-hour reply window is open. Send STOP to turn it off. "
+                    )
+                else:
+                    notification_notice = (
+                        "Automatic result messages are not available yet. Use HISTORY or "
+                        "RESULT <reference> to check later. "
+                    )
                 reply = (
                     f"Here’s what I understand you want investigated:\n\n{claim_lines}\n\n"
                     "I’ll look for relevant public evidence and explain important gaps. "
+                    f"{notification_notice}"
                     "No investigation has started. Choose an action below. If buttons aren’t "
                     f"available, reply SUBMIT {conversation.confirmation_token}, EDIT followed "
                     "by your correction, or CANCEL."

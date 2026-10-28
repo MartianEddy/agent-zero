@@ -1,6 +1,6 @@
 import unittest
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
@@ -37,10 +37,11 @@ from app.modules.investigations.models import (
     Source,
 )
 from app.modules.investigations.orchestrator import (
+    _evidence_packet,
     _persist_findings,
     _persist_plan,
-    _evidence_packet,
     _query_for_freshness,
+    _run_fast_path_claims,
     process_investigation,
 )
 from app.modules.investigations.provider_errors import FailureCategory
@@ -457,6 +458,46 @@ class CostControlledPipelineTests(unittest.TestCase):
             ),
             1,
         )
+
+    def test_successful_settled_fact_assessment_is_not_marked_timed_out(self) -> None:
+        claim = SimpleNamespace(
+            id=UUID(int=124),
+            text="Kenya became independent in 1963.",
+            claim_type="SETTLED_FACT",
+            needs_deep_investigation=False,
+        )
+        self.session.scalars = lambda _statement: [claim]
+        self.session.scalar = lambda _statement: UUID(int=123)
+
+        with (
+            patch(
+                "app.modules.investigations.orchestrator.monotonic",
+                side_effect=[0.0, 0.0, 7.0],
+            ),
+            patch(
+                "app.modules.investigations.orchestrator.lookup_settled_fact",
+                return_value=SimpleNamespace(),
+            ),
+            patch("app.modules.investigations.orchestrator._persist_settled_reference_evidence"),
+            patch(
+                "app.modules.investigations.orchestrator._settled_claim_packet",
+                return_value=object(),
+            ),
+            patch(
+                "app.modules.investigations.orchestrator.ModelGateway"
+            ) as gateway,
+            patch("app.modules.investigations.orchestrator._persist_findings"),
+            patch("app.modules.investigations.orchestrator.add_limitation") as add_limitation,
+        ):
+            gateway.return_value.reason_about_evidence.return_value = SimpleNamespace(
+                output=SimpleNamespace()
+            )
+            fast_indexes = _run_fast_path_claims(
+                self.session, self.investigation, case_deadline=5.0
+            )
+
+        self.assertEqual(fast_indexes, {0})
+        add_limitation.assert_not_called()
 
     def test_retry_endpoint_queues_once_and_preserves_existing_records(self) -> None:
         self._run_with_patches(self._provider_patches(final_error=True))
