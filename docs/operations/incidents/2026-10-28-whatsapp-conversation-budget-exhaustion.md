@@ -32,7 +32,7 @@ Application-side budget accounting made a lifetime cap behave as a permanent loc
 
 - WhatsApp suite: 49 passed. Cost-control helper suite: 11 passed. Scoped Ruff, compileall, and `git diff --check` passed.
 - No schema migration is required; the existing model-usage records and their timestamps are the source of truth.
-- Rolling-window and reset-copy commit `b49996d` is live as `dep-dbgr9f6c6qcc73cejd4g`, readiness healthy. The follow-up increasing the configurable default cap from 12 to 30 is pending deployment. Phase 1 remains in VERIFY. After deployment, repeat a WhatsApp greeting and claim-preview journey; confirm the model-call window and exact reset copy if the cap is reached again.
+- Rolling-window and reset-copy commit `b49996d` is live. The default-cap increase is live in `aef2196` as Render deployment `dep-dbgrb3mi0phs738psaq0`; readiness is healthy. Phase 1 remains in VERIFY. Repeat a WhatsApp greeting and claim-preview journey; confirm the model-call window and exact reset copy if the cap is reached again.
 
 ## Rollback
 
