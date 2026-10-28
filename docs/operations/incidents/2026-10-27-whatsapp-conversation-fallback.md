@@ -32,7 +32,7 @@ This was an application behavior defect, not a replaced model, stale deployment,
 ## Verification and next action
 
 - Focused WhatsApp suite passes: 48 tests. Investigator prompt tests pass: 5 tests. Scoped Ruff, compilation, and `git diff --check` pass.
-- Direct Luna reply and no-preview `Start` regression tests are included. Deployment of this remediation and readiness verification are pending.
+- Direct Luna reply and no-preview `Start` regression tests are included. Commit `83b37a3abed1a0edd2540ae5f2b2a7582abc50ab` is live on Render as `dep-dbgr3sec6qcc73ce6fmg`; `/api/v1/ready` reports ready with database, Redis, object storage, investigation engine, OpenAI provider, and web search configured.
 - Have the owner repeat a natural conversation test after deployment. Phase 1 remains in VERIFY until the live journey and remaining migration/preview/approval/status evidence are recorded.
 - Decide separately whether WhatsApp should support source-backed general entity/company overviews. This remediation does not add memory-based factual answers or start investigations automatically.
 
