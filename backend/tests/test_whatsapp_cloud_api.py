@@ -23,7 +23,7 @@ from app.modules.channels.whatsapp import (
     verify_webhook_signature,
 )
 from app.modules.conversations.schemas import ConversationTurn
-from app.modules.conversations.service import _conversation_reply, _result_message
+from app.modules.conversations.service import _result_message
 
 
 def test_meta_signature_is_verified_against_raw_request_body() -> None:
@@ -1410,7 +1410,7 @@ def test_parser_rejects_bot_echo_messages() -> None:
     assert "bot_echo:3" in summary["rejections"]
 
 
-def test_greeting_is_conversational_and_does_not_create_an_investigation() -> None:
+def test_luna_conversation_reply_is_used_without_creating_an_investigation() -> None:
     session = MagicMock()
     conversation = _conversation_fixture()
     session.scalar.return_value = conversation
@@ -1452,39 +1452,96 @@ def test_greeting_is_conversational_and_does_not_create_an_investigation() -> No
 
     service.return_value.create.assert_not_called()
     assert conversation.state == "IDLE"
-    assert send.call_args.args[1] == (
-        "Hi, I’m Agent Zero. I can talk through what you’ve shared or help investigate a "
-        "factual claim using public evidence. What are you looking into?"
+    assert send.call_args.args[1] == output.reply
+
+
+def test_luna_can_answer_factual_question_with_safe_next_step_without_creating_case() -> None:
+    session = MagicMock()
+    conversation = _conversation_fixture()
+    session.scalar.return_value = conversation
+    session.get.return_value = SimpleNamespace(id=UUID(int=1))
+    event = IncomingWhatsAppMessage(
+        message_id="wamid.factual-conversation",
+        sender="254700000000",
+        phone_number_id="12345",
+        message_type="text",
+        text="I’d like you to check what is Sinaps Technology?",
+    )
+    output = SimpleNamespace(
+        intent="CONVERSATION",
+        reply=(
+            "I haven’t looked up Sinaps Technology, so I won’t guess what it is. I can help "
+            "verify a specific fact about it—what would you like to check?"
+        ),
+        claims=[],
+        queries=[],
+        clarification_question=None,
+        reference=None,
     )
 
+    async def immediate_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
 
-def test_factual_question_without_question_mark_gets_a_useful_safe_response() -> None:
-    reply = _conversation_reply("What is Sinaps Technology")
+    with (
+        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service._complete_inbound_event"),
+        patch("app.modules.conversations.service.InvestigationService") as service,
+        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch("app.modules.channels.whatsapp.send_text_message") as send,
+        patch(
+            "app.modules.conversations.service.run_in_threadpool",
+            side_effect=immediate_in_threadpool,
+        ),
+    ):
+        gateway.return_value.interpret_whatsapp_turn = AsyncMock(
+            return_value=SimpleNamespace(output=output)
+        )
+        assert asyncio.run(_handle_message(session, event, _settings()))
 
-    assert "can’t provide a sourced general overview yet" in reply
-    assert "specific factual claim" in reply
-    assert "No investigation has started" in reply
-
-
-def test_short_topic_follow_up_is_acknowledged_instead_of_repeating_generic_prompt() -> None:
-    context = [
-        {"role": "user", "content": "What is Sinaps Technology"},
-        {
-            "role": "assistant",
-            "content": "What would you like me to help investigate?",
-        },
-    ]
-
-    reply = _conversation_reply("Sinaps Technology", context=context)
-
-    assert "Sinaps Technology" in reply
-    assert "specific factual claim" in reply
-    assert "No investigation has started" in reply
-    assert "Thanks for the context" not in reply
+    service.return_value.create.assert_not_called()
+    assert conversation.state == "IDLE"
+    assert send.call_args.args[1] == output.reply
 
 
-def test_factual_question_with_question_mark_uses_same_scope_and_safety_copy() -> None:
-    reply = _conversation_reply("What is Sinaps Technology?")
+def test_start_without_preview_explains_next_step_without_calling_luna() -> None:
+    from app.modules.conversations.service import ConversationService
 
-    assert "can’t provide a sourced general overview yet" in reply
-    assert "No investigation has started" in reply
+    session = MagicMock()
+    conversation = _conversation_fixture()
+    session.scalar.return_value = conversation
+    event = IncomingWhatsAppMessage(
+        message_id="wamid.start-without-preview",
+        sender="254700000000",
+        phone_number_id="12345",
+        message_type="text",
+        text="Start",
+    )
+    send = MagicMock()
+
+    async def immediate_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    with (
+        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service._complete_inbound_event"),
+        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch(
+            "app.modules.conversations.service.run_in_threadpool",
+            side_effect=immediate_in_threadpool,
+        ),
+    ):
+        assert asyncio.run(
+            ConversationService(session, _settings()).handle_turn(
+                ConversationTurn(
+                    message_id=event.message_id,
+                    sender=event.sender,
+                    message_type=event.message_type,
+                    text=event.text,
+                ),
+                send,
+            )
+        )
+
+    gateway.return_value.interpret_whatsapp_turn.assert_not_called()
+    assert "There isn’t a claim preview to start yet" in send.call_args.args[1]
+    assert "Nothing has started" in send.call_args.args[1]

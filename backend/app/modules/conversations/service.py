@@ -447,80 +447,6 @@ def _looks_like_confirmation(text: str) -> bool:
     )
 
 
-def _conversation_reply(
-    text: str, *, context: list[dict[str, str]] | None = None
-) -> str:
-    normalized = " ".join(text.casefold().split())
-    standard_greeting = normalized in {
-        "hi",
-        "hello",
-        "hey",
-        "good morning",
-        "good afternoon",
-    }
-    if standard_greeting or normalized.startswith(("hi ", "hello ", "hey ")):
-        return (
-            "Hi, I’m Agent Zero. I can talk through what you’ve shared or help investigate a "
-            "factual claim using public evidence. What are you looking into?"
-        )
-    capability_phrases = ("what can you do", "how can you help", "who are you")
-    if any(phrase in normalized for phrase in capability_phrases):
-        return (
-            "I can help frame and investigate factual claims, then report what the available "
-            "evidence supports and what remains uncertain. I won’t start an investigation until "
-            "you approve its preview."
-        )
-    subject = text.strip().rstrip("?.! ")[:160]
-    question_starts = (
-        "what ",
-        "who ",
-        "where ",
-        "when ",
-        "why ",
-        "how ",
-        "which ",
-        "is ",
-        "are ",
-        "was ",
-        "were ",
-        "does ",
-        "do ",
-        "did ",
-        "can ",
-        "could ",
-        "would ",
-        "will ",
-        "has ",
-        "have ",
-        "tell me ",
-        "explain ",
-        "describe ",
-    )
-    if "?" in text or normalized.startswith(question_starts):
-        return (
-            f"I haven’t researched “{subject}” yet. This chat can investigate specific factual "
-            "claims using public evidence, but it can’t provide a sourced general overview yet. "
-            "Tell me the claim you want checked and I’ll show you a preview before anything "
-            "starts. No investigation has started."
-        )
-    last_assistant = next(
-        (
-            item.get("content", "")
-            for item in reversed(context or [])
-            if item.get("role") == "assistant"
-        ),
-        "",
-    )
-    if len(normalized.split()) <= 8 and "?" in last_assistant and subject:
-        return (
-            f"Got it — {subject} is the topic. I haven’t researched it yet. This chat can’t "
-            "provide a sourced general overview, but I can check a specific factual claim "
-            "using public evidence and show you a preview first. What claim would you like me "
-            "to check? No investigation has started."
-        )
-    return "Thanks for the context. What would you like me to help investigate?"
-
-
 async def _send_saved_reply(
     session: Session,
     *,
@@ -851,6 +777,26 @@ async def _handle_turn(
         pending = False
 
     folded = command.casefold()
+    if not pending and folded in {
+        "start",
+        "start investigation",
+        "submit",
+        "submit claim",
+        "confirm",
+        "yes",
+    }:
+        await _send_saved_reply(
+            session,
+            conversation=conversation,
+            event=event,
+            send_message=send_message,
+            user_text=command,
+            reply=(
+                "There isn’t a claim preview to start yet. Tell me the specific claim you want "
+                "checked, and I’ll prepare one for you to review. Nothing has started."
+            ),
+        )
+        return True
     if folded == "help":
         reply = (
             "Hi, I’m Agent Zero. I can talk through a story or investigate a factual claim "
@@ -1136,6 +1082,10 @@ async def _handle_turn(
                 reply=reply,
             )
             return True
+    elif output.intent == "CONVERSATION":
+        # Luna owns the wording for ordinary conversation. Application policy
+        # still owns intents, authorization, case creation, and all side effects.
+        reply = output.reply.strip() or "I’m here. What would you like to talk about?"
     elif output.intent == "CASE_LIST_REQUEST":
         reply = _case_list_message(session, settings=settings, sender_ref=sender_ref)
     elif output.intent == "STATUS_REQUEST":
@@ -1257,9 +1207,6 @@ async def _handle_turn(
                     (f"EDIT {conversation.confirmation_token}", "Edit claim"),
                     (f"CANCEL {conversation.confirmation_token}", "Cancel"),
                 ]
-    else:
-        reply = _conversation_reply(command, context=context)
-
     await _send_saved_reply(
         session,
         conversation=conversation,

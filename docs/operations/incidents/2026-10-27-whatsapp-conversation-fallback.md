@@ -22,19 +22,19 @@ This was an application behavior defect, not a replaced model, stale deployment,
 
 ## Remediation
 
-- Recognize common question forms from the words themselves, whether or not punctuation is present.
-- When the user replies with a short topic after the assistant asks a question, acknowledge the topic and ask for a specific claim instead of repeating the generic prompt.
-- State that the topic has not been researched and that general company profiles are not currently supported. Continue to require an approved preview before investigation creation.
+- Pass Luna's `CONVERSATION` reply through to WhatsApp rather than replacing it with a canned application response. The prompt asks Luna to respond naturally to the latest turn and context, avoid repeating a limitation already explained, and ask one useful follow-up at most.
+- Route broad identity/background questions to conversation unless the user asks for a specific factual check. Luna must not guess from model memory, infer an entity type from its name, or claim fresh research; source-backed general overviews remain a separate product capability to design.
+- Handle `Start`/`Submit` with no pending preview as a clear missing-preview state, without calling Luna or creating an investigation.
+- Keep authorization, intent handling, preview confirmation, case creation, and all side effects under application control.
 - Log the model’s typed intent and whether a draft is pending without logging message text, model reply text, sender identifiers, or credentials.
-- Add regression tests for punctuation-free questions, punctuated questions, and short contextual topic replies.
+- Add regression tests that verify Luna's response is sent directly, ordinary conversation creates no case, and `Start` without a preview explains the next step.
 
 ## Verification and next action
 
-- The new regression tests failed before the fix and pass after it.
-- The complete focused WhatsApp suite passes: 39 tests. Scoped Ruff, compilation, and `git diff --check` pass.
-- Fix commit `04c00d2d7ea04dcf1ed50dbf768a2302464fdc2a` is live on the Render API; `/api/v1/ready` reports `ready` with database, Redis, and object storage healthy.
-- Have the owner repeat a natural conversation test. Phase 1 remains in VERIFY until the live journey and the remaining migration/preview/approval/status evidence are recorded.
-- Decide separately whether WhatsApp should support source-backed general entity/company overviews. The current fix does not add memory-based factual answers or start investigations automatically.
+- Focused WhatsApp suite passes: 48 tests. Investigator prompt tests pass: 5 tests. Scoped Ruff, compilation, and `git diff --check` pass.
+- Direct Luna reply and no-preview `Start` regression tests are included. Deployment of this remediation and readiness verification are pending.
+- Have the owner repeat a natural conversation test after deployment. Phase 1 remains in VERIFY until the live journey and remaining migration/preview/approval/status evidence are recorded.
+- Decide separately whether WhatsApp should support source-backed general entity/company overviews. This remediation does not add memory-based factual answers or start investigations automatically.
 
 ## Rollback
 
