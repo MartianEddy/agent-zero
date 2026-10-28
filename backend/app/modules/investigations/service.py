@@ -16,6 +16,70 @@ from app.modules.investigations.models import (
     User,
 )
 
+
+class InvestigationRetryUnavailable(RuntimeError):
+    """A saved investigation cannot be queued for another run right now."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
+def queue_investigation_retry(
+    session: Session,
+    *,
+    investigation: Investigation,
+    actor: str,
+    max_model_calls: int,
+) -> ProcessingJob:
+    """Queue one explicit, bounded retry for a saved investigation."""
+    if investigation.status not in {InvestigationStatus.NEEDS_REVIEW, InvestigationStatus.FAILED}:
+        raise InvestigationRetryUnavailable("not_retryable")
+
+    latest_job = session.scalar(
+        select(ProcessingJob)
+        .where(ProcessingJob.investigation_id == investigation.id)
+        .order_by(ProcessingJob.created_at.desc())
+        .with_for_update()
+    )
+    if latest_job is None:
+        raise InvestigationRetryUnavailable("job_missing")
+    if latest_job.status in {"QUEUED", "RUNNING"}:
+        raise InvestigationRetryUnavailable("already_running")
+
+    usage = session.scalar(
+        select(InvestigationUsage).where(
+            InvestigationUsage.investigation_id == investigation.id
+        )
+    )
+    if usage is not None and usage.model_calls >= max_model_calls:
+        raise InvestigationRetryUnavailable("budget_exhausted")
+
+    job = ProcessingJob(
+        investigation_id=investigation.id,
+        stage="RECEIVED",
+        status="QUEUED",
+        idempotency_key=f"retry:{investigation.id}:{uuid4().hex}",
+    )
+    session.add(job)
+    session.flush()
+    session.add_all(
+        [
+            OutboxEvent(
+                aggregate_id=investigation.id,
+                event_type="INVESTIGATION_RETRIED",
+                payload={"investigation_id": str(investigation.id), "job_id": str(job.id)},
+            ),
+            AuditEvent(
+                investigation_id=investigation.id,
+                event_type="INVESTIGATION_RETRIED",
+                actor=actor,
+                event_metadata={"previous_job_id": str(latest_job.id)},
+            ),
+        ]
+    )
+    return job
+
 DEV_USER_ID = UUID("00000000-0000-4000-8000-000000000001")
 
 

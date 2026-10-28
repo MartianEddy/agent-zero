@@ -23,6 +23,7 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.domain.investigation import InputType
 from app.modules.investigations.image_safety import ImageValidationError, validate_image
+from app.modules.investigations.investigator import ModelGateway, ModelInvocationFailed
 from app.modules.investigations.media.provenance import public_provenance_summary
 from app.modules.investigations.models import (
     AuditEvent,
@@ -43,15 +44,19 @@ from app.modules.investigations.models import (
     Submission,
     VerificationBrief,
 )
-from app.modules.investigations.investigator import ModelGateway, ModelInvocationFailed
 from app.modules.investigations.schemas import (
-    CreateInvestigationRequest,
     ContinueInvestigationRequest,
+    CreateInvestigationRequest,
     InvestigationHistoryResponse,
     InvestigationResponse,
     TriageRequest,
 )
-from app.modules.investigations.service import DEV_USER_ID, InvestigationService
+from app.modules.investigations.service import (
+    DEV_USER_ID,
+    InvestigationRetryUnavailable,
+    InvestigationService,
+    queue_investigation_retry,
+)
 from app.modules.investigations.triage import normalize_claim_text
 from app.modules.sources.registry import classify_source
 from app.storage.s3 import delete_private_object, get_private_object, put_private_object
@@ -338,46 +343,21 @@ def retry_investigation(investigation_id: UUID, session: DbSession) -> Investiga
     )
     if investigation is None:
         raise HTTPException(status_code=404, detail="Investigation not found")
-    if investigation.status.value not in {"NEEDS_REVIEW", "FAILED"}:
-        raise HTTPException(status_code=409, detail="This investigation is not available to retry")
-    latest_job = session.scalar(
-        select(ProcessingJob)
-        .where(ProcessingJob.investigation_id == investigation_id)
-        .order_by(ProcessingJob.created_at.desc())
-        .with_for_update()
-    )
-    if latest_job is None or latest_job.status in {"QUEUED", "RUNNING"}:
-        raise HTTPException(status_code=409, detail="An investigation retry is already in progress")
-    usage = session.scalar(
-        select(InvestigationUsage).where(InvestigationUsage.investigation_id == investigation_id)
-    )
-    if usage is not None and usage.model_calls >= get_settings().max_model_calls_per_investigation:
-        raise HTTPException(
-            status_code=409, detail="The investigation model-call budget is exhausted"
+    try:
+        queue_investigation_retry(
+            session,
+            investigation=investigation,
+            actor="local-development-user",
+            max_model_calls=get_settings().max_model_calls_per_investigation,
         )
-    job = ProcessingJob(
-        investigation_id=investigation_id,
-        stage="RECEIVED",
-        status="QUEUED",
-        idempotency_key=f"retry:{investigation_id}:{uuid4().hex}",
-    )
-    session.add(job)
-    session.flush()
-    session.add_all(
-        [
-            OutboxEvent(
-                aggregate_id=investigation_id,
-                event_type="INVESTIGATION_RETRIED",
-                payload={"investigation_id": str(investigation_id), "job_id": str(job.id)},
-            ),
-            AuditEvent(
-                investigation_id=investigation_id,
-                event_type="INVESTIGATION_RETRIED",
-                actor="local-development-user",
-                event_metadata={"previous_job_id": str(latest_job.id)},
-            ),
-        ]
-    )
+    except InvestigationRetryUnavailable as exc:
+        details = {
+            "not_retryable": "This investigation is not available to retry",
+            "job_missing": "No processing job is available to retry",
+            "already_running": "An investigation retry is already in progress",
+            "budget_exhausted": "The investigation model-call budget is exhausted",
+        }
+        raise HTTPException(status_code=409, detail=details[exc.reason]) from exc
     session.commit()
     session.refresh(investigation)
     return InvestigationResponse.model_validate(investigation)

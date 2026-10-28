@@ -23,7 +23,11 @@ from app.modules.channels.whatsapp import (
     verify_webhook_signature,
 )
 from app.modules.conversations.schemas import ConversationTurn
-from app.modules.conversations.service import _model_unavailable_reply, _result_message
+from app.modules.conversations.service import (
+    _model_unavailable_reply,
+    _result_message,
+    _retry_message,
+)
 from app.modules.investigations.usage import ModelCallBudgetExceeded
 
 
@@ -518,6 +522,7 @@ def _settings():
         whatsapp_graph_api_version="v25.0",
         whatsapp_conversation_enabled=True,
         max_search_queries=5,
+        max_model_calls_per_investigation=4,
         whatsapp_owner_id=UUID("00000000-0000-4000-8000-000000000123"),
     )
 
@@ -1238,8 +1243,14 @@ def test_meta_redelivery_repeats_saved_conversation_reply_without_retriage() -> 
     send.assert_called_once_with(event.sender, "I received that message.")
 
 def test_result_lookup_is_scoped_to_the_hmac_sender_and_includes_saved_limits() -> None:
+    from app.domain.investigation import InvestigationStatus
+
     session = MagicMock()
-    investigation = SimpleNamespace(id=UUID(int=42), reference="AZ-261026-ABC123")
+    investigation = SimpleNamespace(
+        id=UUID(int=42),
+        reference="AZ-261026-ABC123",
+        status=InvestigationStatus.COMPLETE,
+    )
     brief = SimpleNamespace(limitations=["Only accessible public sources were reviewed."])
     finding = SimpleNamespace(
         status="INSUFFICIENT_EVIDENCE",
@@ -1248,7 +1259,7 @@ def test_result_lookup_is_scoped_to_the_hmac_sender_and_includes_saved_limits() 
         confidence_rationale="Few direct sources.",
     )
     session.scalar.side_effect = [investigation, brief]
-    session.scalars.return_value = [finding]
+    session.scalars.side_effect = [[finding], [], [], [], []]
     sender_ref = "private-hmac-reference"
 
     response = _result_message(
@@ -1272,7 +1283,7 @@ def test_processing_result_shows_actual_stage_and_discourages_resubmitting_claim
         status=InvestigationStatus.RESEARCHING,
         current_stage="RESEARCHING",
     )
-    session.scalar.side_effect = [investigation, None]
+    session.scalar.side_effect = [investigation, None, None]
 
     response = _result_message(
         session,
@@ -1296,7 +1307,25 @@ def test_failed_result_makes_clear_that_no_assessment_was_produced() -> None:
         status=InvestigationStatus.FAILED,
         current_stage="FAILED",
     )
-    session.scalar.side_effect = [investigation, None]
+    session.scalar.side_effect = [
+        investigation,
+        None,
+        SimpleNamespace(error_code="PIPELINE_ERROR", status="BLOCKED"),
+        SimpleNamespace(error_code="PIPELINE_ERROR", status="BLOCKED"),
+        SimpleNamespace(model_calls=0),
+    ]
+    session.scalars.side_effect = [
+        [SimpleNamespace(text="Who owns Sinaps Technology in Kenya?")],
+        [
+            SimpleNamespace(
+                title="Company register",
+                publisher="Business Registry",
+                domain="registry.example",
+                canonical_url="https://registry.example/company/123?tracking=private",
+                url="https://registry.example/company/123",
+            )
+        ],
+    ]
 
     response = _result_message(
         session,
@@ -1307,6 +1336,86 @@ def test_failed_result_makes_clear_that_no_assessment_was_produced() -> None:
 
     assert "stopped before an assessment was ready" in response
     assert "No conclusion is available" in response
+    assert "Who owns Sinaps Technology in Kenya?" in response
+    assert "processing step stopped unexpectedly" in response
+    assert "not yet confirmed as supporting evidence" in response
+    assert "https://registry.example/company/123" in response
+    assert "tracking=private" not in response
+    assert "RETRY AZ-261027-55065A" in response
+
+
+def test_completed_result_includes_only_sources_linked_to_saved_findings() -> None:
+    from app.domain.investigation import InvestigationStatus
+
+    session = MagicMock()
+    investigation = SimpleNamespace(
+        id=UUID(int=45),
+        reference="AZ-261027-ABC123",
+        status=InvestigationStatus.COMPLETE,
+        current_stage="COMPLETE",
+    )
+    brief = SimpleNamespace(limitations=[])
+    finding = SimpleNamespace(
+        status="SUPPORTED",
+        statement="The record supports the claim.",
+        evidence_confidence="MODERATE",
+        confidence_rationale="A direct public record was retrieved.",
+    )
+    linked_source = SimpleNamespace(
+        title="Official company record",
+        publisher="Companies Registry",
+        domain="registry.example",
+        canonical_url="https://registry.example/company/123",
+        url="https://registry.example/company/123",
+    )
+    session.scalar.side_effect = [investigation, brief]
+    session.scalars.side_effect = [
+        [finding],
+        [SimpleNamespace(text="The company is owned by its shareholders.")],
+        [UUID(int=901)],
+        [UUID(int=902)],
+        [linked_source],
+    ]
+
+    response = _result_message(
+        session,
+        settings=_settings(),
+        sender_ref="private-hmac-reference",
+        reference="az-261027-abc123",
+    )
+
+    assert "Claim checked:" in response
+    assert "The evidence supports the claim" in response
+    assert "Official company record" in response
+    assert "https://registry.example/company/123" in response
+    assert "AZ-261027-ABC123" in response
+
+
+def test_retry_command_queues_same_sender_case_and_reuses_its_reference() -> None:
+    from app.domain.investigation import InvestigationStatus
+
+    session = MagicMock()
+    investigation = SimpleNamespace(
+        id=UUID(int=46),
+        reference="AZ-261027-ABC123",
+        status=InvestigationStatus.NEEDS_REVIEW,
+    )
+    session.scalar.return_value = investigation
+
+    with patch(
+        "app.modules.conversations.service.queue_investigation_retry"
+    ) as retry:
+        response = _retry_message(
+            session,
+            settings=_settings(),
+            sender_ref="private-hmac-reference",
+            reference="az-261027-abc123",
+        )
+
+    retry.assert_called_once()
+    assert retry.call_args.kwargs["investigation"] is investigation
+    assert "queued another run" in response
+    assert "AZ-261027-ABC123" in response
 
 
 def test_parser_rejects_self_messages_from_business_number() -> None:

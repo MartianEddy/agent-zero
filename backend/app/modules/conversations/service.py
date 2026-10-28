@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.domain.investigation import Channel, InputType, InvestigationStatus
 from app.modules.conversations.models import WhatsAppConversation, WhatsAppInboundEvent
 from app.modules.conversations.schemas import ConversationTurn
@@ -24,16 +25,25 @@ from app.modules.investigations.investigator import ModelGateway, ModelInvocatio
 from app.modules.investigations.models import (
     AuditEvent,
     Claim,
+    Evidence,
     Finding,
+    FindingEvidence,
     Investigation,
+    InvestigationUsage,
     OutboxEvent,
     ProcessingJob,
     SearchTrace,
+    Source,
     Submission,
     User,
     VerificationBrief,
 )
-from app.modules.investigations.service import DEV_USER_ID, InvestigationService
+from app.modules.investigations.service import (
+    DEV_USER_ID,
+    InvestigationRetryUnavailable,
+    InvestigationService,
+    queue_investigation_retry,
+)
 from app.modules.investigations.summary import finding_result_summary
 from app.modules.investigations.triage import normalize_claim_text
 from app.modules.investigations.usage import ModelCallBudgetExceeded
@@ -48,6 +58,80 @@ _UNRESOLVED_CLAIM_PATTERN = re.compile(
     r"(?:date|year|time|person|place|number|amount|event)\b)",
     re.IGNORECASE,
 )
+
+_FAILURE_COPY = {
+    "RATE_LIMITED": "A research service rate limit interrupted the check.",
+    "QUOTA_EXHAUSTED": "The research service quota was unavailable.",
+    "AUTHENTICATION_FAILED": "A research service could not authorize this check.",
+    "PROVIDER_UNAVAILABLE": "A research service was temporarily unavailable.",
+    "TIMEOUT": "A research step took too long to finish.",
+    "INVALID_MODEL_OUTPUT": "A research step returned an unusable response.",
+    "BUDGET_EXCEEDED": "The check reached its AI usage limit.",
+    "PIPELINE_ERROR": "A processing step stopped unexpectedly.",
+    "DERIVATION_FAILED": "The submitted material could not be prepared for review.",
+    "STORAGE_FAILED": "The system could not safely save research material.",
+}
+
+
+def _retrieved_sources(
+    session: Session, *, investigation_id: UUID, limit: int = 3
+) -> list[Source]:
+    return list(
+        session.scalars(
+            select(Source)
+            .where(
+                Source.investigation_id == investigation_id,
+                Source.retrieval_status == "RETRIEVED",
+            )
+            .order_by(Source.retrieved_at.desc().nullslast(), Source.id)
+            .limit(limit)
+        )
+    )
+
+
+def _source_bullets(sources: list[Source]) -> str:
+    lines = []
+    for source in sources:
+        label = (source.title or source.publisher or source.domain or "Retrieved source").strip()
+        label = " ".join(label.split())[:100]
+        url = source.canonical_url or source.url
+        parsed = urlsplit(url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+        ):
+            continue
+        safe_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        if len(safe_url) <= 350:
+            lines.append(f"• {label}: {safe_url}")
+    return "\n".join(lines)
+
+
+def _with_reference(message: str, reference: str) -> str:
+    suffix = f"\n\nReference: {reference}"
+    return message[: 3900 - len(suffix)].rstrip() + suffix
+
+
+def _retry_available(session: Session, investigation: Investigation) -> bool:
+    job = session.scalar(
+        select(ProcessingJob)
+        .where(ProcessingJob.investigation_id == investigation.id)
+        .order_by(ProcessingJob.created_at.desc())
+    )
+    if (
+        investigation.status not in {InvestigationStatus.NEEDS_REVIEW, InvestigationStatus.FAILED}
+        or job is None
+        or job.status in {"QUEUED", "RUNNING"}
+    ):
+        return False
+    usage = session.scalar(
+        select(InvestigationUsage).where(
+            InvestigationUsage.investigation_id == investigation.id
+        )
+    )
+    return usage is None or usage.model_calls < get_settings().max_model_calls_per_investigation
 
 
 class ConversationTurnInProgress(RuntimeError):
@@ -88,6 +172,7 @@ def _result_message(
     sender_ref: str,
     reference: str | None,
 ) -> str:
+    reference = reference.upper() if reference else None
     statement = (
         select(Investigation)
         .join(Submission, Submission.investigation_id == Investigation.id)
@@ -98,10 +183,7 @@ def _result_message(
             Submission.source_metadata["sender_ref"].as_string() == sender_ref,
         )
     )
-    if reference:
-        statement = statement.where(Investigation.reference == reference)
-    else:
-        statement = statement.order_by(Investigation.created_at.desc()).limit(1)
+    statement = statement.where(Investigation.reference == reference)
     investigation = session.scalar(statement)
     if investigation is None:
         return (
@@ -113,18 +195,21 @@ def _result_message(
         select(VerificationBrief).where(VerificationBrief.investigation_id == investigation.id)
     )
     if brief is None:
+        job = session.scalar(
+            select(ProcessingJob)
+            .where(ProcessingJob.investigation_id == investigation.id)
+            .order_by(ProcessingJob.created_at.desc())
+        )
         if investigation.status == InvestigationStatus.FAILED:
             message = (
-                "This check stopped before an assessment was ready. No conclusion is available. "
-                "Send the original claim again to start a new check, or review this case "
-                "in Agent Zero."
+                "This check stopped before an assessment was ready. No conclusion is available."
             )
         elif investigation.status == InvestigationStatus.CANCELLED:
             message = "This check was cancelled before an assessment was ready."
         elif investigation.status == InvestigationStatus.NEEDS_REVIEW:
             message = (
-                "This check needs a human review. No final assessment is available yet; "
-                "please review the case in Agent Zero."
+                "The automated check stopped before saving an assessment. "
+                "No conclusion is available."
             )
         elif investigation.status == InvestigationStatus.COMPLETE:
             message = (
@@ -149,7 +234,48 @@ def _result_message(
                 f"{message} You don’t need to resend the claim. "
                 f"Check again later with RESULT {investigation.reference}."
             )
-        return f"{message}\nReference: {investigation.reference}"
+        details = []
+        if investigation.status in {
+            InvestigationStatus.NEEDS_REVIEW,
+            InvestigationStatus.FAILED,
+        }:
+            claims = list(
+                session.scalars(
+                    select(Claim)
+                    .where(Claim.investigation_id == investigation.id)
+                    .order_by(Claim.created_at)
+                    .limit(3)
+                )
+            )
+            if claims:
+                details.append(
+                    "Claim submitted:\n"
+                    + "\n".join(f"• {claim.text[:240]}" for claim in claims)
+                )
+            category = job.error_code if job is not None else None
+            if category:
+                details.append(
+                    _FAILURE_COPY.get(category, "A processing step could not be completed.")
+                )
+            retrieved = _retrieved_sources(session, investigation_id=investigation.id)
+            source_bullets = _source_bullets(retrieved)
+            if source_bullets:
+                details.append(
+                    "Pages retrieved before the check stopped "
+                    "(not yet confirmed as supporting evidence):\n"
+                    + source_bullets
+                )
+            if _retry_available(session, investigation):
+                details.append(
+                    f"To retry this saved check, reply RETRY {investigation.reference}. "
+                    "You do not need to resend the claim."
+                )
+            else:
+                details.append(
+                    "A retry is not available for this case right now. "
+                    "Keep the reference for support."
+                )
+        return _with_reference("\n\n".join([message, *details]), investigation.reference)
 
     findings = list(
         session.scalars(
@@ -159,10 +285,133 @@ def _result_message(
             .limit(5)
         )
     )
-    summary = finding_result_summary(findings, max_chars=2600)
-    limitations = [item[:260] for item in (brief.limitations or [])[:3] if item]
+    stopped_prefix = ""
+    if investigation.status in {InvestigationStatus.NEEDS_REVIEW, InvestigationStatus.FAILED}:
+        latest_job = session.scalar(
+            select(ProcessingJob)
+            .where(ProcessingJob.investigation_id == investigation.id)
+            .order_by(ProcessingJob.created_at.desc())
+        )
+        stopped_prefix = (
+            "The latest automated run stopped before completion. The saved assessment below "
+            "may be incomplete and should be treated as preliminary."
+        )
+        if latest_job is not None and latest_job.error_code:
+            stopped_prefix += " " + _FAILURE_COPY.get(
+                latest_job.error_code, "A processing step could not be completed."
+            )
+        if _retry_available(session, investigation):
+            stopped_prefix += f" Reply RETRY {investigation.reference} to queue another run."
+    summary = finding_result_summary(findings, max_chars=1300)
+    claims = list(
+        session.scalars(
+            select(Claim)
+            .where(Claim.investigation_id == investigation.id)
+            .order_by(Claim.created_at)
+            .limit(3)
+        )
+    )
+    finding_evidence_ids = list(
+        session.scalars(
+            select(FindingEvidence.evidence_id)
+            .join(Finding, Finding.id == FindingEvidence.finding_id)
+            .where(Finding.investigation_id == investigation.id)
+        )
+    )
+    source_ids = {
+        source_id
+        for source_id in session.scalars(
+            select(Evidence.source_id).where(
+                Evidence.id.in_(finding_evidence_ids), Evidence.source_id.is_not(None)
+            )
+        )
+        if source_id is not None
+    }
+    linked_sources = list(
+        session.scalars(
+            select(Source)
+            .where(
+                Source.id.in_(source_ids),
+                Source.retrieval_status == "RETRIEVED",
+            )
+            .order_by(Source.retrieved_at.desc().nullslast(), Source.id)
+            .limit(3)
+        )
+    )
+    claim_text = "\n".join(f"• {item.text[:160]}" for item in claims)
+    source_text = _source_bullets(linked_sources)
+    limitations = [item[:150] for item in (brief.limitations or [])[:2] if item]
     limitation_text = "\n\nLimitations: " + "; ".join(limitations) if limitations else ""
-    return f"{summary}{limitation_text}\n\nReference: {investigation.reference}"[:3900]
+    claim_section = f"Claim checked:\n{claim_text}\n\n" if claim_text else ""
+    source_section = (
+        "\n\nSources linked to the assessment:\n" + source_text
+        if source_text
+        else "\n\nNo source link was available in this WhatsApp summary. "
+        "Open the case to inspect its evidence."
+    )
+    return _with_reference(
+        f"{stopped_prefix}\n\n{claim_section}{summary}{source_section}{limitation_text}",
+        investigation.reference,
+    )
+
+
+def _retry_message(
+    session: Session,
+    *,
+    settings,
+    sender_ref: str,
+    reference: str | None,
+) -> str:
+    reference = reference.upper() if reference else None
+    if reference is None:
+        return "To avoid retrying the wrong check, send RETRY followed by its case reference."
+    statement = (
+        select(Investigation)
+        .join(Submission, Submission.investigation_id == Investigation.id)
+        .where(
+            Investigation.owner_id == _owner_id(settings),
+            Investigation.channel == Channel.WHATSAPP,
+            Submission.channel == Channel.WHATSAPP,
+            Submission.source_metadata["sender_ref"].as_string() == sender_ref,
+        )
+    )
+    statement = statement.where(Investigation.reference == reference)
+    investigation = session.scalar(statement.with_for_update())
+    if investigation is None:
+        return (
+            "I couldn't find a check for this WhatsApp number. "
+            "Send RETRY with its case reference."
+        )
+
+    try:
+        queue_investigation_retry(
+            session,
+            investigation=investigation,
+            actor="whatsapp-user",
+            max_model_calls=settings.max_model_calls_per_investigation,
+        )
+    except InvestigationRetryUnavailable as exc:
+        messages = {
+            "not_retryable": (
+                "This check is not in a stopped state, so I haven't queued another run."
+            ),
+            "job_missing": (
+                "I couldn't find a saved run to retry. Please open the case in Agent Zero."
+            ),
+            "already_running": (
+                "A retry is already queued or running. You don't need to send it again."
+            ),
+            "budget_exhausted": (
+                "This check has reached its AI usage limit. It cannot be retried right now."
+            ),
+        }
+        return f"{messages[exc.reason]}\nReference: {investigation.reference}"
+
+    return (
+        "I’ve queued another run using the saved claim. No new assessment is available yet; "
+        "send STATUS to check progress.\n"
+        f"Reference: {investigation.reference}"
+    )
 
 
 def _conversation_for_sender(
@@ -376,6 +625,7 @@ def _latest_case(
 def _status_message(
     session: Session, *, settings, sender_ref: str, reference: str | None
 ) -> str:
+    reference = reference.upper() if reference else None
     investigation = _latest_case(session, settings=settings, sender_ref=sender_ref)
     if reference:
         investigation = session.scalar(
@@ -394,6 +644,17 @@ def _status_message(
             "I couldn't find an investigation for this conversation. "
             "Tell me what you'd like me to investigate."
         )
+    latest_job = session.scalar(
+        select(ProcessingJob)
+        .where(ProcessingJob.investigation_id == investigation.id)
+        .order_by(ProcessingJob.created_at.desc())
+    )
+    if latest_job is not None and latest_job.status == "QUEUED":
+        return (
+            "Your investigation retry is queued. No new assessment is available yet; "
+            "you do not need to send the claim again.\n"
+            f"Reference: {investigation.reference}"
+        )
     labels = {
         "RECEIVED": "queued",
         "PROCESSING": "processing",
@@ -402,14 +663,22 @@ def _status_message(
         "CORROBORATING": "comparing evidence",
         "GENERATING_BRIEF": "preparing the assessment",
         "COMPLETE": "complete",
-        "NEEDS_REVIEW": "needs human review; no final assessment is ready",
+        "NEEDS_REVIEW": "stopped before a final assessment was saved",
         "FAILED": "could not be completed; no conclusion is available",
         "CANCELLED": "cancelled",
     }
     label = labels.get(investigation.status.value, "in progress")
+    recovery = ""
+    if investigation.status in {InvestigationStatus.NEEDS_REVIEW, InvestigationStatus.FAILED}:
+        recovery = " Send RESULT to see what was gathered."
+        recovery += (
+            f" Reply RETRY {investigation.reference} to queue another run."
+            if _retry_available(session, investigation)
+            else " A retry is not available right now."
+        )
     return (
         f"Your investigation is {label}. This status does not establish whether the claim is "
-        f"true.\n"
+        f"true.{recovery}\n"
         f"Reference: {investigation.reference}"
     )
 
@@ -821,8 +1090,28 @@ async def _handle_turn(
         reply = (
             "Hi, I’m Agent Zero. I can talk through a story or investigate a factual claim "
             "using public evidence. I’ll show you the claim before starting an investigation. "
-            "You can ask naturally, or send RESULT / STATUS to check your latest case."
+            "You can ask naturally, or send RESULT / STATUS to check your latest case and "
+            "RETRY with a case reference to restart a stopped check."
         )
+        await _send_saved_reply(
+            session,
+            conversation=conversation,
+            event=event,
+            send_message=send_message,
+            user_text=command,
+            reply=reply,
+        )
+        return True
+    if folded == "retry" or folded == "try again" or folded.startswith("retry "):
+        reference = command[5:].strip() if folded.startswith("retry ") else None
+        if reference and not re.fullmatch(
+            r"AZ-[0-9]{6}-[A-F0-9]{6}", reference, re.IGNORECASE
+        ):
+            reply = "Send RETRY or RETRY followed by the case reference."
+        else:
+            reply = _retry_message(
+                session, settings=settings, sender_ref=sender_ref, reference=reference
+            )
         await _send_saved_reply(
             session,
             conversation=conversation,

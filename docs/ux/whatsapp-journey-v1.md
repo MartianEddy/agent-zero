@@ -42,8 +42,31 @@ This needs a product/architecture decision about question-shaped cases and evide
 | Awaiting confirmation | Exact claim preview; research has not started | Submit claim, Edit claim, or Cancel |
 | Processing | Case reference and processing status | Ask for status later |
 | Assessment ready | Evidence-linked assessment and limitations | Read result or open the authorized case |
-| Needs human review | State that no final assessment is available and explain the next supported step | Open the referenced case |
+| Automation stopped | Say no final assessment was saved; give a plain-language failure category, label retrieved pages as unassessed, and offer a bounded retry when available | Read the partial result or reply `RETRY <reference>` |
 | AI reply limit reached | Explain that no investigation started and show when a conversational model-call slot will reopen, in EAT | Try again after the displayed reset time |
+
+## Result and recovery response contract
+
+**Stopped before assessment:**
+
+```text
+The automated check stopped before saving an assessment. No conclusion is available.
+
+Claim submitted: [saved claim]
+A research step timed out.
+
+Pages retrieved before the check stopped (not yet confirmed as supporting evidence):
+• [source title]: [source URL]
+
+To retry this saved check, reply RETRY [reference]. You do not need to resend the claim.
+Reference: [reference]
+```
+
+Use only the persisted worker error category for the plain-language reason. Omit source bullets when no public URL can be safely rendered. Do not expose stack traces, provider response bodies, private storage links, or internal IDs. If no retry is available, explain that and keep the case reference visible.
+
+**Assessment available:** lead with the saved claim and persisted finding summary, then include up to three retrieved source URLs that are linked to the saved findings, material limitations, and the case reference. Do not include an unlinked candidate in the evidence list. If a stopped retry leaves an older saved brief, label it preliminary and state that the latest run stopped before completion.
+
+**Retry queued:** confirm that the existing case was queued, that no new assessment exists yet, and that the user does not need to resubmit. A repeated retry while a job is queued or running must say it is already underway and must not create another job.
 
 Button replies must be idempotent and preview-bound. If interactive messages are unavailable, the text in the preview must include the matching confirmation code and text alternatives. Replaying a webhook may resend a text version; it must never approve a different preview.
 
@@ -57,4 +80,8 @@ Button replies must be idempotent and preview-bound. If interactive messages are
 - Distinguish draft cancellation from cancellation of a persisted investigation; the latter requires backend support.
 - Use Luna's conversational `reply` directly for `CONVERSATION` turns. The application controls side effects and enforces explicit preview approval, but it must not rewrite ordinary Luna replies into a canned template.
 - Keep natural language as the main path and buttons/references as shortcuts.
+- When a user repeats a broad identity/background request, acknowledge the intended overview and offer concrete fact choices (for example ownership, services, or location) in one focused question. Ask for a country or public URL only when it helps distinguish entities; do not repeat the same capability disclaimer.
+- A stopped run is not a human decision. Say that automation stopped before saving an assessment unless a real reviewer action exists. Never imply that discovered or retrieved pages support the claim unless persisted finding-evidence links establish that relationship.
+- `RESULT` for a completed case includes the approved claim, persisted assessment, limitations, and up to three retrieved source links connected to the finding. A stopped case includes its saved claim, a safe explanation derived from the worker error category, up to three retrieved pages clearly marked as not assessed, and whether retry is available.
+- `RETRY [reference]` is an explicit user action. It requeues the same saved case through the shared retry service, checks ownership through the WhatsApp sender mapping, respects the existing investigation model-call budget, and returns the existing reference. Duplicate or concurrent retries must not create parallel active runs.
 - Do not expose prior cases or cross-case material without authorization.
