@@ -23,15 +23,16 @@ Application-side budget accounting made a lifetime cap behave as a permanent loc
 ## Remediation
 
 - Count WhatsApp model attempts from persisted `ModelUsageRecord` rows in a rolling 24-hour window. Preserve the existing bounded cap and investigation-specific budget behavior.
+- Raise the default conversation cap from 12 to 30 attempts per rolling day so a normal test/conversation session is not cut off after a dozen short turns; retain configuration override and the rolling cap.
 - When capped, calculate the first time a usage slot will reopen and tell the user that time in East Africa Time. Do not imply a fresh investigation started.
 - Use separate outage wording for actual model invocation failures.
 - Add regressions for expired calls no longer consuming quota, active-window calls enforcing the cap, and user-facing reset-time copy.
 
 ## Verification and next action
 
-- WhatsApp suite: 49 passed. Cost-control helper suite: 10 passed. Scoped Ruff, compileall, and `git diff --check` passed.
+- WhatsApp suite: 49 passed. Cost-control helper suite: 11 passed. Scoped Ruff, compileall, and `git diff --check` passed.
 - No schema migration is required; the existing model-usage records and their timestamps are the source of truth.
-- Deployment is pending. Phase 1 remains in VERIFY. After deployment, repeat a WhatsApp greeting and claim-preview journey; confirm the model-call window and exact reset copy if the cap is reached again.
+- Rolling-window and reset-copy commit `b49996d` is live as `dep-dbgr9f6c6qcc73cejd4g`, readiness healthy. The follow-up increasing the configurable default cap from 12 to 30 is pending deployment. Phase 1 remains in VERIFY. After deployment, repeat a WhatsApp greeting and claim-preview journey; confirm the model-call window and exact reset copy if the cap is reached again.
 
 ## Rollback
 

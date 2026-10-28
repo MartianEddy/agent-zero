@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     source_reader_provider: Literal["disabled", "jina_reader"] = "jina_reader"
     jina_api_key: SecretStr | None = None
     max_model_calls_per_investigation: int = 4
-    max_model_calls_per_whatsapp_conversation: int = 12
+    max_model_calls_per_whatsapp_conversation: int = 30
     max_claims_per_investigation: int = 3
     max_search_queries: int = 5
     max_search_results_per_query: int = 5

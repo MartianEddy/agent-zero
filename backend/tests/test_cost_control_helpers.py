@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings
 from app.db.base import Base
 from app.domain.investigation import Channel, InputType, InvestigationStatus
 from app.modules.conversations.models import WhatsAppConversation
@@ -103,6 +104,11 @@ class ModelUsageBudgetTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.session.close()
+
+    def test_default_whatsapp_budget_supports_a_longer_conversation(self) -> None:
+        settings = Settings(_env_file=None)
+
+        self.assertEqual(settings.max_model_calls_per_whatsapp_conversation, 30)
 
     def test_budget_counts_attempts_and_stops_before_exceeding_limit(self) -> None:
         budget = ModelCallBudget(self.session, self.investigation_id)

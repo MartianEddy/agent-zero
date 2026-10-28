@@ -3,12 +3,14 @@ project: agent-zero
 current_stage: VERIFY
 tier: major
 tier_reason: Persistent WhatsApp conversation drafts, GPT Luna triage, and explicit case creation alter the user-facing intake contract and database state; local single-owner channel auth is used pending production identity decisions.
-last_updated: 2026-10-28T08:38:41Z
+last_updated: 2026-10-28T08:41:00Z
 current_session_deliverable: Diagnosed the owner's 11:33 EAT WhatsApp failures from Render logs: the webhook parsed the greeting, then request `a7ca47edc6914105a707b16655c1578f` hit `ModelCallBudgetExceeded` before any Luna invocation. Root cause was a lifetime WhatsApp conversation model-call counter (limit 12) that reset only after 24h inactivity while each message extended that inactivity expiry, causing active conversations to lock out indefinitely; the catch path also falsely said “try again shortly.” Implemented a rolling 24h count from persisted ModelUsageRecord timestamps, exact next-slot reset time in EAT, and distinct truthful model-outage copy. No schema migration. Regressions pass: WhatsApp suite 49; cost-control helper suite 10; Ruff, compileall, and `git diff --check` pass. Deployment pending. Prior Luna-response fix `83b37a3` remains live on Render as `dep-dbgr3sec6qcc73ce6fmg`, ready. Case `AZ-261027-55065A` remains failed before research with no assessment. Phase 1 remains VERIFY; a new owner-approved investigation and completed live journey are outstanding.
 ---
 
 ## Current feature
 WhatsApp natural conversation and investigation confirmation
+
+Latest follow-up: Render logs for the 11:33 EAT screenshot show inbound message processing stopped at `ModelCallBudgetExceeded` before Luna was invoked. The rolling-window/reset-copy fix is live at `b49996d` (`dep-dbgr9f6c6qcc73cejd4g`) and readiness is healthy. Its default cap is being raised from 12 to 30 per rolling day in a follow-up commit; tests pass (WhatsApp 49, cost-control 11, Ruff, compileall, diff check). No migration is needed.
 
 ## Latest verification finding
 See [WhatsApp conversation fallback incident](../docs/operations/incidents/2026-10-27-whatsapp-conversation-fallback.md). Root cause was deterministic reply fallback behavior, not a Luna authentication failure or stale deploy.
