@@ -3,7 +3,7 @@
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0018_whatsapp_result_notifications"
+revision = "0018_wa_result_notify"
 down_revision = "0017_whatsapp_inbound_receipts"
 branch_labels = None
 depends_on = None

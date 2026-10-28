@@ -41,6 +41,7 @@ Meta's [WhatsApp Business Messaging Policy](https://whatsappbusiness.com/policy/
 - Updated product, architecture, decision, and WhatsApp journey docs.
 - Follow-up tests: 75 passed across WhatsApp and cost-controlled pipeline suites; scoped lint and `git diff --check` pass.
 - Not yet deployed. A real human support URL must be configured before automatic result messages can activate. The latest sender's Meta mode, recipient status, webhook receipt, and delivery code still need checking; Render log access from this environment fails at DNS resolution.
+- First Render API deploy attempt reached the pre-deploy migration and failed before rollout because the Alembic revision ID exceeded PostgreSQL's 32-character `alembic_version.version_num` limit. The migration transaction rolled back; the revision ID was shortened before retry.
 
 ## Acceptance follow-up
 
