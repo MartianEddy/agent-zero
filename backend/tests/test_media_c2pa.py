@@ -437,7 +437,12 @@ def test_c2pa_analysis_uses_original_and_retry_reuses_run(
             select(Finding).where(Finding.claim_id == declaration_claim.id)
         )
         assert declaration_finding.status == "INSUFFICIENT_EVIDENCE"
-        assert declaration_finding.statement == "The credentials declare generative AI involvement."
+        # The headline is application-owned; the model's cited sentence stays as detail.
+        assert declaration_finding.statement.startswith("The cited material did not meet")
+        assert any(
+            "declare generative AI involvement" in item["sentence"]
+            for item in declaration_finding.explanation_json
+        )
         result = get_investigation_results(investigation.id, session)
         c2pa_result = next(
             item for item in result["evidence"] if item["method"] == "MEDIA_PROVENANCE"

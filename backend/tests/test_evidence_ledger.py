@@ -163,3 +163,27 @@ def test_jina_reader_is_enabled_by_default():
     from app.core.config import Settings
 
     assert Settings(_env_file=None).source_reader_provider == "jina_reader"
+
+
+def test_incidental_wire_names_in_body_text_do_not_group_unrelated_sources():
+    result = independence_groups(
+        [
+            {"id": "a", "url": "https://one.example/a", "publisher": "One",
+             "excerpt": "Analysts discussed how Reuters and others covered the earlier budget."},
+            {"id": "b", "url": "https://two.example/b", "publisher": "Two",
+             "excerpt": "The ap of the water pump was repaired on Monday by county engineers."},
+        ]
+    )
+    assert result["a"] != result["b"]
+
+
+def test_credit_line_in_body_text_groups_sources_that_copy_a_wire_story():
+    result = independence_groups(
+        [
+            {"id": "a", "url": "https://one.example/a", "publisher": "One",
+             "excerpt": "The minister opened the road on Friday. (Reuters)"},
+            {"id": "b", "url": "https://two.example/b", "publisher": "Two",
+             "excerpt": "Roads were opened by the minister, according to Reuters."},
+        ]
+    )
+    assert result["a"] == result["b"]

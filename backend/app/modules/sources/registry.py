@@ -1,5 +1,6 @@
 """Small source identity registry; membership describes a source, not truthfulness."""
 
+import re
 from dataclasses import dataclass
 
 
@@ -68,7 +69,7 @@ REGISTRY: tuple[SourceRegistryEntry, ...] = (
         "PUBLIC_RECORD",
         "Kenya",
         ("published Kenyan legislation and court decisions",),
-        ("law", "court", "judgment", "act", "legal"),
+        ("law", "court", "judgment", "act", "legal", "independence", "constitutional"),
     ),
     SourceRegistryEntry(
         "presidentiallibrary.go.ke",
@@ -100,8 +101,22 @@ REGISTRY: tuple[SourceRegistryEntry, ...] = (
         "uonbi.ac.ke", "University of Nairobi", "ACADEMIC", "Kenya", ("university research",)
     ),
     SourceRegistryEntry("ku.ac.ke", "Kenyatta University", "ACADEMIC", "Kenya"),
-    SourceRegistryEntry("who.int", "World Health Organization", "OFFICIAL", "International"),
-    SourceRegistryEntry("worldbank.org", "World Bank", "OFFICIAL", "International"),
+    SourceRegistryEntry(
+        "who.int",
+        "World Health Organization",
+        "OFFICIAL",
+        "International",
+        ("public health guidance, disease information, and international health reporting",),
+        ("health", "disease", "public health", "medical", "outbreak", "vaccination"),
+    ),
+    SourceRegistryEntry(
+        "worldbank.org",
+        "World Bank",
+        "OFFICIAL",
+        "International",
+        ("published World Bank datasets, economic indicators, and project records",),
+        ("economy", "poverty", "development", "economic", "gdp", "gross domestic product"),
+    ),
     SourceRegistryEntry(
         "un.org",
         "United Nations",
@@ -111,6 +126,10 @@ REGISTRY: tuple[SourceRegistryEntry, ...] = (
         ("kenya", "independence", "decolonization", "united nations", "member state"),
     ),
 )
+
+
+def _words(value: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", value.casefold()))
 
 
 def lookup_source(domain: str) -> SourceRegistryEntry | None:
@@ -137,9 +156,40 @@ def role_for_claim(entry: SourceRegistryEntry, claim_text: str, *, submitted: bo
         return "SUBMITTED"
     if entry.source_type == "FACT_CHECK":
         return "FACT_CHECK"
-    claim_words = set(claim_text.casefold().replace("-", " ").split())
+    claim_words = _words(claim_text)
     if entry.authoritative_for and any(topic in claim_words for topic in entry.topics):
         return "PRIMARY_AUTHORITY"
     if entry.source_type in {"OFFICIAL", "PUBLIC_RECORD", "ACADEMIC"}:
         return "CONTEXT"
     return "UNKNOWN"
+
+
+def authority_fits_claim(domain: str | None, claim_text: str) -> bool:
+    """Whether a registered primary source has a narrow, claim-relevant remit.
+
+    This is a sufficiency-policy input, not a truth score. Unknown and generic
+    domain membership never qualifies for the single-source settled-fact path.
+    """
+    if not domain:
+        return False
+    entry = lookup_source(domain)
+    if (
+        entry is None
+        or entry.domain == "go.ke"
+        or entry.source_type not in {"OFFICIAL", "PUBLIC_RECORD"}
+    ):
+        return False
+    claim_words = _words(claim_text)
+    topic_words = {
+        word
+        for topic in entry.topics
+        for word in _words(topic)
+        if len(word) > 3 and word not in {"official", "published", "records", "their"}
+    }
+    specific_match = bool((claim_words - {"kenya", "the", "and", "in", "of", "for"}) & topic_words)
+    jurisdiction_match = (
+        entry.jurisdiction is None
+        or entry.jurisdiction.casefold() == "international"
+        or entry.jurisdiction.casefold() in claim_words
+    )
+    return bool(entry.authoritative_for and specific_match and jurisdiction_match)

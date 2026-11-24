@@ -28,6 +28,7 @@ from app.modules.investigations.investigator import (
     ImageQuestionAnswer,
     ModelGateway,
     ModelInvocationFailed,
+    ReasonedFinding,
     ResearchPlan,
     VisualAnalysis,
 )
@@ -72,13 +73,13 @@ from app.modules.sources.evidence_extraction import (
 )
 from app.modules.sources.exa_search import ExaSearchError, search_exa
 from app.modules.sources.openai_web_search import OpenAIWebSearchError, search_openai_web
-from app.modules.sources.registry import classify_source, role_for_claim
+from app.modules.sources.registry import authority_fits_claim, classify_source, role_for_claim
 from app.modules.sources.retrieval import (
     SourceRetrievalError,
     excerpt_is_present,
     read_public_page,
 )
-from app.modules.sources.settled_fact import ReferenceExcerpt, lookup_settled_fact
+from app.modules.sources.settled_fact import lookup_settled_fact
 from app.modules.sources.source_prioritization import prioritize_sources
 from app.modules.sources.tiers import source_tier_for_domain
 from app.modules.sources.urls import extract_markdown_link_urls, normalize_source_url
@@ -554,7 +555,6 @@ def _persist_plan(
     already_planned = {(trace.query, trace.provider) for trace in traces}
     queries: list[tuple[str, dict[str, object]]] = []
     seen_query_texts: set[str] = set()
-    seen_route_keys: set[tuple[str, int, str]] = set()
     for planned_query in plan.queries:
         if isinstance(planned_query, str):
             query_text = planned_query
@@ -586,19 +586,9 @@ def _persist_plan(
         if claims and claims[claim_index].claim_type == "OPINION_OR_PREDICTION":
             continue
         normalized_query = _query_for_freshness(query_text, freshness)[:500]
-        route_key = (
-            str(route_metadata.get("source_lane", "PRIMARY")),
-            int(route_metadata.get("claim_index", 0)),
-            freshness if route_metadata.get("source_lane", "PRIMARY") == "PRIMARY" else "",
-        )
-        if (
-            normalized_query
-            and normalized_query not in seen_query_texts
-            and route_key not in seen_route_keys
-        ):
+        if normalized_query and normalized_query not in seen_query_texts:
             queries.append((normalized_query, route_metadata))
             seen_query_texts.add(normalized_query)
-            seen_route_keys.add(route_key)
     # Every checkable claim gets a primary-source pass, even if the planner only
     # proposed secondary/reporting queries. Secondary lanes remain additional.
     primary_claim_indices = {
@@ -1660,6 +1650,16 @@ def _evidence_packet(session: Session, investigation: Investigation) -> str:
             row[0].created_at,
         )
     )
+    rows_by_claim: dict[UUID, list[tuple[Evidence, ClaimEvidence, Source | None, MediaAsset | None]]] = {}
+    for row in evidence_rows:
+        rows_by_claim.setdefault(row[1].claim_id, []).append(row)
+    claim_order = [claim.id for claim in claims]
+    evidence_rows = [
+        rows_by_claim[claim_id][index]
+        for index in range(max((len(rows) for rows in rows_by_claim.values()), default=0))
+        for claim_id in claim_order
+        if index < len(rows_by_claim.get(claim_id, []))
+    ]
     for evidence, link, source, media_asset in evidence_rows:
         if remaining < 24:
             break
@@ -1670,6 +1670,9 @@ def _evidence_packet(session: Session, investigation: Investigation) -> str:
             excerpt = _media_packet_excerpt(evidence)[: min(remaining, media_remaining)]
         else:
             excerpt = evidence.content[:remaining]
+        source_group_id = evidence.independence_group_id
+        if source and (not source_group_id or source_group_id == "unknown"):
+            source_group_id = independence_groups.get(str(source.id), "unknown")
         item: dict[str, object] = {
             "evidence_id": str(evidence.id),
             "claim_id": str(link.claim_id),
@@ -1690,7 +1693,7 @@ def _evidence_packet(session: Session, investigation: Investigation) -> str:
             "retrieval_timestamp": evidence.retrieval_timestamp.isoformat() if evidence.retrieval_timestamp else None,
             "published_date": evidence.published_date,
             "is_stale": evidence.is_stale,
-            "independence_group_id": evidence.independence_group_id,
+            "independence_group_id": source_group_id,
             "limitations": evidence.limitations,
         }
         if source:
@@ -1703,7 +1706,7 @@ def _evidence_packet(session: Session, investigation: Investigation) -> str:
                     "url": source.url[:1000],
                     "source_type": source.source_type,
                     "source_tier": source_tier_for_domain(source.domain),
-                    "independence_group_id": evidence.independence_group_id,
+                    "independence_group_id": source_group_id,
                     "authoritative_for": list(source_registry.authoritative_for),
                     "role": (
                         source.source_role
@@ -1826,15 +1829,22 @@ def _persist_findings(
                 )
                 if evidence is None:
                     continue
-                link.relationship = assessment.relationship
+                source = source_by_id.get(evidence.source_id) if evidence.source_id else None
+                relationship = assessment.relationship
+                if source and (
+                    source.discovery_method == "SUBMITTED_URL"
+                    or source.source_role in {"SUBMITTED", "DERIVATIVE"}
+                ):
+                    relationship = "CONTEXTUALIZES"
+                link.relationship = relationship
                 evidence.stance = {
                     "SUPPORTS": "SUPPORTS",
                     "CONTRADICTS": "CONTRADICTS",
                     "CONTEXTUALIZES": "CONTEXT",
                     "MENTIONS": "CONTEXT",
                     "UNKNOWN": "UNKNOWN",
-                }[assessment.relationship]
-                accepted.append((evidence_id, assessment.relationship))
+                }[relationship]
+                accepted.append((evidence_id, relationship))
                 accepted_methods[evidence_id] = evidence.method
         proposed_status = candidate.status if candidate is not None else "INSUFFICIENT_EVIDENCE"
         signals: list[EvidenceSignal] = []
@@ -1844,6 +1854,8 @@ def _persist_findings(
             if (
                 source is None
                 or source.retrieval_status != "RETRIEVED"
+                or source.discovery_method == "SUBMITTED_URL"
+                or source.source_role in {"SUBMITTED", "DERIVATIVE"}
                 or not evidence
                 or not evidence.excerpt_validated
                 or evidence.run_id != investigation.id
@@ -1864,6 +1876,7 @@ def _persist_findings(
                     source_tier=tier,
                     independence_group_id=group_id,
                     retrieved=True,
+                    authority_fits_claim=authority_fits_claim(source.domain, claim.text),
                 )
             )
         assessment = assess_verdict(claim.claim_type, proposed_status, signals)
@@ -1899,42 +1912,73 @@ def _persist_findings(
         if candidate is not None:
             assessment = assess_verdict(claim.claim_type, candidate.status, citation_signals)
         status = assessment.verdict
-        conflicting = status == "PARTLY_TRUE"
-        if checked_sentences:
-            statement = " ".join(str(item["sentence"]) for item in checked_sentences)
-            limitations = candidate.limitations if candidate is not None else []
-        elif conflicting:
+        support_group_count = len(
+            {
+                item.independence_group_id
+                for item in citation_signals
+                if item.stance == "SUPPORTS"
+            }
+        )
+        contradiction_group_count = len(
+            {
+                item.independence_group_id
+                for item in citation_signals
+                if item.stance == "CONTRADICTS"
+            }
+        )
+        if status == "SUPPORTED":
             statement = (
-                "Retrieved evidence points in different directions. Review the linked passages "
-                "to see which parts or interpretations each source supports."
+                f"Retrieved evidence meets the support threshold through "
+                f"{support_group_count} independent source group(s). Review the linked passages "
+                "and context before publication."
             )
-            limitations = ["Eligible retrieved sources contain both supporting and challenging evidence."]
+            limitations = candidate.limitations if candidate is not None else []
+        elif status == "CONTRADICTED":
+            statement = (
+                f"Retrieved evidence meets the challenge threshold through "
+                f"{contradiction_group_count} independent source group(s). Review the linked "
+                "passages and context before publication."
+            )
+            limitations = candidate.limitations if candidate is not None else []
+        elif status == "PARTLY_TRUE":
+            statement = (
+                "Independent retrieved evidence supports and challenges different parts or "
+                "interpretations of this claim. Review the cited passages for that distinction."
+            )
+            limitations = candidate.limitations if candidate is not None else []
+        elif status == "INSUFFICIENT_EVIDENCE":
+            if support_group_count and not contradiction_group_count:
+                statement = (
+                    f"Retrieved evidence is consistent with this claim, but it comes from "
+                    f"{support_group_count} independent source group(s), below the required "
+                    "corroboration threshold. This is not a finding that the claim is false."
+                )
+            elif contradiction_group_count and not support_group_count:
+                statement = (
+                    f"Retrieved evidence challenges this claim, but it comes from "
+                    f"{contradiction_group_count} independent source group(s), below the "
+                    "required corroboration threshold. This is not a conclusive finding that "
+                    "the claim is false."
+                )
+            elif support_group_count and contradiction_group_count:
+                statement = (
+                    "Retrieved evidence points in conflicting directions, and the available "
+                    "sources do not establish a reliable conclusion. Review the cited passages "
+                    "and seek independent corroboration."
+                )
+            else:
+                statement = (
+                    "The cited material did not meet the requirements for claim evidence, so "
+                    "Agent 0 could not establish a conclusion. Review the linked material and "
+                    "seek a direct, independent source."
+                )
+            limitations = [assessment.rationale, assessment.confidence_reason]
         elif status == "NOT_VERIFIABLE":
             statement = (
                 "This is an opinion or prediction, so it cannot be verified as a factual claim. "
                 "Submit a specific factual statement if you want it checked."
             )
             limitations = ["Opinions and predictions do not have a source-verifiable truth value."]
-        elif accepted:
-            statement = (
-                "The retrieved material did not provide enough claim-specific evidence to "
-                "confirm or challenge this claim. Review the linked context and seek a source "
-                "that addresses it directly."
-            )
-            limitations = [
-                "Retrieved excerpts were linked, but none had an eligible relationship and source "
-                "type to support a factual conclusion."
-            ]
-        else:
-            statement = (
-                "Agent 0 could not verify this claim because no retrieved, claim-linked evidence "
-                "was available. Review the source candidates or provide an accessible primary "
-                "source."
-            )
-            limitations = [
-                "Source candidates and search-result titles are leads, not evidence; no retrieved "
-                "excerpt was available to assess this claim."
-            ]
         evidence_confidence = assessment.confidence
         confidence_rationale = assessment.confidence_reason
         if status == "PARTLY_TRUE" and candidate is not None:

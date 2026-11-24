@@ -459,7 +459,13 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
         )
         finding = session.scalar(select(Finding).where(Finding.claim_id == claim.id))
         self.assertEqual(finding.status, "PARTLY_TRUE")
-        self.assertIn("supports the claim while another challenges it", finding.statement)
+        self.assertIn("supports and challenges different parts", finding.statement)
+        self.assertTrue(
+            any(
+                "supports the claim while another challenges it" in item["sentence"]
+                for item in finding.explanation_json
+            )
+        )
         self.assertEqual(
             {
                 item.relationship

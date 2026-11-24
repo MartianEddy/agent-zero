@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 from datetime import date, datetime, timedelta
@@ -10,6 +11,9 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 CONFIG = Path(__file__).parents[1] / "sources" / "evidence_ledger.json"
+COMMON_SECOND_LEVEL_DOMAINS = {
+    "ac", "co", "com", "edu", "go", "gov", "mil", "net", "or", "org"
+}
 
 
 def _config() -> dict[str, object]:
@@ -24,8 +28,12 @@ def canonical_domain(url_or_domain: str | None) -> str:
     value = (url_or_domain or "").strip()
     host = (urlsplit(value).hostname if "://" in value else value) or ""
     host = host.casefold().removeprefix("www.").rstrip(".")
+    try:
+        return ipaddress.ip_address(host).compressed
+    except ValueError:
+        pass
     labels = host.split(".")
-    if len(labels) >= 3 and labels[-2] in {"co", "go", "ac", "or", "gov"}:
+    if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in COMMON_SECOND_LEVEL_DOMAINS:
         return ".".join(labels[-3:])
     return ".".join(labels[-2:]) if len(labels) > 1 else host
 
@@ -72,11 +80,32 @@ def staleness_flag(
     return published < reference_date - timedelta(days=365)
 
 
+def _wire_attribution(text: str, marker: str) -> bool:
+    """Whether text credits a wire service in an attribution position.
+
+    Incidental mentions (for example the letters "ap" inside another word, or a story
+    that merely discusses Reuters) must not group sources. Only credit-line patterns
+    count: "Reuters reports", "(Reuters)", "- Reuters", "according to Reuters", or a
+    leading "Reuters:". Short acronyms are matched case-sensitively.
+    """
+    flags = 0 if marker.isupper() and len(marker) <= 4 else re.IGNORECASE
+    name = re.escape(marker if flags == 0 else marker)
+    verbs = r"(?:reports?|reported|said|says|writes|wrote|reporting)"
+    patterns = (
+        rf"\b{name}\s+{verbs}\b",
+        rf"\({name}\)",
+        rf"[\u2014\u2013-]\s*{name}\s*[.)]?\s*$",
+        rf"\baccording to\s+{name}\b",
+        rf"^\s*{name}\s*:",
+    )
+    return any(re.search(pattern, text.strip(), flags | re.MULTILINE) for pattern in patterns)
+
+
 def independence_groups(items: list[dict[str, str | None]]) -> dict[str, str]:
     """Group syndicated copies by publisher/domain, wire markers, then excerpt similarity."""
     cfg = _config()
     threshold = float(cfg.get("near_duplicate_similarity", 0.9))
-    wire_markers = [str(item).casefold() for item in cfg.get("wire_service_markers", [])]
+    wire_markers = [str(item) for item in cfg.get("wire_service_markers", [])]
     parent = {str(item["id"]): str(item["id"]) for item in items}
 
     def root(key: str) -> str:
@@ -98,12 +127,14 @@ def independence_groups(items: list[dict[str, str | None]]) -> dict[str, str]:
         publisher = _norm(str(item.get("publisher") or ""))
         for identity in {value for value in (publisher, domain) if value}:
             union(key, owners.setdefault(identity, key))
-        combined = " ".join(
-            str(item.get(field) or "") for field in ("publisher", "title", "excerpt")
-        ).casefold()
+        attribution = " ".join(
+            str(item.get(field) or "") for field in ("publisher", "title")
+        )
+        excerpt_text = str(item.get("excerpt") or "")
         for marker in wire_markers:
-            if re.search(rf"\b{re.escape(marker)}\b", combined):
-                union(key, wires.setdefault(marker, key))
+            named_in_header = re.search(rf"\b{re.escape(marker)}\b", attribution, re.IGNORECASE)
+            if named_in_header or _wire_attribution(excerpt_text, marker):
+                union(key, wires.setdefault(marker.casefold(), key))
         excerpt = _norm(str(item.get("excerpt") or ""))
         if len(excerpt) >= 40:
             for previous in items:

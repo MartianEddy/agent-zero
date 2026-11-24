@@ -12,7 +12,9 @@ class VerdictPolicyTests(unittest.TestCase):
         sparse = [EvidenceSignal("a", "SUPPORTS", "REPUTABLE_REPORTING", "news-a")]
         self.assertEqual(assess_verdict("CHECKABLE_EVENT", "SUPPORTED", sparse).verdict,
                          "INSUFFICIENT_EVIDENCE")
-        authoritative = [EvidenceSignal("a", "SUPPORTS", "AUTHORITATIVE_REFERENCE", "wiki")]
+        authoritative = [
+            EvidenceSignal("a", "SUPPORTS", "PRIMARY", "archive", authority_fits_claim=True)
+        ]
         self.assertEqual(assess_verdict("SETTLED_FACT", "SUPPORTED", authoritative).verdict,
                          "SUPPORTED")
 

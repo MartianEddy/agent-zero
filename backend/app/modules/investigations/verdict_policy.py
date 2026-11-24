@@ -1,8 +1,9 @@
 """Deterministic verdict sufficiency rules; model proposals are advisory only."""
 
 from dataclasses import dataclass
-from urllib.parse import urlsplit
 from typing import Literal
+
+from app.modules.investigations.evidence_ledger import canonical_domain
 
 Verdict = Literal[
     "SUPPORTED",
@@ -30,6 +31,7 @@ class EvidenceSignal:
     source_tier: SourceTier
     independence_group_id: str
     retrieved: bool = True
+    authority_fits_claim: bool = False
 
 
 @dataclass(frozen=True)
@@ -60,7 +62,7 @@ def assess_verdict(
     support_groups = {item.independence_group_id for item in supporting}
     contradiction_groups = {item.independence_group_id for item in contradicting}
     settled_authority = claim_type == "SETTLED_FACT" and any(
-        item.source_tier in {"PRIMARY", "AUTHORITATIVE_REFERENCE"}
+        item.source_tier == "PRIMARY" and item.authority_fits_claim
         for item in supporting + contradicting
     )
 
@@ -68,8 +70,18 @@ def assess_verdict(
         verdict: Verdict = "NOT_VERIFIABLE"
         rationale = "This is an opinion or prediction and cannot be checked as a factual claim."
     elif support_groups and contradiction_groups:
-        verdict = "PARTLY_TRUE"
-        rationale = "Retrieved evidence supports different parts or interpretations of the claim."
+        if support_groups.isdisjoint(contradiction_groups) and proposed_verdict == "PARTLY_TRUE":
+            verdict = "PARTLY_TRUE"
+            rationale = (
+                "Independent retrieved sources support materially different parts or "
+                "interpretations; review the cited passages."
+            )
+        else:
+            verdict = "INSUFFICIENT_EVIDENCE"
+            rationale = (
+                "Retrieved sources conflict or do not establish distinct parts of the claim; "
+                "the assessment remains unresolved."
+            )
     elif proposed_verdict == "PARTLY_TRUE":
         verdict = "INSUFFICIENT_EVIDENCE"
         rationale = "The retrieved evidence does not establish both sides needed for a mixed assessment."
@@ -98,12 +110,16 @@ def assess_verdict(
     authoritative_groups = {
         item.independence_group_id
         for item in eligible
-        if item.source_tier in {"PRIMARY", "AUTHORITATIVE_REFERENCE"}
+        if item.source_tier == "PRIMARY" and item.authority_fits_claim
     }
     if verdict == "NOT_VERIFIABLE" or not relevant_groups:
         confidence: Confidence = "LOW"
         confidence_reason = "No eligible retrieved source evidence can establish this claim."
-    elif len(relevant_groups) >= 2 and len(authoritative_groups) >= 2:
+    elif (
+        verdict in {"SUPPORTED", "CONTRADICTED"}
+        and len(relevant_groups) >= 2
+        and len(authoritative_groups) >= 2
+    ):
         confidence = "HIGH"
         confidence_reason = "Multiple independent authoritative source groups provide relevant retrieved evidence."
     elif len(relevant_groups) >= 2:
@@ -138,11 +154,7 @@ def build_independence_groups(
 
     owners_by_domain: dict[str, str] = {}
     for source_id, value in source_domains.items():
-        host = urlsplit(value or "").hostname or (value or "")
-        host = host.casefold().removeprefix("www.")
-        labels = host.split(".")
-        # Preserve common second-level country domains (for example, co.ke).
-        registrable = ".".join(labels[-3:]) if len(labels) >= 3 and labels[-2] in {"co", "go", "ac", "or", "gov"} else ".".join(labels[-2:])
+        registrable = canonical_domain(value)
         if registrable:
             previous = owners_by_domain.setdefault(registrable, source_id)
             union(previous, source_id)

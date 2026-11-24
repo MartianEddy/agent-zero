@@ -111,9 +111,9 @@ def test_whatsapp_conversation_prompt_uses_natural_luna_replies_with_no_case_aut
     )
 
     instructions = gateway._structured_call.call_args.kwargs["instructions"].casefold()
-    assert "write the reply in natural, concise language" in instructions
-    assert "do not answer factual questions from model memory" in instructions
-    assert "never claim fresh research" in instructions
+    assert "write a natural, concise reply" in instructions
+    assert "never answer factual questions from model memory" in instructions
     assert "conversation replies do not create cases" in instructions
-    assert "broad identity/background questions that are not specific claims" in instructions
-    assert "avoid repeating the same generic disclaimer" in instructions
+    assert "reply in the language the user wrote in" in instructions
+    assert "never say model, pipeline, intent, or classification" in instructions
+    assert "do not repeat the capability disclaimer" in instructions
