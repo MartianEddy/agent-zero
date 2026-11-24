@@ -1,6 +1,5 @@
 import json
 import unittest
-from contextlib import contextmanager
 from unittest.mock import patch
 
 from app.modules.sources.settled_fact import lookup_settled_fact

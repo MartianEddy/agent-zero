@@ -60,4 +60,3 @@ class InvestigationServiceTests(unittest.TestCase):
 
         self.assertEqual(first.id, second.id)
         self.assertEqual(self.session.scalar(select(func.count()).select_from(Investigation)), 1)
-from uuid import UUID
