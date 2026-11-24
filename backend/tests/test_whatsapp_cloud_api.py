@@ -923,7 +923,7 @@ def test_natural_confirmation_requires_the_code_for_the_active_preview() -> None
         )
 
     investigations.return_value.create.assert_not_called()
-    assert "SUBMIT 89ABCDEF" in send.call_args.args[1]
+    assert "reply *YES*" in send.call_args.args[1]
     assert "Nothing has started" in send.call_args.args[1]
     assert send.call_args.args[2] == [
         ("SUBMIT 89ABCDEF", "Submit claim"),
@@ -962,7 +962,7 @@ def test_previous_preview_code_cannot_approve_replacement_preview() -> None:
     )
 
     assert created is False
-    assert "SUBMIT 89ABCDEF" in reply
+    assert "reply *YES*" in reply
     session.scalar.assert_not_called()
 
 
@@ -1026,7 +1026,7 @@ def test_inbound_text_uses_luna_to_create_preview_without_creating_case() -> Non
     assert conversation.proposed_claims[0]["claim_type"] == "CHECKABLE_EVENT"
     preview = send.call_args.args[1]
     assert "Nothing has started" in preview
-    assert "Submit claim" in preview or "SUBMIT" in preview
+    assert "reply *YES* to start" in preview
     assert send.call_args.args[2] == [
         (f"SUBMIT {conversation.confirmation_token}", "Submit claim"),
         (f"EDIT {conversation.confirmation_token}", "Edit claim"),
@@ -1929,3 +1929,76 @@ def test_chat_budget_error_gives_reset_time_instead_of_saying_retry_shortly() ->
     assert "3:00 PM EAT on Wed, Oct 28" in reply
     assert "nothing was started" in reply
     assert "try again shortly" not in reply
+
+
+def _run_pending_preview_turn(text: str, *, message_type: str = "text", intent: str = "CONFIRM_DRAFT"):
+    from app.modules.conversations.schemas import ConversationTurn
+    from app.modules.conversations.service import ConversationService
+
+    session = MagicMock()
+    conversation = _conversation_fixture(
+        state="AWAITING_CONFIRMATION",
+        draft_text="Please investigate this claim",
+        draft_input_type="TEXT",
+        proposed_claims=[{"text": "Company X received the contract early.", "claim_type": "CHECKABLE_EVENT"}],
+        draft_expires_at=datetime.now(UTC) + timedelta(minutes=20),
+        preview_version=1,
+        confirmation_token="1234ABCD",
+    )
+    session.scalar.side_effect = [conversation, None, None]
+    investigation = SimpleNamespace(id=UUID(int=201), reference="AZ-261028-ABC123", current_stage="X")
+    event = IncomingWhatsAppMessage(
+        message_id=f"wamid.{abs(hash(text))}", sender="254700000000",
+        phone_number_id="12345", message_type=message_type, text=text,
+    )
+
+    async def immediate_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    with (
+        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service._complete_inbound_event"),
+        patch("app.modules.conversations.service._notification_preference", return_value=None),
+        patch("app.modules.conversations.service.InvestigationService") as service,
+        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch("app.modules.channels.whatsapp.send_text_message") as send,
+        patch("app.modules.conversations.service.run_in_threadpool", side_effect=immediate_in_threadpool),
+    ):
+        service.return_value.create.return_value = investigation
+        gateway.return_value.interpret_whatsapp_turn = AsyncMock(
+            return_value=SimpleNamespace(output=SimpleNamespace(
+                intent=intent, reply="", claims=[], queries=[],
+                clarification_question=None, reference=None,
+            ))
+        )
+        assert asyncio.run(
+            ConversationService(session, _settings()).handle_turn(
+                ConversationTurn(
+                    message_id=event.message_id,
+                    sender=event.sender,
+                    message_type=event.message_type,
+                    text=event.text,
+                ),
+                send,
+            )
+        )
+    return service, send
+
+
+def test_typed_yes_approves_the_preview_on_screen() -> None:
+    for phrase in ("yes", "Yes!", "go ahead", "Ndiyo", "submit"):
+        service, send = _run_pending_preview_turn(phrase)
+        service.return_value.create.assert_called_once()
+        assert "checking this now" in send.call_args.args[1]
+
+
+def test_conditional_or_ambiguous_replies_do_not_start_a_check() -> None:
+    for phrase in ("yes but change the date", "ok", "maybe", "sawa"):
+        service, _send = _run_pending_preview_turn(phrase)
+        service.return_value.create.assert_not_called()
+
+
+def test_button_tap_from_an_older_preview_still_cannot_start_a_check() -> None:
+    service, send = _run_pending_preview_turn("SUBMIT 00000000", message_type="interactive")
+    service.return_value.create.assert_not_called()
+    assert "Nothing has started" in send.call_args.args[1]

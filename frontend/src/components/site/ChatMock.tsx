@@ -5,7 +5,7 @@ type Bubble = { from: "me" | "agent"; text: string } | { from: "buttons"; labels
 
 const DEFAULT_CHAT: Bubble[] = [
   { from: "me", text: "Schools in Nyeri will stay closed tomorrow, is that true?" },
-  { from: "agent", text: "Here is the claim I will check:\n\n- Schools in Nyeri County will remain closed tomorrow.\n\n*Nothing has started yet.* Tap a button below." },
+  { from: "agent", text: "Here is the claim I will check:\n\n- Schools in Nyeri County will remain closed tomorrow.\n\n*Nothing has started yet.* Tap a button below, or reply *YES* to start, *EDIT* to change it, or *CANCEL*." },
   { from: "buttons", labels: ["Submit claim", "Edit claim", "Cancel"] },
   { from: "me", text: "Submit claim" },
   { from: "agent", text: "*Got it. I am checking this now.*\n\nIt usually takes a few minutes." },

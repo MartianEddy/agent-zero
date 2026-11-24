@@ -186,8 +186,8 @@ def preview_message(claims: list[str], *, notification_notice: str) -> str:
         "I’ll search public sources and tell you plainly what I find, including what I "
         "couldn’t confirm.\n"
         f"{notification_notice}\n\n"
-        "*Nothing has started yet.* Tap a button below. No buttons? Reply *SUBMIT*, "
-        "*EDIT* or *CANCEL*."
+        "*Nothing has started yet.* Tap a button below, or reply *YES* to start, "
+        "*EDIT* to change it, or *CANCEL*."
     )
 
 

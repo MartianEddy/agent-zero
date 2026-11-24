@@ -788,6 +788,29 @@ def _preview_button_code(text: str, action: str) -> str | None:
     return match.group(1).upper() if match else None
 
 
+# Typed phrases that unambiguously approve the preview currently on screen. Deliberately
+# excludes "ok" and "sawa", which people also use to acknowledge a message. Anything that
+# adds a condition ("yes but change the date") is not a confirmation.
+_STRICT_CONFIRMATIONS = frozenset({
+    "yes", "yes please", "yes submit", "yes submit it", "yes go ahead", "go ahead",
+    "go ahead and investigate", "submit", "submit claim", "confirm", "start", "proceed",
+    "ndiyo", "ndio", "endelea", "tuma", "anza",
+})
+
+
+def _typed_confirmation_code(conversation, event, command: str) -> str | None:
+    """Return the current preview code when the user typed a plain approval.
+
+    Button taps always carry their own code, so a tap from an older preview is still
+    rejected. A typed approval can only refer to the latest preview, which expires after
+    30 minutes and is replaced whenever the claim is edited.
+    """
+    if event.message_type != "text" or conversation.state != "AWAITING_CONFIRMATION":
+        return None
+    normalized = " ".join(command.casefold().strip(" .!?").split())
+    return conversation.confirmation_token if normalized in _STRICT_CONFIRMATIONS else None
+
+
 def _looks_like_confirmation(text: str) -> bool:
     normalized = " ".join(text.casefold().strip().split())
     return normalized in {
@@ -865,8 +888,7 @@ async def _confirm_conversation_draft(
         )
     ):
         return (
-            "To start, tap *Submit claim* or reply "
-            f"*SUBMIT {conversation.confirmation_token}*. Nothing has started yet.",
+            "To start, tap *Submit claim* or reply *YES*. Nothing has started yet.",
             False,
         )
 
@@ -1440,12 +1462,13 @@ async def _handle_turn(
         return True
     if pending and conversation.state == "AWAITING_CONFIRMATION":
         folded_prefix = folded.split(maxsplit=1)[0] if folded else ""
-        if folded_prefix in {"submit", "confirm"}:
-            code = _preview_code_in(command)
+        typed_code = _typed_confirmation_code(conversation, event, command)
+        if folded_prefix in {"submit", "confirm"} or typed_code is not None:
+            code = _preview_code_in(command) or typed_code
             if code is None:
                 reply = (
-                    "Tap *Submit claim* below to start, or reply "
-                    f"*SUBMIT {conversation.confirmation_token}*. Nothing has started yet."
+                    "Tap *Submit claim* below to start, or reply *YES*. "
+                    "Nothing has started yet."
                 )
                 await _send_saved_reply(
                     session,
@@ -1539,15 +1562,15 @@ async def _handle_turn(
     )
     reply_buttons: list[tuple[str, str]] | None = None
     if output.intent == "CONFIRM_DRAFT":
-        code = _preview_code_in(command)
+        code = _preview_code_in(command) or _typed_confirmation_code(conversation, event, command)
         if not pending or conversation.state != "AWAITING_CONFIRMATION":
             reply = (
                 "There’s nothing to submit yet. Send me the claim you want checked first."
             )
         elif code is None:
             reply = (
-                "Tap *Submit claim* below to start, or reply "
-                f"*SUBMIT {conversation.confirmation_token}*. Nothing has started yet."
+                "Tap *Submit claim* below to start, or reply *YES*. "
+                "Nothing has started yet."
             )
             reply_buttons = [
                 (f"SUBMIT {conversation.confirmation_token}", "Submit claim"),
