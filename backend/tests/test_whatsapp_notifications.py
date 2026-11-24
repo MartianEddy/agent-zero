@@ -49,10 +49,10 @@ def test_case_history_lists_reference_status_claim_and_next_actions():
     )
 
     assert "AZ-261028-ED24C0" in response
-    assert "researching" in response
+    assert "in progress" in response
     assert "Kenya became independent" in response
     assert "RESULT <reference>" in response
-    assert "STATUS <reference>" in response
+    assert "RESULT <reference>" in response
 
 
 def test_history_command_routes_directly_to_sender_scoped_case_list():

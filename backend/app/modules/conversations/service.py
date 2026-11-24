@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.domain.investigation import Channel, InputType, InvestigationStatus
+from app.modules.conversations import messages as copy
 from app.modules.conversations.models import (
     WhatsAppConversation,
     WhatsAppInboundEvent,
@@ -51,7 +52,6 @@ from app.modules.investigations.service import (
     is_retryable_failure_code,
     queue_investigation_retry,
 )
-from app.modules.investigations.summary import finding_result_summary
 from app.modules.investigations.triage import normalize_claim_text
 from app.modules.investigations.usage import ModelCallBudgetExceeded
 
@@ -66,18 +66,7 @@ _UNRESOLVED_CLAIM_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_FAILURE_COPY = {
-    "RATE_LIMITED": "A research service rate limit interrupted the check.",
-    "QUOTA_EXHAUSTED": "The research service quota was unavailable.",
-    "AUTHENTICATION_FAILED": "A research service could not authorize this check.",
-    "PROVIDER_UNAVAILABLE": "A research service was temporarily unavailable.",
-    "TIMEOUT": "A research step took too long to finish.",
-    "INVALID_MODEL_OUTPUT": "A research step returned an unusable response.",
-    "BUDGET_EXCEEDED": "The check reached its AI usage limit.",
-    "PIPELINE_ERROR": "A processing step stopped unexpectedly.",
-    "DERIVATION_FAILED": "The submitted material could not be prepared for review.",
-    "STORAGE_FAILED": "The system could not safely save research material.",
-}
+_FAILURE_COPY = copy.FAILURE_REASONS
 
 
 def _retrieved_sources(
@@ -96,8 +85,8 @@ def _retrieved_sources(
     )
 
 
-def _source_bullets(sources: list[Source]) -> str:
-    lines = []
+def _source_pairs(sources: list[Source]) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
     for source in sources:
         label = (source.title or source.publisher or source.domain or "Retrieved source").strip()
         label = " ".join(label.split())[:100]
@@ -112,8 +101,58 @@ def _source_bullets(sources: list[Source]) -> str:
             continue
         safe_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
         if len(safe_url) <= 350:
-            lines.append(f"• {label}: {safe_url}")
-    return "\n".join(lines)
+            pairs.append((label, safe_url))
+    return pairs
+
+
+def _source_bullets(sources: list[Source]) -> str:
+    return "\n".join(f"• {label}: {url}" for label, url in _source_pairs(sources))
+
+
+def _factual_answer_message(answer: str, citations: tuple[dict[str, str], ...]) -> str:
+    clean_citations: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for citation in citations:
+        url = citation.get("url", "").strip()
+        title = " ".join(citation.get("title", "").split())[:100]
+        try:
+            parsed = urlsplit(url)
+        except ValueError:
+            continue
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or url in seen
+        ):
+            continue
+        seen.add(url)
+        clean_citations.append((title or parsed.hostname, url))
+        if len(clean_citations) >= 3:
+            break
+
+    text = " ".join(answer.split()).strip()[:1400]
+    if not text or not clean_citations:
+        return (
+            "I couldn’t find a cited source for a reliable quick answer, so I won’t guess. "
+            "No investigation was started. Ask me to investigate the question for a fuller check."
+        )
+    header = "Quick answer from a fresh web search (not a full investigation):\n\n"
+    source_header = "\n\nSources:\n"
+    footer = "\n\nAsk me to investigate this question for a fuller evidence review."
+    source_lines: list[str] = []
+    for title, url in clean_citations:
+        line = f"• {title}: {url}"
+        candidate = header + text + source_header + "\n".join([*source_lines, line]) + footer
+        if len(candidate) <= 3900:
+            source_lines.append(line)
+    if not source_lines:
+        return (
+            "I couldn’t fit a cited source into a reliable quick answer, so I won’t guess. "
+            "No investigation was started. Ask me to investigate the question for a fuller check."
+        )
+    return header + text + source_header + "\n".join(source_lines) + footer
 
 
 def _with_reference(message: str, reference: str) -> str:
@@ -152,16 +191,16 @@ def _model_unavailable_reply(error: Exception) -> str:
             local_reset = error.reset_at.astimezone(ZoneInfo("Africa/Nairobi"))
             reset_label = local_reset.strftime("%-I:%M %p EAT on %a, %b %-d")
             return (
-                "I’ve reached the chat’s AI reply limit for now. It resets at "
-                f"{reset_label}. Your message was received, but no investigation was started."
+                "I’ve hit my chat limit for now. I’ll be back at "
+                f"{reset_label}. I got your message, but nothing was started."
             )
         return (
-            "I’ve reached the chat’s AI reply limit for now. Your message was received, but no "
-            "investigation was started. Please try again later."
+            "I’ve hit my chat limit for now. I got your message, but nothing was started. "
+            "Please try again later."
         )
     return (
-        "I’m temporarily unable to reach my reasoning service. Your message was received, but "
-        "no investigation was started. Please try again shortly."
+        "Sorry, I’m having trouble right now and couldn’t answer. Nothing was started. "
+        "Please try again in a few minutes."
     )
 
 
@@ -248,10 +287,7 @@ def _result_message(
             ).limit(1)
         investigation = session.scalar(conversation_statement)
     if investigation is None:
-        return (
-            "I couldn't find a check for this WhatsApp number. "
-            "Send a claim or public URL to start one."
-        )
+        return copy.no_check_found()
 
     brief = session.scalar(
         select(VerificationBrief).where(VerificationBrief.investigation_id == investigation.id)
@@ -262,82 +298,56 @@ def _result_message(
             .where(ProcessingJob.investigation_id == investigation.id)
             .order_by(ProcessingJob.created_at.desc())
         )
-        if investigation.status == InvestigationStatus.FAILED:
-            message = (
-                "This check stopped before an assessment was ready. No conclusion is available."
+        in_progress = investigation.status not in {
+            InvestigationStatus.FAILED,
+            InvestigationStatus.CANCELLED,
+            InvestigationStatus.NEEDS_REVIEW,
+            InvestigationStatus.COMPLETE,
+        }
+        if in_progress:
+            return copy.status_message(
+                getattr(investigation, "current_stage", None),
+                investigation.status.value,
+                investigation.reference,
+                queued_retry=False,
             )
-        elif investigation.status == InvestigationStatus.CANCELLED:
-            message = "This check was cancelled before an assessment was ready."
-        elif investigation.status == InvestigationStatus.NEEDS_REVIEW:
-            message = (
-                "The automated check stopped before saving an assessment. "
-                "No conclusion is available."
+        if investigation.status == InvestigationStatus.CANCELLED:
+            return copy.fit("*This check was cancelled.*", investigation.reference)
+        if investigation.status == InvestigationStatus.COMPLETE:
+            return copy.fit(
+                "*This check finished without a saved summary.* No conclusion is "
+                "available. Please try again or contact support.",
+                investigation.reference,
             )
-        elif investigation.status == InvestigationStatus.COMPLETE:
-            message = (
-                "This check finished without a saved summary. No conclusion is available; "
-                "please review the case in Agent Zero."
+        claims = list(
+            session.scalars(
+                select(Claim)
+                .where(Claim.investigation_id == investigation.id)
+                .order_by(Claim.created_at)
+                .limit(3)
+            )
+        )
+        category = job.error_code if job is not None else None
+        retrieved = _retrieved_sources(session, investigation_id=investigation.id)
+        if _retry_available(session, investigation):
+            retry_line = (
+                "To try again without resending the claim, reply "
+                f"*RETRY {investigation.reference}*."
             )
         else:
-            stage_messages = {
-                "RECEIVED": "Your check is queued for research.",
-                "PROCESSING": "Research is underway on your check.",
-                "ANALYZING": "I’m reviewing the claim and preparing the research plan.",
-                "RESEARCHING": "I’m gathering public evidence for your check.",
-                "CORROBORATING": "I’m comparing the available evidence.",
-                "GENERATING_BRIEF": "I’m preparing your evidence summary.",
-            }
-            stage = getattr(investigation, "current_stage", None)
-            message = stage_messages.get(
-                stage,
-                "Your check is still in progress.",
+            retry_line = (
+                "A retry isn’t available right now. Keep the reference below if you "
+                "contact support."
             )
-            message = (
-                f"{message} You don’t need to resend the claim. "
-                f"Check again later with RESULT {investigation.reference}."
-            )
-        details = []
-        if investigation.status in {
-            InvestigationStatus.NEEDS_REVIEW,
-            InvestigationStatus.FAILED,
-        }:
-            claims = list(
-                session.scalars(
-                    select(Claim)
-                    .where(Claim.investigation_id == investigation.id)
-                    .order_by(Claim.created_at)
-                    .limit(3)
-                )
-            )
-            if claims:
-                details.append(
-                    "Claim submitted:\n"
-                    + "\n".join(f"• {claim.text[:240]}" for claim in claims)
-                )
-            category = job.error_code if job is not None else None
-            if category:
-                details.append(
-                    _FAILURE_COPY.get(category, "A processing step could not be completed.")
-                )
-            retrieved = _retrieved_sources(session, investigation_id=investigation.id)
-            source_bullets = _source_bullets(retrieved)
-            if source_bullets:
-                details.append(
-                    "Pages retrieved before the check stopped "
-                    "(not yet confirmed as supporting evidence):\n"
-                    + source_bullets
-                )
-            if _retry_available(session, investigation):
-                details.append(
-                    f"To retry this saved check, reply RETRY {investigation.reference}. "
-                    "You do not need to resend the claim."
-                )
-            else:
-                details.append(
-                    "A retry is not available for this case right now. "
-                    "Keep the reference for support."
-                )
-        return _with_reference("\n\n".join([message, *details]), investigation.reference)
+        return copy.fit(
+            copy.failed_without_summary(
+                claims=[claim.text for claim in claims],
+                reason=copy.failure_reason(category),
+                sources=_source_bullets(retrieved),
+                retry_line=retry_line,
+            ),
+            investigation.reference,
+        )
 
     findings = list(
         session.scalars(
@@ -347,32 +357,27 @@ def _result_message(
             .limit(5)
         )
     )
-    stopped_prefix = ""
-    if investigation.status in {InvestigationStatus.NEEDS_REVIEW, InvestigationStatus.FAILED}:
+    stopped_early = investigation.status in {
+        InvestigationStatus.NEEDS_REVIEW,
+        InvestigationStatus.FAILED,
+    }
+    stopped_reason = None
+    retry_hint = None
+    if stopped_early:
         latest_job = session.scalar(
             select(ProcessingJob)
             .where(ProcessingJob.investigation_id == investigation.id)
             .order_by(ProcessingJob.created_at.desc())
         )
-        stopped_prefix = (
-            "The latest automated run stopped before completion. The saved assessment below "
-            "may be incomplete and should be treated as preliminary."
-        )
-        if latest_job is not None and latest_job.error_code:
-            stopped_prefix += " " + _FAILURE_COPY.get(
-                latest_job.error_code, "A processing step could not be completed."
-            )
+        stopped_reason = copy.failure_reason(latest_job.error_code if latest_job else None)
         if _retry_available(session, investigation):
-            stopped_prefix += f" Reply RETRY {investigation.reference} to queue another run."
-    summary = finding_result_summary(findings, max_chars=1300)
-    claims = list(
-        session.scalars(
-            select(Claim)
-            .where(Claim.investigation_id == investigation.id)
-            .order_by(Claim.created_at)
-            .limit(3)
+            retry_hint = f"Reply *RETRY {investigation.reference}* to try again."
+    claims_by_id = {
+        claim.id: claim.text
+        for claim in session.scalars(
+            select(Claim).where(Claim.investigation_id == investigation.id)
         )
-    )
+    }
     finding_evidence_ids = list(
         session.scalars(
             select(FindingEvidence.evidence_id)
@@ -400,20 +405,23 @@ def _result_message(
             .limit(3)
         )
     )
-    claim_text = "\n".join(f"• {item.text[:160]}" for item in claims)
-    source_text = _source_bullets(linked_sources)
-    limitations = [item[:150] for item in (brief.limitations or [])[:2] if item]
-    limitation_text = "\n\nLimitations: " + "; ".join(limitations) if limitations else ""
-    claim_section = f"Claim checked:\n{claim_text}\n\n" if claim_text else ""
-    source_section = (
-        "\n\nSources linked to the assessment:\n" + source_text
-        if source_text
-        else "\n\nNo source link was available in this WhatsApp summary. "
-        "Open the case to inspect its evidence."
-    )
-    return _with_reference(
-        f"{stopped_prefix}\n\n{claim_section}{summary}{source_section}{limitation_text}",
-        investigation.reference,
+    return copy.result_message(
+        [
+            copy.FindingView(
+                status=item.status,
+                claim=claims_by_id.get(item.claim_id, ""),
+                headline=item.statement,
+                confidence=item.evidence_confidence,
+                confidence_reason=item.confidence_rationale or "",
+            )
+            for item in findings
+        ],
+        sources=_source_pairs(linked_sources),
+        limitations=[item for item in (brief.limitations or [])[:2] if item],
+        reference=investigation.reference,
+        stopped_early=stopped_early,
+        stopped_reason=stopped_reason,
+        retry_hint=retry_hint,
     )
 
 
@@ -440,10 +448,7 @@ def _retry_message(
     statement = statement.where(Investigation.reference == reference)
     investigation = session.scalar(statement.with_for_update())
     if investigation is None:
-        return (
-            "I couldn't find a check for this WhatsApp number. "
-            "Send RETRY with its case reference."
-        )
+        return copy.no_check_found()
 
     latest_job = session.scalar(
         select(ProcessingJob)
@@ -451,10 +456,10 @@ def _retry_message(
         .order_by(ProcessingJob.created_at.desc())
     )
     if latest_job is not None and not is_retryable_failure_code(latest_job.error_code):
-        return (
-            "This failure is not transient, so I can't retry it from WhatsApp. "
-            "After the service issue is corrected, start a fresh check or contact support.\n"
-            f"Reference: {investigation.reference}"
+        return copy.fit(
+            "This kind of problem can’t be fixed by trying again. "
+            "Send the claim again as a new check, or contact support.",
+            investigation.reference,
         )
 
     try:
@@ -467,25 +472,25 @@ def _retry_message(
     except InvestigationRetryUnavailable as exc:
         messages = {
             "not_retryable": (
-                "This failure type cannot be safely retried here. Open the case in Agent Zero "
-                "or contact support."
+                "This check can’t be retried from here. Please send the claim again as a "
+                "new check, or contact support."
             ),
             "job_missing": (
-                "I couldn't find a saved run to retry. Please open the case in Agent Zero."
+                "I couldn’t find a saved run to retry. Please send the claim again."
             ),
             "already_running": (
-                "A retry is already queued or running. You don't need to send it again."
+                "A retry is already on its way. No need to send it again."
             ),
             "budget_exhausted": (
-                "This check has reached its AI usage limit. It cannot be retried right now."
+                "This check has used up its allowance, so it can’t be retried right now."
             ),
         }
-        return f"{messages[exc.reason]}\nReference: {investigation.reference}"
+        return copy.fit(messages[exc.reason], investigation.reference)
 
-    return (
-        "I’ve queued another run using the saved claim. No new assessment is available yet; "
-        "send STATUS to check progress.\n"
-        f"Reference: {investigation.reference}"
+    return copy.fit(
+        "*I’m trying again with your saved claim.* No need to resend it.\n"
+        "Reply *STATUS* to see how it’s going.",
+        investigation.reference,
     )
 
 
@@ -716,46 +721,26 @@ def _status_message(
             )
         )
     if investigation is None:
-        return (
-            "I couldn't find an investigation for this conversation. "
-            "Tell me what you'd like me to investigate."
-        )
+        return copy.no_check_found()
     latest_job = session.scalar(
         select(ProcessingJob)
         .where(ProcessingJob.investigation_id == investigation.id)
         .order_by(ProcessingJob.created_at.desc())
     )
-    if latest_job is not None and latest_job.status == "QUEUED":
-        return (
-            "Your investigation retry is queued. No new assessment is available yet; "
-            "you do not need to send the claim again.\n"
-            f"Reference: {investigation.reference}"
-        )
-    labels = {
-        "RECEIVED": "queued",
-        "PROCESSING": "processing",
-        "ANALYZING": "analyzing the claim",
-        "RESEARCHING": "reviewing sources",
-        "CORROBORATING": "comparing evidence",
-        "GENERATING_BRIEF": "preparing the assessment",
-        "COMPLETE": "complete",
-        "NEEDS_REVIEW": "stopped before a final assessment was saved",
-        "FAILED": "could not be completed; no conclusion is available",
-        "CANCELLED": "cancelled",
-    }
-    label = labels.get(investigation.status.value, "in progress")
-    recovery = ""
+    retry_hint = None
     if investigation.status in {InvestigationStatus.NEEDS_REVIEW, InvestigationStatus.FAILED}:
-        recovery = " Send RESULT to see what was gathered."
-        recovery += (
-            f" Reply RETRY {investigation.reference} to queue another run."
-            if _retry_available(session, investigation)
-            else " A retry is not available right now."
-        )
-    return (
-        f"Your investigation is {label}. This status does not establish whether the claim is "
-        f"true.{recovery}\n"
-        f"Reference: {investigation.reference}"
+        if _retry_available(session, investigation):
+            retry_hint = f"Reply *RETRY {investigation.reference}* to try again."
+        else:
+            retry_hint = "A retry isn’t available right now."
+    return copy.status_message(
+        getattr(investigation, "current_stage", None),
+        investigation.status.value,
+        investigation.reference,
+        queued_retry=latest_job is not None and latest_job.status == "QUEUED"
+        and investigation.status
+        in {InvestigationStatus.NEEDS_REVIEW, InvestigationStatus.FAILED},
+        retry_hint=retry_hint,
     )
 
 
@@ -779,24 +764,18 @@ def _case_list_message(
     )
     if not cases:
         if page > 1:
-            return "There are no older cases on that page. Send HISTORY to see your newest cases."
-        return "You don't have an investigation yet. Tell me what you'd like me to look into."
-    lines = [f"Your checks, page {page} (newest first):"]
+            return "There are no older checks. Reply *HISTORY* to see your newest ones."
+        return "You haven’t asked me to check anything yet. Send me a claim or a link to start."
+    rows = []
     for case in cases:
-        status = case.status.value.replace("_", " ").lower()
         claim = session.scalar(
             select(Claim.text)
             .where(Claim.investigation_id == case.id)
             .order_by(Claim.created_at)
             .limit(1)
         )
-        detail = f" — {claim[:100]}" if claim else ""
-        lines.append(f"• {case.reference} — {status}{detail}")
-    lines.append(
-        f"Send RESULT <reference> for an assessment, STATUS <reference> for progress, "
-        f"or HISTORY {page + 1} for older cases."
-    )
-    return "\n".join(lines)
+        rows.append((case.reference, copy.case_status_label(case.status.value), claim or ""))
+    return copy.history_message(rows, page=page)
 
 
 def _preview_code_in(text: str) -> str | None:
@@ -874,8 +853,7 @@ async def _confirm_conversation_draft(
     ):
         _clear_conversation_draft(conversation)
         return (
-            "I don't have a current claim preview to submit. "
-            "Tell me what you'd like investigated and I'll prepare one.",
+            "That preview has expired. Send the claim again and I’ll prepare a fresh one.",
             False,
         )
 
@@ -887,8 +865,8 @@ async def _confirm_conversation_draft(
         )
     ):
         return (
-            "To approve this exact preview, include its code: "
-            f"SUBMIT {conversation.confirmation_token}. No investigation has started.",
+            "To start, tap *Submit claim* or reply "
+            f"*SUBMIT {conversation.confirmation_token}*. Nothing has started yet.",
             False,
         )
 
@@ -902,9 +880,9 @@ async def _confirm_conversation_draft(
         existing = session.get(Investigation, existing_job.investigation_id)
         _clear_conversation_draft(conversation)
         reply = (
-            f"Your investigation is registered.\nReference: {existing.reference}"
+            copy.fit("*This check is already underway.*", existing.reference)
             if existing is not None
-            else "Your investigation is already registered. Send STATUS to check its progress."
+            else "*This check is already underway.* Reply *STATUS* to see how it’s going."
         )
         _append_turn(
             conversation,
@@ -1061,24 +1039,17 @@ async def _confirm_conversation_draft(
     _clear_conversation_draft(conversation)
     if notification_preference is not None and notification_preference.notifications_disabled:
         update_expectation = (
-            "Automatic updates are off. Send HISTORY or RESULT <reference> when you want "
-            "the result."
+            "Automatic messages are off. Reply *RESULT* when you want to see it."
         )
     elif not getattr(settings, "whatsapp_support_url", None):
         update_expectation = (
-            "Automatic result messages are not available yet. Send HISTORY or "
-            "RESULT <reference> when you want an update."
+            "Reply *RESULT* in a few minutes to see it, or *STATUS* for progress."
         )
     else:
         update_expectation = (
-            "I’ll message you here with the result when it’s ready, if it finishes within "
-            "WhatsApp’s 24-hour reply window. If you don’t receive it, send HISTORY or "
-            "RESULT <reference>."
+            "I’ll message you here when it’s ready. If you don’t hear from me, reply *RESULT*."
         )
-    reply = (
-        "Your investigation is registered. I’ll assess the available evidence and explain "
-        f"what remains uncertain.\nReference: {reference}\n{update_expectation}"
-    )
+    reply = copy.registered_message(reference, update_expectation)
     _append_turn(
         conversation,
         user_text=user_text,
@@ -1124,8 +1095,8 @@ async def _handle_turn(
             event=event,
             user_text="[unsupported message type]",
             reply=(
-                "I can chat about an investigation or help check a factual claim. "
-                "Text and public URLs are supported for starting a check."
+                "I can only read text and links in this chat for now. "
+                "Paste the claim or a link and I’ll take a look."
             ),
             send_message=send_message,
         )
@@ -1139,7 +1110,7 @@ async def _handle_turn(
             event=event,
             user_text=command,
             reply=(
-                f"That message is too long. Please keep it under "
+                f"That message is too long for me. Please send the key part, under "
                 f"{MAX_MESSAGE_CHARS:,} characters."
             ),
             send_message=send_message,
@@ -1191,6 +1162,7 @@ async def _handle_turn(
             return True
         pending = False
 
+    command = copy.normalize_command_alias(command)
     folded = command.casefold()
     if not pending and folded in {
         "start",
@@ -1207,20 +1179,13 @@ async def _handle_turn(
             send_message=send_message,
             user_text=command,
             reply=(
-                "There isn’t a claim preview to start yet. Tell me the specific claim you want "
-                "checked, and I’ll prepare one for you to review. Nothing has started."
+                "There’s nothing to submit yet. Tell me the claim you want checked and I’ll "
+                "show you what I understood first. Nothing has started."
             ),
         )
         return True
     if folded == "help":
-        reply = (
-            "Hi, I’m Agent Zero. I can talk through a story or investigate a factual claim "
-            "using public evidence. I’ll show you the claim before starting an investigation. "
-            "Send HISTORY to see your recent case references, RESULT for the latest result "
-            "or RESULT <reference> for one case, "
-            "or STATUS <reference> for progress. Send STOP to turn off automatic result "
-            "messages."
-        )
+        reply = copy.help_message()
         await _send_saved_reply(
             session,
             conversation=conversation,
@@ -1245,8 +1210,8 @@ async def _handle_turn(
         else:
             preference.notifications_disabled = True
         reply = (
-            "Automatic result messages are off. Your checks will continue. Send ALERTS ON "
-            "to turn them back on, or HISTORY to see your case references."
+            "*Automatic result messages are off.* Your checks will still run. "
+            "Reply *ALERTS ON* to turn them back on, or *HISTORY* to see your checks."
         )
         await _send_saved_reply(
             session,
@@ -1265,13 +1230,13 @@ async def _handle_turn(
             session.delete(preference)
         if getattr(settings, "whatsapp_support_url", None):
             reply = (
-                "Automatic result messages are on for checks you submit. I’ll send the result "
-                "here if it finishes within WhatsApp’s 24-hour reply window. Send STOP any time."
+                "*Automatic result messages are on.* I’ll send each result here when it’s "
+                "ready, as long as you’ve messaged me in the last 24 hours. Reply *STOP* any time."
             )
         else:
             reply = (
-                "I’ve saved your preference, but automatic result messages are not available "
-                "yet. Send HISTORY or RESULT <reference> to check a case."
+                "I’ve saved your choice, but automatic result messages aren’t available yet. "
+                "Reply *RESULT* any time to see your latest result."
             )
         await _send_saved_reply(
             session,
@@ -1287,7 +1252,7 @@ async def _handle_turn(
         if reference and not re.fullmatch(
             r"AZ-[0-9]{6}-[A-F0-9]{6}", reference, re.IGNORECASE
         ):
-            reply = "Send RETRY or RETRY followed by the case reference."
+            reply = "To retry, reply *RETRY* or *RETRY* followed by the reference."
         else:
             reply = _retry_message(
                 session, settings=settings, sender_ref=sender_ref, reference=reference
@@ -1306,7 +1271,7 @@ async def _handle_turn(
         if reference and not re.fullmatch(
             r"AZ-[0-9]{6}-[A-F0-9]{6}", reference, re.IGNORECASE
         ):
-            reply = "Send RESULT or RESULT followed by the case reference."
+            reply = "To see a result, reply *RESULT* or *RESULT* followed by the reference."
         else:
             reply = _result_message(
                 session,
@@ -1329,7 +1294,7 @@ async def _handle_turn(
         if reference and not re.fullmatch(
             r"AZ-[0-9]{6}-[A-F0-9]{6}", reference, re.IGNORECASE
         ):
-            reply = "Send STATUS or STATUS followed by the case reference."
+            reply = "To check progress, reply *STATUS* or *STATUS* followed by the reference."
         else:
             reply = _status_message(
                 session, settings=settings, sender_ref=sender_ref, reference=reference
@@ -1371,7 +1336,7 @@ async def _handle_turn(
             else:
                 page = 0
         reply = (
-            "Send HISTORY, HISTORY MORE, or HISTORY followed by a page number."
+            "Reply *HISTORY* for your latest checks, or *HISTORY 2* for older ones."
             if page == 0
             else _case_list_message(
                 session, settings=settings, sender_ref=sender_ref, page=page
@@ -1401,8 +1366,8 @@ async def _handle_turn(
                 send_message=send_message,
                 user_text=command,
                 reply=(
-                    "That action belongs to an older preview, so I didn’t change anything. "
-                    "Review the latest preview or send CANCEL to discard the current draft."
+                    "That button is from an older preview, so I ignored it. "
+                    "Use the latest preview, or reply *CANCEL* to start over."
                 ),
             )
             return True
@@ -1413,17 +1378,16 @@ async def _handle_turn(
             event=event,
             send_message=send_message,
             user_text=command,
-            reply="Cancelled the draft. No investigation was started.",
+            reply="Cancelled. Nothing was started. Send another claim whenever you’re ready.",
         )
         return True
     if folded == "cancel":
         if pending:
             _clear_conversation_draft(conversation)
-            reply = "Cancelled the draft. No investigation was started."
+            reply = "Cancelled. Nothing was started. Send another claim whenever you’re ready."
         else:
             reply = (
-                "There’s no unsubmitted investigation draft to cancel. "
-                "Your existing investigations are unchanged."
+                "There’s nothing waiting to cancel, and your existing checks are untouched."
             )
         await _send_saved_reply(
             session,
@@ -1447,8 +1411,8 @@ async def _handle_turn(
             send_message=send_message,
             user_text=command,
             reply=(
-                "That action belongs to an older preview, so I didn’t change anything. "
-                "Review the latest preview or send EDIT followed by your correction."
+                "That button is from an older preview, so I ignored it. "
+                "Use the latest preview, or reply *EDIT* followed by your correction."
             ),
         )
         return True
@@ -1469,9 +1433,8 @@ async def _handle_turn(
             send_message=send_message,
             user_text=command,
             reply=(
-                "Send the corrected claim or missing detail in your next message. "
-                "I’ll prepare a new preview before anything starts. "
-                "Send CANCEL to discard the draft."
+                "Send the corrected claim in your next message and I’ll show you a new "
+                "preview before anything starts. Reply *CANCEL* to stop."
             ),
         )
         return True
@@ -1481,8 +1444,8 @@ async def _handle_turn(
             code = _preview_code_in(command)
             if code is None:
                 reply = (
-                    "Tap Submit claim below to approve this exact preview, or reply "
-                    f"SUBMIT {conversation.confirmation_token}. No investigation has started."
+                    "Tap *Submit claim* below to start, or reply "
+                    f"*SUBMIT {conversation.confirmation_token}*. Nothing has started yet."
                 )
                 await _send_saved_reply(
                     session,
@@ -1534,8 +1497,9 @@ async def _handle_turn(
                 "content": f"Active investigation draft: {draft_text[:1200]}",
             }
         )
+    gateway = ModelGateway()
     try:
-        model_run = await ModelGateway().interpret_whatsapp_turn(
+        model_run = await gateway.interpret_whatsapp_turn(
             text=command,
             context=context,
             active_draft=draft_text,
@@ -1544,6 +1508,14 @@ async def _handle_turn(
             session=session,
             conversation_id=conversation.id,
         )
+        factual_run = None
+        if model_run.output.intent == "FACTUAL_ANSWER_REQUEST" and not pending:
+            factual_run = await gateway.answer_whatsapp_factual_question(
+                text=command,
+                context=context,
+                session=session,
+                conversation_id=conversation.id,
+            )
     except (ModelInvocationFailed, ModelCallBudgetExceeded) as exc:
         logger.warning(
             "WhatsApp conversational model unavailable category=%s", type(exc).__name__
@@ -1570,13 +1542,12 @@ async def _handle_turn(
         code = _preview_code_in(command)
         if not pending or conversation.state != "AWAITING_CONFIRMATION":
             reply = (
-                "There is no current claim preview to approve. "
-                "Ask me to investigate a claim first."
+                "There’s nothing to submit yet. Send me the claim you want checked first."
             )
         elif code is None:
             reply = (
-                "Tap Submit claim below to approve this exact preview, or reply "
-                f"SUBMIT {conversation.confirmation_token}. No investigation has started."
+                "Tap *Submit claim* below to start, or reply "
+                f"*SUBMIT {conversation.confirmation_token}*. Nothing has started yet."
             )
             reply_buttons = [
                 (f"SUBMIT {conversation.confirmation_token}", "Submit claim"),
@@ -1608,6 +1579,16 @@ async def _handle_turn(
         # Luna owns the wording for ordinary conversation. Application policy
         # still owns intents, authorization, case creation, and all side effects.
         reply = output.reply.strip() or "I’m here. What would you like to talk about?"
+    elif output.intent == "FACTUAL_ANSWER_REQUEST":
+        if pending:
+            reply = (
+                "There’s a claim preview waiting in this chat. Approve, edit, or cancel it first; "
+                "I won’t change its scope while it’s awaiting your decision."
+            )
+        else:
+            answer = factual_run.output.answer if factual_run else ""
+            citations = factual_run.citations if factual_run else ()
+            reply = _factual_answer_message(answer, citations)
     elif output.intent == "CASE_LIST_REQUEST":
         reply = _case_list_message(session, settings=settings, sender_ref=sender_ref)
     elif output.intent == "STATUS_REQUEST":
@@ -1627,11 +1608,10 @@ async def _handle_turn(
     elif output.intent == "CANCEL_DRAFT":
         if pending:
             _clear_conversation_draft(conversation)
-            reply = "Cancelled the draft. No investigation was started."
+            reply = "Cancelled. Nothing was started. Send another claim whenever you’re ready."
         else:
             reply = (
-                "There’s no unsubmitted investigation draft to cancel. "
-                "Your existing investigations are unchanged."
+                "There’s nothing waiting to cancel, and your existing checks are untouched."
             )
     elif output.intent == "INVESTIGATION_REQUEST" and any(
         _UNRESOLVED_CLAIM_PATTERN.search(claim.text) for claim in output.claims
@@ -1716,32 +1696,25 @@ async def _handle_turn(
                 ]
                 conversation.state = "AWAITING_CONFIRMATION"
                 conversation.confirmation_token = secrets.token_hex(4).upper()
-                claim_lines = "\n".join(f"• {claim.text}" for claim in output.claims)
                 preference = _notification_preference(
                     session, settings=settings, sender_ref=sender_ref
                 )
                 if preference is not None and preference.notifications_disabled:
                     notification_notice = (
-                        "Automatic result messages are off. Send ALERTS ON to opt back in; "
-                        "otherwise use HISTORY or RESULT <reference>. "
+                        "Automatic messages are off, so reply *RESULT* later to see it."
                     )
                 elif getattr(settings, "whatsapp_support_url", None):
                     notification_notice = (
-                        "Submitting opts you into one WhatsApp result message when ready, "
-                        "while the 24-hour reply window is open. Send STOP to turn it off. "
+                        "I’ll message you here with the result. Reply *STOP* if you’d rather not "
+                        "get automatic messages."
                     )
                 else:
                     notification_notice = (
-                        "Automatic result messages are not available yet. Use HISTORY or "
-                        "RESULT <reference> to check later. "
+                        "Reply *RESULT* a few minutes after submitting to see it."
                     )
-                reply = (
-                    f"Here’s what I understand you want investigated:\n\n{claim_lines}\n\n"
-                    "I’ll look for relevant public evidence and explain important gaps. "
-                    f"{notification_notice}"
-                    "No investigation has started. Choose an action below. If buttons aren’t "
-                    f"available, reply SUBMIT {conversation.confirmation_token}, EDIT followed "
-                    "by your correction, or CANCEL."
+                reply = copy.preview_message(
+                    [claim.text for claim in output.claims],
+                    notification_notice=notification_notice,
                 )
                 reply_buttons = [
                     (f"SUBMIT {conversation.confirmation_token}", "Submit claim"),

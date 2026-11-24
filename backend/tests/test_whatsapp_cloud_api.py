@@ -29,11 +29,13 @@ from app.modules.channels.whatsapp import (
 )
 from app.modules.conversations.schemas import ConversationTurn
 from app.modules.conversations.service import (
+    _factual_answer_message,
     _model_unavailable_reply,
     _result_message,
     _retry_message,
     _sender_reference,
 )
+from app.modules.investigations.investigator import _web_citations
 from app.modules.investigations.service import is_retryable_failure_code
 from app.modules.investigations.usage import ModelCallBudgetExceeded
 
@@ -922,7 +924,7 @@ def test_natural_confirmation_requires_the_code_for_the_active_preview() -> None
 
     investigations.return_value.create.assert_not_called()
     assert "SUBMIT 89ABCDEF" in send.call_args.args[1]
-    assert "No investigation has started" in send.call_args.args[1]
+    assert "Nothing has started" in send.call_args.args[1]
     assert send.call_args.args[2] == [
         ("SUBMIT 89ABCDEF", "Submit claim"),
         ("EDIT 89ABCDEF", "Edit claim"),
@@ -1023,9 +1025,8 @@ def test_inbound_text_uses_luna_to_create_preview_without_creating_case() -> Non
     assert conversation.state == "AWAITING_CONFIRMATION"
     assert conversation.proposed_claims[0]["claim_type"] == "CHECKABLE_EVENT"
     preview = send.call_args.args[1]
-    assert "SUBMIT " in preview
-    assert conversation.confirmation_token in preview
-    assert "No investigation has started" in send.call_args.args[1]
+    assert "Nothing has started" in preview
+    assert "Submit claim" in preview or "SUBMIT" in preview
     assert send.call_args.args[2] == [
         (f"SUBMIT {conversation.confirmation_token}", "Submit claim"),
         (f"EDIT {conversation.confirmation_token}", "Edit claim"),
@@ -1277,8 +1278,8 @@ def test_explicit_submit_creates_one_investigation_from_approved_claims() -> Non
     gateway.return_value.interpret_whatsapp_turn.assert_awaited_once()
     assert conversation.state == "IDLE"
     assert "AZ-261027-ABC123" in send.call_args.args[1]
-    assert "message you here with the result" in send.call_args.args[1]
-    assert "RESULT <reference>" in send.call_args.args[1]
+    assert "message you here when it’s ready" in send.call_args.args[1]
+    assert "*RESULT*" in send.call_args.args[1]
     assert conversation.recipient_encrypted != event.sender
     added = [item for call in session.add_all.call_args_list for item in call.args[0]]
     queued = [item for item in added if isinstance(item, ProcessingJob)]
@@ -1338,6 +1339,7 @@ def test_result_lookup_is_scoped_to_the_hmac_sender_and_includes_saved_limits() 
         statement="The sources did not establish this claim.",
         evidence_confidence="LOW",
         confidence_rationale="Few direct sources.",
+        claim_id=UUID(int=7),
     )
     session.scalar.side_effect = [investigation, brief]
     session.scalars.side_effect = [[finding], [], [], [], []]
@@ -1373,9 +1375,9 @@ def test_processing_result_shows_actual_stage_and_discourages_resubmitting_claim
         reference="AZ-261027-55065A",
     )
 
-    assert "gathering public evidence" in response
-    assert "don’t need to resend the claim" in response
-    assert "RESULT AZ-261027-55065A" in response
+    assert "Searching for sources" in response
+    assert "reply *RESULT*" in response
+    assert "AZ-261027-55065A" in response
 
 
 def test_result_without_reference_selects_latest_case_for_sender() -> None:
@@ -1401,7 +1403,7 @@ def test_result_without_reference_selects_latest_case_for_sender() -> None:
     sql = str(query.compile())
     assert "investigations.reference IS NULL" not in sql
     assert "ORDER BY investigations.created_at DESC" in sql
-    assert "RESULT AZ-261028-ED24C0" in response
+    assert "AZ-261028-ED24C0" in response
 
 
 def test_result_lookup_falls_back_to_approved_conversation_mapping() -> None:
@@ -1427,7 +1429,7 @@ def test_result_lookup_falls_back_to_approved_conversation_mapping() -> None:
 
     fallback_query = session.scalar.call_args_list[1].args[0]
     assert str(conversation_id) in str(fallback_query.compile().params.values())
-    assert "Reference: AZ-261028-ED24C0" in response
+    assert "Ref: AZ-261028-ED24C0" in response
 
 
 def test_plural_results_command_uses_deterministic_result_lookup() -> None:
@@ -1498,11 +1500,11 @@ def test_failed_result_makes_clear_that_no_assessment_was_produced() -> None:
         reference="AZ-261027-55065A",
     )
 
-    assert "stopped before an assessment was ready" in response
+    assert "stopped before it finished" in response
     assert "No conclusion is available" in response
     assert "Who owns Sinaps Technology in Kenya?" in response
-    assert "could not authorize this check" in response
-    assert "not yet confirmed as supporting evidence" in response
+    assert "technical problem on our side" in response
+    assert "not confirmed as evidence yet" in response
     assert "https://registry.example/company/123" in response
     assert "tracking=private" not in response
     assert "RETRY AZ-261027-55065A" not in response
@@ -1522,8 +1524,9 @@ def test_completed_result_includes_only_sources_linked_to_saved_findings() -> No
     finding = SimpleNamespace(
         status="SUPPORTED",
         statement="The record supports the claim.",
-        evidence_confidence="MODERATE",
+        evidence_confidence="MEDIUM",
         confidence_rationale="A direct public record was retrieved.",
+        claim_id=UUID(int=8),
     )
     linked_source = SimpleNamespace(
         title="Official company record",
@@ -1535,7 +1538,7 @@ def test_completed_result_includes_only_sources_linked_to_saved_findings() -> No
     session.scalar.side_effect = [investigation, brief]
     session.scalars.side_effect = [
         [finding],
-        [SimpleNamespace(text="The company is owned by its shareholders.")],
+        [SimpleNamespace(id=UUID(int=8), text="The company is owned by its shareholders.")],
         [UUID(int=901)],
         [UUID(int=902)],
         [linked_source],
@@ -1548,8 +1551,9 @@ def test_completed_result_includes_only_sources_linked_to_saved_findings() -> No
         reference="az-261027-abc123",
     )
 
-    assert "Claim checked:" in response
-    assert "The evidence supports the claim" in response
+    assert "*Claim:* The company is owned by its shareholders." in response
+    assert "Evidence supports this claim" in response
+    assert "Evidence strength:* Medium" in response
     assert "Official company record" in response
     assert "https://registry.example/company/123" in response
     assert "AZ-261027-ABC123" in response
@@ -1581,7 +1585,7 @@ def test_retry_command_queues_same_sender_case_and_reuses_its_reference() -> Non
 
     retry.assert_called_once()
     assert retry.call_args.kwargs["investigation"] is investigation
-    assert "queued another run" in response
+    assert "trying again with your saved claim" in response
     assert "AZ-261027-ABC123" in response
 
 
@@ -1610,7 +1614,7 @@ def test_retry_command_does_not_queue_authentication_failure() -> None:
         )
 
     retry.assert_not_called()
-    assert "not transient" in response
+    assert "can’t be fixed by trying again" in response
     assert "AZ-261027-ABC123" in response
 
 
@@ -1771,7 +1775,7 @@ def test_luna_conversation_reply_is_used_without_creating_an_investigation() -> 
     assert send.call_args.args[1] == output.reply
 
 
-def test_luna_can_answer_factual_question_with_safe_next_step_without_creating_case() -> None:
+def test_cited_quick_answer_uses_search_and_does_not_create_case() -> None:
     session = MagicMock()
     conversation = _conversation_fixture()
     session.scalar.return_value = conversation
@@ -1784,11 +1788,8 @@ def test_luna_can_answer_factual_question_with_safe_next_step_without_creating_c
         text="I’d like you to check what is Sinaps Technology?",
     )
     output = SimpleNamespace(
-        intent="CONVERSATION",
-        reply=(
-            "I haven’t looked up Sinaps Technology, so I won’t guess what it is. I can help "
-            "verify a specific fact about it—what would you like to check?"
-        ),
+        intent="FACTUAL_ANSWER_REQUEST",
+        reply="I will search for a cited answer.",
         claims=[],
         queries=[],
         clarification_question=None,
@@ -1812,11 +1813,65 @@ def test_luna_can_answer_factual_question_with_safe_next_step_without_creating_c
         gateway.return_value.interpret_whatsapp_turn = AsyncMock(
             return_value=SimpleNamespace(output=output)
         )
+        gateway.return_value.answer_whatsapp_factual_question = AsyncMock(
+            return_value=SimpleNamespace(
+                output=SimpleNamespace(answer="Sinaps Technology provides technology services."),
+                citations=({"title": "Company site", "url": "https://sinaps.example/about"},),
+            )
+        )
         assert asyncio.run(_handle_message(session, event, _settings()))
 
     service.return_value.create.assert_not_called()
     assert conversation.state == "IDLE"
-    assert send.call_args.args[1] == output.reply
+    gateway.return_value.answer_whatsapp_factual_question.assert_awaited_once()
+    assert "Quick answer from a fresh web search" in send.call_args.args[1]
+    assert "https://sinaps.example/about" in send.call_args.args[1]
+    assert "not a full investigation" in send.call_args.args[1]
+
+
+def test_quick_answer_without_citations_fails_closed() -> None:
+    message = _factual_answer_message("The answer is 42.", ())
+    assert "won’t guess" in message
+    assert "No investigation was started" in message
+
+
+def test_quick_answer_keeps_long_source_lists_within_whatsapp_limit() -> None:
+    long_url = "https://example.org/" + ("source/" * 290)
+    message = _factual_answer_message(
+        "A concise sourced answer.",
+        tuple({"title": f"Source {index}", "url": long_url + str(index)} for index in range(3)),
+    )
+    assert len(message) <= 3900
+    assert "Quick answer from a fresh web search" in message
+
+
+def test_web_citation_extraction_rejects_unsafe_urls() -> None:
+    raw = SimpleNamespace(
+        output=[
+            SimpleNamespace(
+                type="message",
+                content=[
+                    SimpleNamespace(
+                        annotations=[
+                            SimpleNamespace(
+                                type="url_citation",
+                                url_citation=SimpleNamespace(
+                                    url="javascript:alert(1)", title="unsafe"
+                                ),
+                            ),
+                            SimpleNamespace(
+                                type="url_citation",
+                                url_citation=SimpleNamespace(
+                                    url="https://example.org/fact", title="Source"
+                                ),
+                            ),
+                        ]
+                    )
+                ],
+            )
+        ]
+    )
+    assert _web_citations([raw]) == ({"url": "https://example.org/fact", "title": "Source"},)
 
 
 def test_start_without_preview_explains_next_step_without_calling_luna() -> None:
@@ -1859,7 +1914,7 @@ def test_start_without_preview_explains_next_step_without_calling_luna() -> None
         )
 
     gateway.return_value.interpret_whatsapp_turn.assert_not_called()
-    assert "There isn’t a claim preview to start yet" in send.call_args.args[1]
+    assert "nothing to submit yet" in send.call_args.args[1]
     assert "Nothing has started" in send.call_args.args[1]
 
 
@@ -1872,5 +1927,5 @@ def test_chat_budget_error_gives_reset_time_instead_of_saying_retry_shortly() ->
     reply = _model_unavailable_reply(error)
 
     assert "3:00 PM EAT on Wed, Oct 28" in reply
-    assert "no investigation was started" in reply
+    assert "nothing was started" in reply
     assert "try again shortly" not in reply
