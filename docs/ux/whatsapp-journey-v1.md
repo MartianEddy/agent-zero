@@ -1,6 +1,6 @@
 # WhatsApp conversation and investigation journey
 
-**Status:** Phase 1 interaction contract; source-backed open research questions are a proposed follow-on capability.
+**Status:** Phase 1 investigation journey plus Phase 2 bounded source-backed quick answers.
 **Detailed proposal:** [Conversational investigative intelligence proposal](../architecture/conversational-investigative-intelligence-proposal.md).
 
 ## Experience principle
@@ -17,27 +17,22 @@ Let people speak naturally. Keep discussion, research questions, and claim inves
 6. **Start the case.** On a valid submit action, validate the token, owner, draft expiry, and idempotency; persist one case and queue the existing durable worker. Return the case reference and say Agent Zero will send the result when ready. If no message arrives, show `HISTORY` and `RESULT <reference>` as clear fallbacks.
 7. **Return to the case.** When configured, send one result message automatically when the case reaches a terminal state, the user has not opted out, and the latest user message is still inside WhatsApp's 24-hour service window. Send the saved evidence-grounded result, not only a “ready” alert. Never initiate a free-form message after the window closes; outside the window a pre-approved template is required and is not part of Phase 1. The user can send `HISTORY` to see the latest 10 references, `HISTORY <page>` for older cases, `STATUS <reference>` for progress, and `RESULT <reference>` for a specific result. `RESULT` without a reference selects the latest case. Every read is owner/sender scoped; a reference alone grants no access.
 
-## Current behavior for open-ended factual questions
+## Phase 2: source-backed quick answers
 
-Phase 1 supports claim checking with public evidence. It does not yet provide source-backed general profiles or answer unknown questions such as “When was this entity founded?” as a research question. Luna should explain this briefly in language that fits the conversation, say it has not checked the answer, and ask what specific fact or claim the user wants verified. It must not invent a proposition or entity type, repeat the same canned disclaimer after each rephrase, or start an investigation while the scope is unresolved.
+For a clear factual question, the application first classifies the intent without tools, then Luna may return a short answer from a fresh web search in a separate bounded task. Show clickable sources and label it as a quick answer, not a full investigation. If the entity could refer to more than one subject, ask for a country or public URL first. If search or citations are missing, say the answer could not be sourced and offer a fuller investigation; never fill the gap from model memory. Quick answers create no case and make no truth assessment.
 
-## Proposed follow-on: source-backed research questions
+### Deferred: full source-backed research profiles
 
-Add a distinct research-question mode for requests such as “When was Sinaps Technology founded?” It should:
-
-- Preserve the question as a question rather than invent a declarative claim with an unknown date.
-- Resolve the named subject from public sources after approval. If sources point to multiple plausible entities, ask the user for a location or URL before continuing.
-- Describe entity type only when a retrieved, cited source supports that description.
-- Preview the research question and proposed scope before creating a case.
-- Return the answer with citations, source dates, unresolved ambiguity, and a clear “not established” state when evidence is insufficient.
-
-This needs a product/architecture decision about question-shaped cases and evidence-grounded answer rendering. It is not implemented by the claim-only Phase 1 pipeline.
+Multi-claim entity profiles, broad dossiers, and question-shaped cases remain outside this quick-answer path. They need a separate approved scope and evidence contract.
 
 ## Conversation states and recovery
 
 | State | User-facing behavior | Available action |
 |---|---|---|
 | Conversation | Natural greeting, capability or scope response; no research implied | Ask a question or provide a specific claim |
+| Quick factual answer | Short fresh-search answer with clickable sources; clearly labeled as not a full investigation | Ask a follow-up or request a full investigation |
+| Ambiguous factual question | Ask one country or public-URL clarification without searching a guessed entity | Provide missing identity detail |
+| Search unavailable or no citations | Say a sourced answer is unavailable; do not answer from model memory | Try later or request a full investigation |
 | Needs clarification | One precise question; no claim preview and no case | Reply with missing detail or Cancel |
 | Awaiting confirmation | Exact claim preview; research has not started | Submit claim, Edit claim, or Cancel |
 | Processing | Case reference and processing status | Ask for status later |
@@ -79,6 +74,7 @@ Button replies must be idempotent and preview-bound. If interactive messages are
 - Do not create cases from greetings, general discussion, or ambiguous intent.
 - Recognize question wording without requiring punctuation.
 - Do not answer from model memory or describe a subject as a company/organization unless retrieved evidence supports it.
+- A clear factual question may use one bounded OpenAI web-search action in a separate answer task, only after application intent classification selects that route. Display its cited links; if none are returned, fail closed. Do not create a case or assessment from this path.
 - Do not present a model placeholder as a claim or as a user-visible fact.
 - Tell users at preview and submission that one completion message will arrive automatically when possible; `HISTORY`, `STATUS`, and `RESULT` remain available as explicit fallbacks.
 - Persist only a Fernet-encrypted recipient address in the 24-hour conversation record; delete it with expired context. Keep the opt-out keyed only by sender HMAC. Do not send outside the last inbound message's 24-hour window.

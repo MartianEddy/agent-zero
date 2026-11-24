@@ -1,6 +1,6 @@
 # Agent Zero: conversational investigative intelligence proposal
 
-**Status:** Draft for product and architecture review; not approved for implementation.
+**Status:** Phase 2 bounded quick-answer implementation authorized by product owner; broader profiles, n8n, and cross-case knowledge remain proposed follow-ons.
 **Purpose:** Evolve Agent Zero from direct WhatsApp-to-investigation intake into a natural conversational interface over the existing investigative engine, with a future provenance-aware cross-investigation knowledge layer.
 **Scope:** Product direction, logical architecture, system ownership, staged implementation, safety and evaluation requirements. This document does not claim that conversational memory, organization workspaces, cross-case discovery, or n8n integration currently exist.
 
@@ -234,7 +234,7 @@ Submission volume is a demand/priority signal, not evidence of truth. Repeated c
 
 ## 10. Staged implementation plan
 
-The current task is design, not BUILD authorization. A new n8n platform is ARCHITECTURAL risk; persistent conversational state, identity, and cross-case sensitive records are at least MAJOR. Before BUILD, follow the SEOS gate: approved requirements and architecture, no blocking open question for the chosen sandbox scope, data/security decisions, rollback, sandbox policy, and product approval.
+The bounded Phase 2 quick-answer slice is authorized by the product owner. Broader profile research, n8n, persistent cross-case sensitive records, and public multi-user rollout remain gated; each still requires its applicable SEOS design, security, data, and rollout decisions.
 
 ### Phase 0 — Decide the product and boundaries (DISCOVER / DEFINE / UX / ARCHITECT)
 
@@ -263,12 +263,13 @@ The current task is design, not BUILD authorization. A new n8n platform is ARCHI
 
 - Reuse the existing `ModelGateway` claim extraction/clarification behavior behind the authenticated conversation API. Do not make n8n's LLM nodes a competing triage brain.
 - Add a bounded conversational task for ordinary greetings, capability questions, context exchange, and case navigation. Keep its tools/actions allowlisted; no free database access, provider calls, or case mutation.
+- For a clear factual question that is not an investigation request, first classify it without tools, then allow one fresh low-context web-search action only in a separate quick-answer task. Return a concise cited answer; do not create a case or assessment. Ask for entity clarification before search when identity is ambiguous, and fail closed when citations are absent.
 - For explicit investigation intent, triage and preview the proposed claim/scope. Ask for clarification when a missing detail could materially change it. No investigation or research job before approval.
 - Support natural-language approval plus WhatsApp interactive buttons where the selected transport/account supports them; keep text fallback. Buttons are conceptual until account capabilities are verified.
 - Route natural-language status/history requests to owner-scoped APIs. Keep exact reference and command shortcuts.
 - Preserve the approved claim set in the worker input; if any re-analysis changes it, surface that change and seek approval rather than silently widening scope.
 
-**Exit evidence:** synthetic conversation suite for hello/help, allegation discussion, general question, explicit investigation, ambiguous event, edit, approval, refusal, out-of-scope media, status/history, unauthorized reference and Luna failure. No casual input creates a case. Luna/provider failure falls back safely without research.
+**Exit evidence:** synthetic conversation suite for hello/help, allegation discussion, source-backed quick factual answer, ambiguous entity, explicit investigation, ambiguous event, edit, approval, refusal, out-of-scope media, status/history, unauthorized reference and Luna/search failure. No casual input creates a case. Luna/provider failure falls back safely without an unsupported answer.
 
 ### Phase 3 — One channel and resilient case lifecycle
 
