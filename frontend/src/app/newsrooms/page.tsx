@@ -1,23 +1,50 @@
+import type { Metadata } from "next";
 import Link from "next/link";
-import Image from "next/image";
-import { Arrow } from "@/components/Arrow";
-import { SiteFooter } from "@/components/SiteFooter";
-import { SiteHeader } from "@/components/SiteHeader";
-import styles from "../public.module.css";
+import { ArrowRight, Building2, GraduationCap, Newspaper, Users } from "lucide-react";
+import { CtaBand, PageHero, Section, SectionHeading } from "@/components/site/Section";
+import { SitePage } from "@/components/site/SitePage";
+import { Button } from "@/components/ui/button";
+
+export const metadata: Metadata = { title: "For teams", description: "Make evidence easier to review in newsrooms, research desks and public offices." };
 
 const people = [
-  ["01", "Journalists", "Check a claim or image before it moves into a story."],
-  ["02", "Editors", "Review the material and its limits before making an editorial decision."],
-  ["03", "Researchers & fact-checkers", "Compare accounts and keep a clear record of what was examined."],
-  ["04", "Anyone checking information", "Understand what the available evidence can—and cannot—show."],
+  { icon: Newspaper, title: "Journalists", text: "Check a claim or image before it moves into a story." },
+  { icon: Building2, title: "Editors", text: "Review the material and its limits before an editorial decision." },
+  { icon: Users, title: "Researchers and fact-checkers", text: "Compare accounts and keep a clear record of what was examined." },
+  { icon: GraduationCap, title: "Anyone checking information", text: "Understand what the available evidence can and cannot show." },
+];
+const moments = [
+  ["Before a story moves forward", "Review the available sources and find gaps that need follow-up."],
+  ["When an image raises questions", "Check attached origin details and visible observations in context."],
+  ["When accounts conflict", "See where reports agree, differ or appear to rely on the same source."],
+  ["When the answer is still unclear", "Keep \"not established yet\" separate from \"false\"."],
 ];
 
 export default function NewsroomsPage() {
-  return <main className={styles.page}><SiteHeader activeHref="/newsrooms" />
-    <section className={styles.hero}><div className={`${styles.heroInner} ${styles.heroSplit}`}><div><p className={styles.eyebrow}>For newsrooms and beyond</p><h1>Make evidence easier to review.</h1><p>Agent 0 helps people checking fast-moving information see the sources, the result and the questions that remain.</p><Link href="/investigate" className="button button-primary">Start an investigation <Arrow /></Link><div className={styles.manifesto}><p>Evidence in view.<br />Human judgment in human hands.</p></div></div><figure className={styles.heroVisual}><Image src="/images/press-briefing.webp" alt="Journalists and cameras gathered at a press briefing" width={1500} height={1000} sizes="(max-width: 640px) 100vw, 48vw" priority /><figcaption>For reporters, editors, researchers and anyone checking information.</figcaption></figure></div></section>
-    <section className={styles.section}><div className={styles.sectionInner}><h2>Useful wherever verification happens.</h2><p className={styles.intro}>The same careful questions matter in a newsroom, a research desk, a classroom, a public office or when deciding whether to share a message.</p><div className={styles.steps}>{people.map(([number, title, description]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{description}</p></article>)}</div></div></section>
-    <section className={styles.sectionAlt}><div className={styles.sectionInner}><h2>Support the decision. Don’t make it for people.</h2><p className={styles.intro}>Agent 0 is an investigation aid. It organizes available information and keeps its limitations visible; it does not replace newsroom standards, expert review or personal judgment.</p><div className={styles.values}><article><h3>Before a story moves forward</h3><p>Review available sources and identify gaps that need follow-up.</p></article><article><h3>When an image raises questions</h3><p>Check attached origin details and visible observations in context.</p></article><article><h3>When accounts conflict</h3><p>See where reports agree, differ or appear to rely on the same source.</p></article><article><h3>When the answer is still unclear</h3><p>Keep “not established yet” distinct from a false claim.</p></article></div></div></section>
-    <section className={styles.cta}><div className={styles.ctaInner}><div><h2>Bring a question into view.</h2><p>Investigate a claim, link or image.</p></div><Link href="/investigate" className="button button-primary">Investigate something <Arrow /></Link></div></section>
-    <SiteFooter />
-  </main>;
+  return (
+    <SitePage>
+      <PageHero eyebrow="For teams" title="Make evidence easier to review." intro="Agent 0 helps people who check fast-moving information see the sources, the result and the questions that remain.">
+        <Button asChild size="lg"><Link href="/investigate">Start a check <ArrowRight /></Link></Button>
+      </PageHero>
+
+      <Section>
+        <SectionHeading eyebrow="Who uses it" title="Useful wherever verification happens." intro="The same careful questions matter in a newsroom, a research desk, a classroom or a public office." />
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {people.map(({ icon: Icon, title, text }) => <div key={title} className="rounded-lg border border-line bg-surface p-5"><Icon className="mb-4 size-5 text-brand-ink" aria-hidden /><h3 className="font-semibold">{title}</h3><p className="mt-1.5 text-sm leading-6 text-muted">{text}</p></div>)}
+        </div>
+      </Section>
+
+      <Section tone="subtle">
+        <SectionHeading eyebrow="In practice" title="Support the decision. Do not make it for people." intro="Agent 0 is an investigation aid. It keeps its limits visible and does not replace newsroom standards, expert review or personal judgment." />
+        <dl className="grid gap-4 sm:grid-cols-2">
+          {moments.map(([title, text]) => <div key={title} className="rounded-lg border border-line bg-surface p-5"><dt className="font-semibold">{title}</dt><dd className="mt-1 text-sm leading-6 text-muted">{text}</dd></div>)}
+        </dl>
+        <p className="mt-8 max-w-2xl text-sm leading-6 text-muted">Cases can be exported as JSON from the workspace. Reviewer sign-in and team accounts are not available yet, and this demo is shared, so please do not use it for private or sensitive material.</p>
+      </Section>
+
+      <CtaBand title="Bring a question into view." text="Check a claim, a link or an image.">
+        <Button asChild size="lg"><Link href="/investigate">Start a check <ArrowRight /></Link></Button>
+      </CtaBand>
+    </SitePage>
+  );
 }

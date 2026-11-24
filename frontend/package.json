@@ -10,9 +10,19 @@
     "test": "node src/app/investigate/presentation.test.mjs"
   },
   "dependencies": {
+    "@tailwindcss/postcss": "^4.3.5",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "geist": "^1.9.2",
+    "lucide-react": "^1.79.0",
     "next": "16.3.8",
+    "postcss": "^8.5.33",
+    "radix-ui": "^1.8.1",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "sonner": "^2.0.8",
+    "tailwind-merge": "^3.7.1",
+    "tailwindcss": "^4.3.5"
   },
   "devDependencies": {
     "@types/node": "^20",

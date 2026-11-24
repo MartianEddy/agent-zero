@@ -1,88 +1,122 @@
-import Link from "next/link";
 import Image from "next/image";
-import { LandingInvestigationInput } from "@/components/LandingInvestigationInput";
-import { Arrow } from "@/components/Arrow";
-import { SiteFooter } from "@/components/SiteFooter";
-import { SiteHeader } from "@/components/SiteHeader";
-import styles from "./home.module.css";
+import Link from "next/link";
+import { ArrowRight, Building2, FileSearch, GraduationCap, Layers, Link2, Newspaper, Scale, Search, ShieldCheck, Smartphone, TextCursorInput, Users } from "lucide-react";
+import { ChatMock } from "@/components/site/ChatMock";
+import { QuickCheck } from "@/components/site/QuickCheck";
+import { ResultPreview } from "@/components/site/ResultPreview";
+import { Container, CtaBand, Eyebrow, Section, SectionHeading } from "@/components/site/Section";
+import { SitePage } from "@/components/site/SitePage";
+import { Button } from "@/components/ui/button";
+import { WHATSAPP_CONTACT_URL } from "@/lib/contact";
 
-const questions = [
-  ["A screenshot arrives.", "Is it original? Where did it come from?"],
-  ["A claim starts spreading.", "Who said it? Is there an official source?"],
-  ["Several articles repeat it.", "Are they independent—or repeating the same source?"],
+const promises = [
+  { icon: ShieldCheck, title: "You approve the claim first", text: "Agent 0 shows what it understood. Nothing is researched until you confirm." },
+  { icon: Link2, title: "Every result links to its sources", text: "Open the exact passages behind a result, and see which sources could not be read." },
+  { icon: Layers, title: "Gaps stay visible", text: "Not enough evidence is reported as exactly that. It is never presented as false." },
 ];
 
-const steps = ["Understand what was shared", "Look for reliable sources", "Compare the available evidence"];
+const steps = [
+  { icon: TextCursorInput, title: "Share it", text: "Paste a claim or a link, or upload an image or short video with the question you have." },
+  { icon: Search, title: "We look for sources", text: "Official records first, then independent reporting and earlier fact-checks." },
+  { icon: Scale, title: "We compare what we find", text: "Sources that copy each other count once. Fixed rules, not a guess, set the result." },
+  { icon: FileSearch, title: "You decide", text: "Read the result, open the sources and see what is still unknown." },
+];
+
+const audiences = [
+  { icon: Newspaper, title: "Journalists", text: "Check a claim or image before it moves into a story." },
+  { icon: Building2, title: "Editors and desks", text: "Review the evidence and its limits before an editorial call." },
+  { icon: Users, title: "Fact-checkers and researchers", text: "Compare accounts and keep a clear record of what was examined." },
+  { icon: GraduationCap, title: "Everyone else", text: "Decide whether a message is worth sharing, in a minute." },
+];
 
 export default function HomePage() {
-  return <main className={styles.page}>
-    <SiteHeader />
+  return (
+    <SitePage>
+      <div className="border-b border-line bg-surface">
+        <Container className="grid gap-12 py-14 sm:py-20 lg:grid-cols-[1.05fr_1fr] lg:items-center">
+          <div>
+            <Eyebrow>Claim checking for everyone</Eyebrow>
+            <h1 className="text-5xl font-semibold leading-[1.02] sm:text-6xl">Check a claim <span className="text-brand-ink">before you share it.</span></h1>
+            <p className="mt-6 max-w-xl text-lg leading-8 text-muted">Paste a claim, a link or an image. Agent 0 finds the sources, compares what they say, and tells you plainly what holds up and what does not.</p>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <Button asChild size="lg"><Link href="/investigate">Start a check <ArrowRight /></Link></Button>
+              <Button asChild size="lg" variant="outline"><a href={WHATSAPP_CONTACT_URL} target="_blank" rel="noopener noreferrer"><Smartphone /> Check on WhatsApp</a></Button>
+            </div>
+            <p className="mt-6 text-sm text-faint">For journalists, editors, fact-checkers, researchers and anyone checking what they have seen.</p>
+          </div>
+          <QuickCheck />
+        </Container>
+      </div>
 
-    <section className={styles.hero}>
-      <div className={styles.heroInner}>
-        <div className={styles.heroCopy}>
-          <p className={styles.eyebrow}>AI-assisted verification for everyone</p>
-          <h1>Know what<br />holds up before<br /><span>you publish.</span></h1>
-          <p className={styles.lede}>Agent 0 helps you investigate questionable claims, links and images—so you can see what the evidence supports and what remains uncertain.</p>
-          <p className={styles.audience}>For journalists, editors, researchers, fact-checkers and anyone checking what they’ve seen.</p>
-          <div className={styles.heroActions}><a className="button button-primary" href="#investigate">Start investigating <Arrow /></a><a href="#how-it-works">See how it works <Arrow /></a></div>
-          <ul className={styles.trustRow} aria-label="What you can check"><li><span aria-hidden="true">↗</span> Claims, links<br />and images</li><li><span aria-hidden="true">⌕</span> Sources and<br />media details</li><li><span aria-hidden="true">✓</span> Clear results<br />with uncertainty</li></ul>
+      <Section tone="plain" className="py-12 sm:py-16">
+        <ul className="grid gap-6 md:grid-cols-3">
+          {promises.map(({ icon: Icon, title, text }) => (
+            <li key={title} className="flex gap-4">
+              <span className="grid size-10 shrink-0 place-items-center rounded-md bg-brand-soft text-brand-ink"><Icon className="size-5" aria-hidden /></span>
+              <div><h2 className="text-base font-semibold">{title}</h2><p className="mt-1 text-sm leading-6 text-muted">{text}</p></div>
+            </li>
+          ))}
+        </ul>
+      </Section>
+
+      <Section tone="subtle" id="how-it-works">
+        <SectionHeading eyebrow="How it works" title="From a question to evidence you can inspect." intro="Four steps, and you stay in control of each one." />
+        <ol className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {steps.map(({ icon: Icon, title, text }, index) => (
+            <li key={title} className="rounded-lg border border-line bg-surface p-5">
+              <div className="mb-4 flex items-center justify-between"><span className="grid size-10 place-items-center rounded-md bg-subtle text-ink"><Icon className="size-5" aria-hidden /></span><span className="font-mono text-xs text-faint">0{index + 1}</span></div>
+              <h3 className="text-base font-semibold">{title}</h3><p className="mt-1.5 text-sm leading-6 text-muted">{text}</p>
+            </li>
+          ))}
+        </ol>
+        <p className="mt-6 text-sm"><Link href="/methodology" className="font-semibold text-brand-ink underline underline-offset-4">Read the exact rules behind a result</Link></p>
+      </Section>
+
+      <Section>
+        <div className="grid gap-12 lg:grid-cols-[1fr_1.1fr] lg:items-center">
+          <div>
+            <Eyebrow>A clear answer</Eyebrow>
+            <h2 className="text-3xl font-semibold leading-[1.1] sm:text-4xl">The result first. The reasons right behind it.</h2>
+            <p className="mt-4 text-lg leading-8 text-muted">You get a plain verdict, how strong the evidence is, what could not be confirmed, and a suggested next step.</p>
+            <ul className="mt-6 grid gap-3 text-[15px] text-ink-soft">
+              {["Five outcomes, each in plain words", "Evidence strength: Low, Medium or High", "What is still unknown, and what to check next"].map((item) => <li key={item} className="flex items-center gap-3"><span className="size-1.5 rounded-full bg-brand-ink" aria-hidden />{item}</li>)}
+            </ul>
+          </div>
+          <ResultPreview />
         </div>
-        <div className={styles.inputColumn} id="investigate"><div className={styles.heroScene}><span className={styles.sceneLabel}>A clear place to start</span><LandingInvestigationInput /></div></div>
-      </div>
-      <p className={styles.brandLine}>Assume nothing. <span>Follow the evidence.</span><b>AI investigates. Humans decide.</b></p>
-    </section>
+      </Section>
 
-    <section className={styles.problem}>
-      <div className={styles.sectionHeader}><p className={styles.eyebrow}>The work behind a simple question</p><h2>Information moves fast.<br />Verification takes work.</h2><p>Agent 0 helps bring these questions into one investigation.</p></div>
-      <div className={styles.questionGrid}>{questions.map(([title, text], index) => <article key={title}><span>0{index + 1}</span><h3>{title}</h3><p>{text}</p></article>)}</div>
-    </section>
-
-    <section className={styles.example} id="how-it-works">
-      <div className={styles.exampleIntro}><p className={styles.eyebrow}>A sample investigation</p><h2>From claim<br />to evidence.</h2><p>See how the workspace keeps the question, the evidence and what remains uncertain together.</p><Link href="/investigate">Investigate something <Arrow /></Link></div>
-      <div className={styles.sample}>
-        <div className={styles.sampleLabel}>ILLUSTRATIVE EXAMPLE · NOT A LIVE CHECK</div>
-        <p className={styles.sampleKicker}>Claim</p><h3>“Schools in Nyeri County will remain closed tomorrow.”</h3>
-        <div className={styles.steps}>{steps.map((step, index) => <div key={step} className={styles.step}><span>{index + 1}</span><p>{step}</p></div>)}</div>
-        <div className={styles.sampleResult}><p className={styles.sampleKicker}>Result</p><strong>Not enough evidence yet</strong><p>We couldn’t confirm the announcement from the sources reviewed. That does not mean it didn’t happen.</p></div>
-        <div className={styles.sampleEvidence}><h4>Why it isn’t verified</h4><ul><li>Official sources: no matching announcement found</li><li>Independent reporting: some reports repeat the same notice</li><li>Image origin: original publisher not established</li></ul></div>
-        <div className={styles.sampleClose}><p className={styles.sampleUnknown}><strong>Still unknown</strong><br />Who first shared the notice, and whether the named authority issued it.</p><p className={styles.sampleNext}><strong>A useful next step</strong><br />Check with the county education office before sharing the notice.</p></div>
-      </div>
-    </section>
-
-    <section className={styles.imageStory}>
-      <div className={styles.imageIntro}><p className={styles.eyebrow}>Image investigation</p><h2>An image is more than what it shows.</h2><p>Agent 0 describes the information it can inspect, and is clear about the details it could not establish.</p></div>
-      <div className={styles.imagePanel}>
-        <div className={styles.imageIllustration} role="img" aria-label="Illustration of an uploaded notice image"><div className={styles.mockPhoto}><span>EXAMPLE IMAGE</span><i /><b /><small>NOTICE</small><em>County Education Office</em><hr /><hr /><hr /></div></div>
-        <div className={styles.imageFacts}>
-          <article><h3>Origin &amp; history</h3><strong>No content credentials found</strong><p>This doesn’t mean the image is fake. Its origin could not be established from attached credentials.</p></article>
-          <article><h3>What the file tells us</h3><p>File type and image dimensions can help describe the file, but don’t establish where it came from.</p></article>
-          <article><h3>What Agent 0 can see</h3><p>Visible text and details are presented as observations that should be checked against other evidence.</p></article>
-          <article className={styles.unknownBlock}><h3>Still unknown</h3><p>Original uploader · first publication · whether the named authority issued the notice</p></article>
+      <Section tone="surface">
+        <SectionHeading eyebrow="Who it is for" title="Useful wherever verification happens." />
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {audiences.map(({ icon: Icon, title, text }) => (
+            <div key={title} className="rounded-lg border border-line bg-bg p-5"><Icon className="mb-4 size-5 text-brand-ink" aria-hidden /><h3 className="text-base font-semibold">{title}</h3><p className="mt-1.5 text-sm leading-6 text-muted">{text}</p></div>
+          ))}
         </div>
-      </div>
-      <p className={styles.imageFootnote}>Example only. Content credentials can help describe an image’s history; their presence or absence does not prove whether the depicted event is true.</p>
-    </section>
+        <div className="mt-10 overflow-hidden rounded-xl border border-line">
+          <Image src="/images/press-briefing.webp" alt="Journalists at a press briefing" width={1800} height={900} sizes="(max-width: 1152px) 100vw, 1152px" className="h-56 w-full object-cover sm:h-72" />
+        </div>
+      </Section>
 
-    <section className={styles.newsroom}>
-      <div className={styles.audienceFeature}>
-        <div className={styles.audiencePhoto}><Image src="/images/presenter-studio.webp" alt="A presenter recording a show in a small studio" width={1800} height={1200} sizes="(max-width: 760px) 100vw, 48vw" /></div>
-        <div className={styles.audienceCopy}><p className={styles.eyebrow}>For newsrooms and beyond</p><h2>For anyone who needs to check what they’ve seen.</h2><p>Bring a question into one place, review the available evidence, and decide what to do with it.</p><ul className={styles.audienceList}><li>Journalists checking a claim before publication</li><li>Editors reviewing evidence and open questions</li><li>Researchers and fact-checkers comparing accounts</li><li>Everyday readers deciding whether to share</li></ul></div>
-      </div>
-      <div className={styles.journey}><div><span>1</span><p><strong>Share</strong> a claim, link or image</p></div><i aria-hidden="true">→</i><div><span>2</span><p><strong>Review</strong> evidence and uncertainty</p></div><i aria-hidden="true">→</i><div><span>3</span><p><strong>Decide</strong> what to do next</p></div></div>
-    </section>
+      <Section tone="subtle">
+        <div className="grid gap-12 lg:grid-cols-2 lg:items-center">
+          <div className="order-2 flex justify-center lg:order-1"><ChatMock /></div>
+          <div className="order-1 lg:order-2">
+            <Eyebrow>On WhatsApp</Eyebrow>
+            <h2 className="text-3xl font-semibold leading-[1.1] sm:text-4xl">Check it where you got it.</h2>
+            <p className="mt-4 text-lg leading-8 text-muted">Forward a message, paste a link, or just ask. You get a plain answer with sources you can open, in English or Kiswahili.</p>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <Button asChild><a href={WHATSAPP_CONTACT_URL} target="_blank" rel="noopener noreferrer">Open WhatsApp <ArrowRight /></a></Button>
+              <Button asChild variant="outline"><Link href="/whatsapp">How it works</Link></Button>
+            </div>
+          </div>
+        </div>
+      </Section>
 
-    <section className={styles.transparency}>
-      <div><p className={styles.eyebrow}>A tool for judgment—not a substitute for it</p><h2>Evidence in view.<br />Decisions in your hands.</h2><p>Agent 0 helps you examine what is available. It does not decide what is true or what you should publish.</p></div>
-      <div className={styles.principles}>
-        <article><h3>Follow the source</h3><p>Review the material behind important findings.</p></article>
-        <article><h3>Keep the gaps visible</h3><p>See what couldn’t be confirmed or completed.</p></article>
-        <article><h3>Make your own call</h3><p>Use the evidence with your own judgment and standards.</p></article>
-      </div>
-    </section>
-
-    <section className={styles.finalCta}><div className={styles.ctaMark}><Image src="/brand/agent-0-logo.png" alt="Agent 0" width={1774} height={887} sizes="150px" /></div><p className={styles.eyebrow}>A question worth checking?</p><h2>Don’t guess. Investigate.</h2><p>Assume nothing. Follow the evidence.</p><Link className="button button-primary" href="/investigate">Start an investigation <Arrow /></Link><Link className={styles.secondaryLink} href="/how-it-works">See how Agent 0 works</Link></section>
-
-    <SiteFooter />
-  </main>;
+      <CtaBand title="Do not guess. Check." text="Assume nothing. Follow the evidence.">
+        <Button asChild size="lg"><Link href="/investigate">Start a check <ArrowRight /></Link></Button>
+        <Button asChild size="lg" variant="outline" className="border-white/30 bg-transparent text-white hover:bg-white/10"><Link href="/methodology">See the method</Link></Button>
+      </CtaBand>
+    </SitePage>
+  );
 }
