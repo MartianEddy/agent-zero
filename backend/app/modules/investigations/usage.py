@@ -66,7 +66,13 @@ class ModelCallBudget:
         )
 
     def begin(
-        self, *, provider: str, model: str, purpose: str, commit: bool = True
+        self,
+        *,
+        provider: str,
+        model: str,
+        purpose: str,
+        commit: bool = True,
+        prompt_version: str | None = None,
     ) -> ModelUsageRecord:
         usage = (
             get_or_create_usage(self.session, self.investigation_id)
@@ -127,6 +133,7 @@ class ModelCallBudget:
             model=model,
             purpose=purpose,
             status="STARTED",
+            prompt_version=prompt_version,
         )
         self.session.add(record)
         if commit:
@@ -180,6 +187,34 @@ def token_usage(raw_responses: list[Any]) -> tuple[int | None, int | None, int |
         else (input_total + output_total if saw_input and saw_output else None)
     )
     return input_tokens, cached_total if saw_cached else None, output_tokens, total_tokens
+
+
+def maybe_capture_sample(
+    session: Session,
+    record: ModelUsageRecord,
+    *,
+    prompt: str,
+    output: Any,
+    enabled: bool,
+) -> bool:
+    """Store a redacted prompt/output pair for evaluation, only when capture is enabled."""
+    if not enabled:
+        return False
+    from app.modules.investigations.models import StageSample
+    from app.modules.investigations.privacy import redact_pii
+
+    dump = getattr(output, "model_dump", None)
+    payload = dump(mode="json") if callable(dump) else {}
+    session.add(
+        StageSample(
+            usage_record_id=record.id,
+            purpose=record.purpose,
+            prompt_version=record.prompt_version,
+            input_text=redact_pii(prompt),
+            output_json=payload,
+        )
+    )
+    return True
 
 
 def complete_model_call(

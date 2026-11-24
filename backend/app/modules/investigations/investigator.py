@@ -2,7 +2,9 @@
 
 import asyncio
 import base64
+import hashlib
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Literal
 from urllib.parse import urlsplit
@@ -25,6 +27,7 @@ from app.modules.investigations.usage import (
     ModelCallBudgetExceeded,
     complete_model_call,
     fail_model_call,
+    maybe_capture_sample,
 )
 
 logger = logging.getLogger(__name__)
@@ -261,6 +264,9 @@ class ModelGateway:
             "and do not produce factual answers. Only propose claims; the application will show a "
             "preview and require explicit user approval before creating a case. For STATUS_REQUEST "
             "or RESULT_REQUEST, include a reference only when the user explicitly supplied one. "
+            "For a non-English INVESTIGATION_REQUEST keep each claim in the user's own language, "
+            "and write the first search query in English with names, places, figures and dates "
+            "unchanged, plus at least one query in the user's language. "
             "Style for every reply: write like a calm, friendly person on WhatsApp. Reply in the "
             "language the user wrote in (English, Kiswahili, or Sheng-mixed text); keep proper "
             "nouns and quoted claims unchanged. Use short plain sentences, at most three short "
@@ -383,6 +389,13 @@ class ModelGateway:
             "manipulation from appearance. "
             "The prompt may include an application-supplied receipt timestamp and deterministic "
             "relative-date normalization; treat those lines as temporal context, not submitted claims. "
+            "Language: the request may be in English, Kiswahili, Sheng, or a mix. Keep each "
+            "claim's text in the user's own language and wording so the user recognises it, "
+            "but resolve slang, abbreviations and code-switching into a clear proposition. "
+            "When the request is not in English, write the first search query in English "
+            "(translated faithfully, with names, places and numbers unchanged) and at least "
+            "one more in the user's language, because most official and news sources are in "
+            "English. Never translate away a name, place, quote, figure or date. "
             "Return concise claims and at most five focused search-query objects. Do not create "
             "queries for OPINION_OR_PREDICTION claims. Each query "
             "must include text, claim_index (zero-based index into the claims array), freshness, "
@@ -625,6 +638,7 @@ class ModelGateway:
             investigation_id=investigation_id,
             conversation_id=conversation_id,
         )
+        prompt_version = hashlib.sha256(instructions.encode("utf-8")).hexdigest()[:12]
         try:
             while True:
                 record = budget.begin(
@@ -632,7 +646,9 @@ class ModelGateway:
                     model=model_name,
                     purpose=purpose,
                     commit=commit_usage,
+                    prompt_version=prompt_version,
                 )
+                started = time.monotonic()
                 try:
                     with tracer(__name__).start_as_current_span(
                         "model.structured_call",
@@ -664,6 +680,14 @@ class ModelGateway:
                             model=model_name,
                             category=FailureCategory.INVALID_MODEL_OUTPUT,
                         )
+                    record.latency_ms = int((time.monotonic() - started) * 1000)
+                    maybe_capture_sample(
+                        session,
+                        record,
+                        prompt=prompt,
+                        output=result.final_output,
+                        enabled=bool(getattr(self.settings, "capture_stage_samples", False)),
+                    )
                     complete_model_call(
                         session,
                         record,

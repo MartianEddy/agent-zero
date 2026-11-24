@@ -117,3 +117,23 @@ def test_whatsapp_conversation_prompt_uses_natural_luna_replies_with_no_case_aut
     assert "reply in the language the user wrote in" in instructions
     assert "never say model, pipeline, intent, or classification" in instructions
     assert "do not repeat the capability disclaimer" in instructions
+
+
+def test_extraction_prompt_handles_kiswahili_and_mixed_language_requests() -> None:
+    import inspect
+
+    from app.modules.investigations import investigator
+
+    source = inspect.getsource(investigator.ModelGateway.extract_claims_and_queries).casefold()
+    assert "kiswahili, sheng" in source
+    assert "first search query in english" in source
+    assert "never translate away a name, place, quote, figure or date" in source
+
+
+def test_whatsapp_prompt_asks_for_english_and_native_language_queries() -> None:
+    import inspect
+
+    from app.modules.investigations import investigator
+
+    source = inspect.getsource(investigator.ModelGateway.interpret_whatsapp_turn).casefold()
+    assert "write the first search query in english" in source

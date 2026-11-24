@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     source_reader_provider: Literal["disabled", "jina_reader"] = "jina_reader"
     jina_api_key: SecretStr | None = None
     max_model_calls_per_investigation: int = 4
+    # Off by default. When on, redacted prompts and outputs are stored for evaluation and
+    # training. Enable only after consent and retention decisions are recorded.
+    capture_stage_samples: bool = False
     max_model_calls_per_whatsapp_conversation: int = 30
     max_claims_per_investigation: int = 3
     max_search_queries: int = 5

@@ -229,6 +229,27 @@ class ModelUsageRecord(Base):
     cached_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Short hash of the instructions used, so a behaviour change can be tied to a prompt change.
+    prompt_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class StageSample(Base):
+    """Redacted input and output of one model stage, kept only when capture is enabled."""
+
+    __tablename__ = "stage_samples"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    usage_record_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("model_usage_records.id", ondelete="CASCADE"),
+        unique=True,
+    )
+    purpose: Mapped[str] = mapped_column(String(40), index=True)
+    prompt_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    input_text: Mapped[str] = mapped_column(Text)
+    output_json: Mapped[dict[str, object]] = mapped_column(JSON_DOCUMENT, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
