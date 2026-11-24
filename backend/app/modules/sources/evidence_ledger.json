@@ -1,4 +1,34 @@
 {
   "near_duplicate_similarity": 0.9,
-  "wire_service_markers": ["AP", "Associated Press", "Reuters", "AFP"]
+  "wire_service_markers": [
+    "AP",
+    "Associated Press",
+    "Reuters",
+    "AFP"
+  ],
+  "ownership_groups": {
+    "wikimedia": [
+      "wikipedia.org",
+      "wikidata.org",
+      "wikimedia.org"
+    ],
+    "nation-media-group": [
+      "nation.africa",
+      "nationmedia.com",
+      "businessdailyafrica.com",
+      "monitor.co.ug"
+    ],
+    "bbc": [
+      "bbc.com",
+      "bbc.co.uk"
+    ],
+    "reuters": [
+      "reuters.com",
+      "thomsonreuters.com"
+    ],
+    "associated-press": [
+      "apnews.com",
+      "ap.org"
+    ]
+  }
 }

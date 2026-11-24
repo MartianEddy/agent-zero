@@ -8,7 +8,14 @@
     "presidentiallibrary.go.ke",
     "un.org",
     "who.int",
-    "worldbank.org"
+    "worldbank.org",
+    "iebc.or.ke",
+    "imf.org"
+  ],
+  "FACT_CHECK": [
+    "africacheck.org",
+    "pesacheck.org",
+    "factcheck.afp.com"
   ],
   "AUTHORITATIVE_REFERENCE": [
     "wikipedia.org",
@@ -19,11 +26,18 @@
   "REPUTABLE_REPORTING": [
     "nation.africa",
     "standardmedia.co.ke",
-    "citizen.digital"
+    "citizen.digital",
+    "businessdailyafrica.com",
+    "the-star.co.ke",
+    "theeastafrican.co.ke",
+    "kbc.co.ke",
+    "reuters.com",
+    "apnews.com",
+    "afp.com",
+    "bbc.com",
+    "bbc.co.uk"
   ],
-  "SECONDARY_AGGREGATOR": [
-    "africacheck.org"
-  ],
+  "SECONDARY_AGGREGATOR": [],
   "UNVERIFIED_SOCIAL": [
     "x.com",
     "twitter.com",

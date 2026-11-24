@@ -24,11 +24,15 @@ def source_tier_for_domain(domain: str | None) -> str:
     tiers = _domains_by_tier()
     for tier in (
         "PRIMARY",
+        "FACT_CHECK",
         "AUTHORITATIVE_REFERENCE",
         "REPUTABLE_REPORTING",
         "SECONDARY_AGGREGATOR",
         "UNVERIFIED_SOCIAL",
     ):
-        if any(normalized == allowed or normalized.endswith(f".{allowed}") for allowed in tiers.get(tier, ())):
+        if any(
+            normalized == allowed or normalized.endswith(f".{allowed}")
+            for allowed in tiers.get(tier, ())
+        ):
             return tier
     return "UNKNOWN"

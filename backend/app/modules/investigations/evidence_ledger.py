@@ -38,6 +38,25 @@ def canonical_domain(url_or_domain: str | None) -> str:
     return ".".join(labels[-2:]) if len(labels) > 1 else host
 
 
+def _ownership() -> dict[str, str]:
+    groups = _config().get("ownership_groups", {})
+    return {
+        canonical_domain(domain): str(owner)
+        for owner, domains in (groups.items() if isinstance(groups, dict) else [])
+        for domain in domains
+    }
+
+
+def owner_key(url_or_domain: str | None) -> str:
+    """Identity used for independence: the shared owner when known, else the domain.
+
+    Different web addresses owned by one organisation (for example Wikipedia and
+    Wikidata) are one source for corroboration purposes.
+    """
+    domain = canonical_domain(url_or_domain)
+    return f"owner:{_ownership()[domain]}" if domain in _ownership() else domain
+
+
 def validate_excerpt(excerpt: str, retrieved_text: str) -> tuple[bool, int | None, int | None]:
     """Return original-text offsets for a whitespace-normalized exact excerpt match."""
     if not excerpt or not retrieved_text:
@@ -123,7 +142,7 @@ def independence_groups(items: list[dict[str, str | None]]) -> dict[str, str]:
     wires: dict[str, str] = {}
     for item in items:
         key = str(item["id"])
-        domain = canonical_domain(str(item.get("url") or item.get("domain") or ""))
+        domain = owner_key(str(item.get("url") or item.get("domain") or ""))
         publisher = _norm(str(item.get("publisher") or ""))
         for identity in {value for value in (publisher, domain) if value}:
             union(key, owners.setdefault(identity, key))
