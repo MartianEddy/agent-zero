@@ -1877,6 +1877,7 @@ def _persist_findings(
                     independence_group_id=group_id,
                     retrieved=True,
                     authority_fits_claim=authority_fits_claim(source.domain, claim.text),
+                    is_stale=evidence.is_stale,
                 )
             )
         assessment = assess_verdict(claim.claim_type, proposed_status, signals)
@@ -2234,6 +2235,71 @@ def _record_deterministic_finding(
     session.commit()
 
 
+def _settled_claims_packet(session: Session, claims: list[Claim]) -> str:
+    """One evidence packet covering several settled-fact claims (one model call, not one each)."""
+    merged: dict[str, object] = {"claims": [], "evidence": [], "limitations": []}
+    for claim in claims:
+        packet = json.loads(_settled_claim_packet(session, claim))
+        merged["claims"].extend(packet["claims"])  # type: ignore[union-attr]
+        merged["evidence"].extend(packet["evidence"])  # type: ignore[union-attr]
+        merged["limitations"] = packet["limitations"]
+    return json.dumps(merged, ensure_ascii=False, separators=(",", ":"))
+
+
+def _assess_settled_claims(
+    session: Session,
+    investigation: Investigation,
+    claims: list[Claim],
+    *,
+    case_deadline: float,
+) -> None:
+    """Assess all retrieved settled-fact claims with a single bounded reasoning call."""
+    remaining = case_deadline - monotonic()
+    if remaining <= 0:
+        for claim in claims:
+            _record_deterministic_finding(
+                session,
+                investigation,
+                claim,
+                status="INSUFFICIENT_EVIDENCE",
+                statement=(
+                    "A reference page was retrieved, but the evidence assessment could not be "
+                    "completed in time."
+                ),
+                confidence_reason="The retrieved reference passage was not assessed.",
+                limitation="The evidence assessment could not be completed in time.",
+            )
+        return
+    try:
+        output = ModelGateway().reason_about_evidence(
+            evidence_packet=_settled_claims_packet(session, claims),
+            session=session,
+            investigation_id=investigation.id,
+            timeout_seconds=remaining,
+        )
+        _persist_findings(session, investigation, output.output)
+    except (ModelInvocationFailed, ModelCallBudgetExceeded) as exc:
+        add_limitation(
+            session,
+            investigation.id,
+            "The evidence-assessment step was unavailable or took too long to finish.",
+        )
+        reason = getattr(getattr(exc, "category", None), "value", "provider error")
+        for claim in claims:
+            _record_deterministic_finding(
+                session,
+                investigation,
+                claim,
+                status="INSUFFICIENT_EVIDENCE",
+                statement=(
+                    "A reference passage was retrieved, but the evidence assessment step was "
+                    "unavailable. The claim remains unchecked."
+                ),
+                confidence_reason="The retrieved reference was not assessed by the evidence-reasoning step.",
+                limitation=f"Evidence assessment unavailable ({reason}).",
+            )
+
+
 def _run_fast_path_claims(
     session: Session,
     investigation: Investigation,
@@ -2249,6 +2315,7 @@ def _run_fast_path_claims(
         )
     )
     fast_indexes: set[int] = set()
+    ready: list[Claim] = []
     for index, claim in enumerate(claims):
         if claim.claim_type == "OPINION_OR_PREDICTION":
             _record_deterministic_finding(
@@ -2306,42 +2373,10 @@ def _run_fast_path_claims(
                 limitation=unavailable,
             )
             continue
-        remaining = case_deadline - monotonic()
-        if remaining <= 0:
-            _record_deterministic_finding(
-                session,
-                investigation,
-                claim,
-                status="INSUFFICIENT_EVIDENCE",
-                statement="A reference page was retrieved, but the evidence assessment could not be completed in time.",
-                confidence_reason="The retrieved reference passage was not assessed.",
-                limitation="The evidence assessment could not be completed in time.",
-            )
-            continue
-        try:
-            packet = _settled_claim_packet(session, claim)
-            output = ModelGateway().reason_about_evidence(
-                evidence_packet=packet,
-                session=session,
-                investigation_id=investigation.id,
-                timeout_seconds=remaining,
-            )
-            _persist_findings(session, investigation, output.output)
-        except (ModelInvocationFailed, ModelCallBudgetExceeded) as exc:
-            add_limitation(
-                session,
-                investigation.id,
-                "The evidence-assessment step was unavailable or took too long to finish.",
-            )
-            _record_deterministic_finding(
-                session,
-                investigation,
-                claim,
-                status="INSUFFICIENT_EVIDENCE",
-                statement="A reference passage was retrieved, but the evidence assessment step was unavailable. The claim remains unchecked.",
-                confidence_reason="The retrieved reference was not assessed by the evidence-reasoning step.",
-                limitation=f"OpenAI evidence assessment unavailable ({getattr(getattr(exc, 'category', None), 'value', 'provider error')}).",
-            )
+        ready.append(claim)
+
+    if ready:
+        _assess_settled_claims(session, investigation, ready, case_deadline=case_deadline)
     return fast_indexes
 
 
@@ -2539,6 +2574,33 @@ def _queue_whatsapp_result_notification(
         )
 
 
+def _run_widening_lane(
+    session: Session,
+    investigation: Investigation,
+    *,
+    lane: str,
+    claim_indices: set[int],
+    retrieved: dict,
+    case_deadline: float,
+) -> None:
+    """Plan, search, read and persist one widening lane for the claims that still need it."""
+    _plan_widened_queries(session, investigation, source_lane=lane, claim_indices=claim_indices)
+    _execute_searches(
+        session,
+        investigation,
+        source_lanes={lane},
+        claim_indices=claim_indices,
+        case_deadline=case_deadline,
+    )
+    retrieved.update(
+        _retrieve_candidates(
+            session, investigation, source_lanes={lane}, case_deadline=case_deadline
+        )
+    )
+    _persist_evidence(session, investigation, retrieved)
+    _detect_source_relationships(session, investigation, retrieved)
+
+
 def process_investigation(session: Session, *, job_id: UUID) -> str:
     job = session.scalar(select(ProcessingJob).where(ProcessingJob.id == job_id).with_for_update())
     if job is None:
@@ -2709,69 +2771,19 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
         _persist_evidence(session, investigation, retrieved)
         _detect_source_relationships(session, investigation, retrieved)
 
-        claims_needing_widening = _claims_needing_independent_sources(session, investigation) - fast_path_indices
-        if not claims_needing_widening:
-            _mark_routes_not_needed(
-                session,
-                investigation,
-                source_lanes={"REFERENCE_REPORTING", "FACT_CHECK"},
-            )
-        if claims_needing_widening:
-            _plan_widened_queries(
-                session,
-                investigation,
-                source_lane="REFERENCE_REPORTING",
-                claim_indices=claims_needing_widening,
-            )
-            _execute_searches(
-                session,
-                investigation,
-                source_lanes={"REFERENCE_REPORTING"},
-                claim_indices=claims_needing_widening,
-                case_deadline=case_deadline,
-            )
-            retrieved.update(
-                _retrieve_candidates(
+        for lane in ("REFERENCE_REPORTING", "FACT_CHECK"):
+            needing = _claims_needing_independent_sources(session, investigation) - fast_path_indices
+            if needing:
+                _run_widening_lane(
                     session,
                     investigation,
-                    source_lanes={"REFERENCE_REPORTING"},
+                    lane=lane,
+                    claim_indices=needing,
+                    retrieved=retrieved,
                     case_deadline=case_deadline,
                 )
-            )
-            _persist_evidence(session, investigation, retrieved)
-            _detect_source_relationships(session, investigation, retrieved)
-
-        claims_needing_widening = _claims_needing_independent_sources(session, investigation) - fast_path_indices
-        if claims_needing_widening:
-            _plan_widened_queries(
-                session,
-                investigation,
-                source_lane="FACT_CHECK",
-                claim_indices=claims_needing_widening,
-            )
-            _execute_searches(
-                session,
-                investigation,
-                source_lanes={"FACT_CHECK"},
-                claim_indices=claims_needing_widening,
-                case_deadline=case_deadline,
-            )
-            retrieved.update(
-                _retrieve_candidates(
-                    session,
-                    investigation,
-                    source_lanes={"FACT_CHECK"},
-                    case_deadline=case_deadline,
-                )
-            )
-            _persist_evidence(session, investigation, retrieved)
-            _detect_source_relationships(session, investigation, retrieved)
-        else:
-            _mark_routes_not_needed(
-                session,
-                investigation,
-                source_lanes={"FACT_CHECK"},
-            )
+            else:
+                _mark_routes_not_needed(session, investigation, source_lanes={lane})
 
         _execute_searches(
             session,

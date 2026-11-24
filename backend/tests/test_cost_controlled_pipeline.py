@@ -480,7 +480,7 @@ class CostControlledPipelineTests(unittest.TestCase):
             ),
             patch("app.modules.investigations.orchestrator._persist_settled_reference_evidence"),
             patch(
-                "app.modules.investigations.orchestrator._settled_claim_packet",
+                "app.modules.investigations.orchestrator._settled_claims_packet",
                 return_value=object(),
             ),
             patch(
@@ -498,6 +498,46 @@ class CostControlledPipelineTests(unittest.TestCase):
 
         self.assertEqual(fast_indexes, {0})
         add_limitation.assert_not_called()
+
+    def test_several_settled_claims_share_one_reasoning_call(self) -> None:
+        claims = [
+            SimpleNamespace(
+                id=UUID(int=200 + number),
+                text=text,
+                claim_type="SETTLED_FACT",
+                needs_deep_investigation=False,
+            )
+            for number, text in enumerate(
+                ["Kenya became independent in 1963.", "Nairobi is the capital of Kenya."]
+            )
+        ]
+        self.session.scalars = lambda _statement: claims
+        self.session.scalar = lambda _statement: UUID(int=123)
+
+        with (
+            patch("app.modules.investigations.orchestrator.monotonic", return_value=0.0),
+            patch(
+                "app.modules.investigations.orchestrator.lookup_settled_fact",
+                return_value=SimpleNamespace(),
+            ),
+            patch("app.modules.investigations.orchestrator._persist_settled_reference_evidence"),
+            patch(
+                "app.modules.investigations.orchestrator._settled_claims_packet",
+                return_value="{}",
+            ) as packet,
+            patch("app.modules.investigations.orchestrator.ModelGateway") as gateway,
+            patch("app.modules.investigations.orchestrator._persist_findings"),
+        ):
+            gateway.return_value.reason_about_evidence.return_value = SimpleNamespace(
+                output=SimpleNamespace()
+            )
+            fast_indexes = _run_fast_path_claims(
+                self.session, self.investigation, case_deadline=5.0
+            )
+
+        self.assertEqual(fast_indexes, {0, 1})
+        gateway.return_value.reason_about_evidence.assert_called_once()
+        self.assertEqual(len(packet.call_args.args[1]), 2)
 
     def test_retry_endpoint_queues_once_and_preserves_existing_records(self) -> None:
         self._run_with_patches(self._provider_patches(final_error=True))
