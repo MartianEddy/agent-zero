@@ -57,6 +57,33 @@ exception until their identity/remit is reviewed. Never make a whole host
 automatically decisive. Priority sources for each topic should be curated in
 the registry; independent sources remain necessary for corroboration.
 
+## Policy changes (2026-10-28, verified by unit tests)
+
+- **One official source can settle a statistic.** The one-source exception now covers
+  `STATISTICAL` as well as `SETTLED_FACT`, but only for a registered primary source whose
+  topic and jurisdiction match the claim. A statistic older than the freshness window
+  (one year) cannot settle a current figure alone. `CHECKABLE_EVENT` still needs two
+  independent groups.
+- **An official record can outweigh press reports.** When support and contradiction both
+  exist, a side with a topic-fit official group wins only if the other side has none and
+  the winning side meets its own threshold. A model proposal that disagrees with the
+  dominant side stays unresolved. Confidence is capped below HIGH when any opposing
+  evidence exists.
+- **Fact-checks are leads.** A new `FACT_CHECK` tier (Africa Check, PesaCheck, AFP Fact
+  Check) is context-only and cannot count toward a threshold. Follow it to the records it cites.
+- **Shared ownership is one group.** Different domains owned by one organisation
+  (`ownership_groups` in `evidence_ledger.json`, for example Wikipedia and Wikidata, or the
+  Nation Media Group sites) count once.
+- **Wire credit lines group copies.** "Reuters reports", "(Reuters)", "according to Reuters"
+  and a trailing credit in an excerpt group copied stories. Incidental mentions do not.
+- **Confidence wording.** A decision settled by one official source is MEDIUM ("directly
+  addresses the claim; no independent confirmation"). HIGH still needs two independent
+  official groups and no opposing evidence.
+- **Source list.** The registry now includes IEBC, Judiciary, CBK, Treasury, Controller of
+  Budget, Auditor-General and IMF as official sources, and Reuters, AP, AFP, BBC, Business
+  Daily, The Star, The EastAfrican and KBC as reputable reporting. These additions are
+  pending editorial review.
+
 ## Verdict gates
 
 - `SUPPORTED` / `CONTRADICTED`: at least two independent eligible groups on the
@@ -113,3 +140,12 @@ coverage. The next research-quality phase should add claim components, relation
 provenance, structured temporal applicability, source ownership/copy lineage,
 and a labeled calibration evaluation before any numeric confidence score is
 considered.
+
+## Model-call records and training samples
+
+Every model call records its provider, model, purpose, token counts, latency and a short hash of
+its instructions (`prompt_version`), so a change in behaviour can be tied to a prompt change.
+When `CAPTURE_STAGE_SAMPLES=true`, a redacted copy of each prompt and structured output is also
+stored in `stage_samples` for evaluation and, later, training. Redaction removes emails, phone
+numbers and long identifiers. The setting is off by default. Do not enable it until consent,
+retention and reviewer-identity decisions are recorded in `docs/OPEN-QUESTIONS.md`.
