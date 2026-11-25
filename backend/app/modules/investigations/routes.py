@@ -127,10 +127,21 @@ def triage_submission(body: TriageRequest, session: DbSession) -> dict[str, obje
     except ModelInvocationFailed as exc:
         session.delete(draft)
         session.commit()
-        detail = (
-            "Claim triage is unavailable because OpenAI is not configured. No source check was started."
-            if exc.category.value == "AUTHENTICATION_FAILED"
-            else "Claim triage could not complete with the configured OpenAI provider. No source check was started."
+        detail = {
+            "AUTHENTICATION_FAILED": (
+                "Agent 0 could not sign in to its AI service, so it could not read your claim. "
+                "This is a setup problem on our side. Nothing was started."
+            ),
+            "RATE_LIMITED": "Agent 0 is busy right now. Please try again in a minute. Nothing was started.",
+            "QUOTA_EXHAUSTED": (
+                "Agent 0 has reached its AI usage limit for now. Please try again later. "
+                "Nothing was started."
+            ),
+            "TIMEOUT": "Reading your claim took too long. Please try again. Nothing was started.",
+        }.get(
+            exc.category.value,
+            "Agent 0 could not read your claim right now. Please try again shortly. "
+            "Nothing was started.",
         )
         raise HTTPException(status_code=503, detail=detail) from exc
     from app.modules.investigations.orchestrator import _persist_plan

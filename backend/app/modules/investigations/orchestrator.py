@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.domain.investigation import Channel, InputType, InvestigationStatus, validate_transition
+from app.modules.investigations.bounding import clip_text
 from app.modules.investigations.evidence_ledger import (
     independence_groups as ledger_independence_groups,
 )
@@ -2644,7 +2645,7 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
         )
         model_input = text
         if url_text:
-            bounded_url_text = url_text[: get_settings().max_model_input_chars]
+            bounded_url_text = clip_text(url_text, get_settings().max_model_input_chars - 1_500)
             model_input = _submitted_source_prompt(url_source, bounded_url_text, submitted_url)
         received_at = investigation.created_at
         if received_at.tzinfo is None:

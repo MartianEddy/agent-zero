@@ -6,7 +6,7 @@ import json
 import time
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 MAX_RESPONSE_BYTES = 1_000_000

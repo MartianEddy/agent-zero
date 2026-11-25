@@ -21,6 +21,7 @@ from app.modules.investigations.provider_errors import (
     is_retryable,
     retry_after_seconds,
 )
+from app.modules.investigations.bounding import clip_text, fit_evidence_packet
 from app.modules.investigations.triage import ClaimType
 from app.modules.investigations.usage import (
     ModelCallBudget,
@@ -293,7 +294,7 @@ class ModelGateway:
                 if confirmation_token
                 else ""
             )
-            + f"\nLatest user message:\n{text[: self.settings.max_model_input_chars]}"
+            + f"\nLatest user message:\n{clip_text(text, self.settings.max_model_input_chars)}"
         )
         return await self._structured_call(
             purpose="WHATSAPP_CONVERSATION",
@@ -332,7 +333,7 @@ class ModelGateway:
                 f"{item.get('role', 'user')}: {item.get('content', '')[:1200]}"
                 for item in context[-8:]
             )
-            + f"\nLatest factual question:\n{text[: self.settings.max_model_input_chars]}"
+            + f"\nLatest factual question:\n{clip_text(text, self.settings.max_model_input_chars)}"
         )
         return await self._structured_call(
             purpose="WHATSAPP_QUICK_ANSWER",
@@ -434,7 +435,7 @@ class ModelGateway:
             self._structured_call(
                 purpose="CLAIM_EXTRACTION",
                 instructions=instructions,
-                prompt=text[: self.settings.max_model_input_chars],
+                prompt=clip_text(text, self.settings.max_model_input_chars),
                 images=images,
                 output_type=ResearchPlan,
                 max_tokens=self.settings.max_model_output_tokens_research,
@@ -498,7 +499,9 @@ class ModelGateway:
             self._structured_call(
                 purpose="EVIDENCE_REASONING",
                 instructions=instructions,
-                prompt=evidence_packet[: self.settings.max_total_evidence_chars + 8_000],
+                prompt=fit_evidence_packet(
+                    evidence_packet, self.settings.max_total_evidence_chars + 8_000
+                ),
                 images=[],
                 output_type=EvidenceReasoning,
                 max_tokens=self.settings.max_model_output_tokens_synthesis,
