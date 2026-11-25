@@ -152,7 +152,7 @@ class Source(Base):
     discovery_trace_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("search_traces.id", ondelete="SET NULL"), nullable=True
     )
-    retrieval_status: Mapped[str] = mapped_column(String(20), default="CANDIDATE")
+    retrieval_status: Mapped[str] = mapped_column(String(40), default="CANDIDATE")
     retrieval_provider: Mapped[str | None] = mapped_column(String(40), nullable=True)
     retrieval_failure_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
     content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
