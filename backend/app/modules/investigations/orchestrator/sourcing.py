@@ -13,7 +13,7 @@ from app.modules.investigations.models import (
     utcnow,
 )
 from app.modules.investigations.orchestrator import common, ports
-from app.modules.sources.registry import classify_source
+from app.modules.sources.registry import classify_source, publisher_for_domain
 from app.modules.sources.retrieval import (
     SourceRetrievalError,
 )
@@ -79,7 +79,7 @@ def _create_source_candidate(
         investigation_id=investigation.id,
         url=normalized,
         title=(title or "")[:2000] or None,
-        publisher=(classify_source(domain or "").name if domain else publisher or "")[:255] or None,
+        publisher=(publisher_for_domain(domain) if domain else publisher or "")[:255] or None,
         domain=domain,
         source_type=classify_source(domain or "").source_type,
         published_at=published_at[:80] if published_at else None,

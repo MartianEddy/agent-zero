@@ -197,7 +197,36 @@ REGISTRY: tuple[SourceRegistryEntry, ...] = (
         ("UN membership, decolonization records, and UN proceedings",),
         ("kenya", "independence", "decolonization", "united nations", "member state"),
     ),
+    SourceRegistryEntry(
+        "fifa.com",
+        "FIFA",
+        "OFFICIAL",
+        "International",
+        ("results and records of FIFA competitions",),
+        ("fifa", "world cup", "football", "soccer"),
+    ),
+    SourceRegistryEntry(
+        "cafonline.com",
+        "Confederation of African Football",
+        "OFFICIAL",
+        "International",
+        ("results and records of CAF competitions",),
+        ("caf", "africa cup", "afcon", "football", "soccer"),
+    ),
+    SourceRegistryEntry(
+        "olympics.com",
+        "International Olympic Committee",
+        "OFFICIAL",
+        "International",
+        ("results and records of the Olympic Games",),
+        ("olympic", "olympics", "medal", "games"),
+    ),
 )
+
+# Entries that match a whole public suffix (every *.go.ke site). They describe the kind
+# of site, not who published it, so they must not become a shared publisher name:
+# the evidence ledger treats one publisher name as one source.
+SUFFIX_ENTRIES = frozenset({"go.ke"})
 
 
 def _words(value: str) -> set[str]:
@@ -221,6 +250,14 @@ def classify_source(domain: str) -> SourceRegistryEntry:
         source_type="UNKNOWN",
         jurisdiction=None,
     )
+
+
+def publisher_for_domain(domain: str) -> str:
+    """The publisher name for a site, or the site itself when only a suffix entry matches."""
+    entry = lookup_source(domain)
+    if entry is None or entry.domain in SUFFIX_ENTRIES:
+        return domain.strip().rstrip(".").casefold().removeprefix("www.")
+    return entry.name
 
 
 def role_for_claim(entry: SourceRegistryEntry, claim_text: str, *, submitted: bool = False) -> str:
@@ -247,7 +284,7 @@ def authority_fits_claim(domain: str | None, claim_text: str) -> bool:
     entry = lookup_source(domain)
     if (
         entry is None
-        or entry.domain == "go.ke"
+        or entry.domain in SUFFIX_ENTRIES
         or entry.source_type not in {"OFFICIAL", "PUBLIC_RECORD"}
     ):
         return False
