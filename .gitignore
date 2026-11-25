@@ -19,3 +19,4 @@ backend/.env.*
 backend/.local-storage/
 node_modules/
 .next/
+backups/
