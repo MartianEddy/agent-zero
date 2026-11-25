@@ -363,6 +363,30 @@ class CostControlledPipelineTests(unittest.TestCase):
         self.assertEqual(sum(record.input_tokens or 0 for record in records), 31)
         self.assertEqual(sum(record.output_tokens or 0 for record in records), 8)
 
+    def test_gateway_skips_a_retry_that_cannot_finish_before_the_deadline(self) -> None:
+        class APIConnectionError(Exception):
+            pass
+
+        runner = AsyncMock(side_effect=APIConnectionError("temporary"))
+        client = SimpleNamespace(close=AsyncMock())
+        with (
+            patch(
+                "app.modules.investigations.investigator.get_settings", return_value=self.settings
+            ),
+            patch("app.modules.investigations.usage.get_settings", return_value=self.settings),
+            patch("agents.Runner.run", runner),
+            patch("openai.AsyncOpenAI", return_value=client),
+            patch("app.modules.investigations.investigator.asyncio.sleep", new_callable=AsyncMock),
+            self.assertRaises(ModelInvocationFailed),
+        ):
+            ModelGateway().reason_about_evidence(
+                evidence_packet="{}",
+                session=self.session,
+                investigation_id=self.investigation.id,
+                timeout_seconds=1.0,
+            )
+        self.assertEqual(runner.await_count, 1)
+
     def test_search_query_budget_is_enforced_and_sources_persist_before_reasoning(self) -> None:
         self.settings.max_search_queries = 1
         patches = self._provider_patches(final_error=True, queries=["query one", "query two"])

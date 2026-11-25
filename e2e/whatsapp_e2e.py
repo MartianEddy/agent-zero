@@ -117,6 +117,22 @@ def text(message_id: str, body: str, *, phone: str | None = None, bsuid: str | N
     return message, [contact]
 
 
+def replies() -> list[dict]:
+    """Outbound messages, excluding read receipts and typing indicators."""
+    return [item for item in sent if item["body"].get("status") != "read"]
+
+
+def typing_for(message_id: str) -> bool:
+    return any(item["body"].get("message_id") == message_id and "typing_indicator" in item["body"] for item in sent)
+
+
+def wait_for_replies(count: int, timeout: float = 30) -> list[dict]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and len(replies()) < count:
+        time.sleep(0.1)
+    return replies()
+
+
 def sql(query: str) -> str:
     return subprocess.run(
         ["docker", "exec", "agent-zero-postgres-1", "psql", "-U", "agent_zero", "-d", DB_NAME, "-tAc", query],
@@ -159,41 +175,59 @@ def main() -> int:
         message, contacts = text("wamid.e2e.bad", "help", phone="254700000001")
         check("Unsigned or wrongly signed webhook is rejected", webhook(message, contacts, signature="sha256=" + "0" * 64) == 401)
 
-        before = len(sent)
+        before = len(replies())
         message, contacts = text("wamid.e2e.1", "help", bsuid="KE.E2E111")
+        started = time.monotonic()
         status = webhook(message, contacts)
-        out = sent[before:]
+        ack_seconds = time.monotonic() - started
+        out = wait_for_replies(before + 1)[before:]
+        check("Meta is acknowledged at once (reply follows in the background)", status == 200 and ack_seconds < 2, f"{ack_seconds:.2f}s")
+        check("User sees typing while the reply is prepared", typing_for("wamid.e2e.1"))
         ok = status == 200 and len(out) == 1 and out[0]["body"].get("recipient") == "KE.E2E111" and "to" not in out[0]["body"]
         check("Username user (BSUID only): reply sent with recipient, not to", ok, json.dumps(out[0]["body"] if out else {})[:160])
         check("Reply is plain language and lists the shortcuts", bool(out) and "RESULT" in json.dumps(out[0]["body"]))
         check("Outbound request carries the access token", bool(out) and out[0]["auth"] == "Bearer e2e-access-token")
 
-        before = len(sent)
+        before = len(replies())
         status = webhook(message, contacts)
-        check("Duplicate delivery of the same message is not answered twice", status == 200 and len(sent) == before)
+        time.sleep(2)
+        check("Duplicate delivery of the same message is not answered twice", status == 200 and len(replies()) == before)
 
-        before = len(sent)
+        before = len(replies())
         message, contacts = text("wamid.e2e.2", "help", phone="254700000002")
         webhook(message, contacts)
-        out = sent[before:]
+        out = wait_for_replies(before + 1)[before:]
         check("Phone user: reply sent with to", bool(out) and out[0]["body"].get("to") == "254700000002" and "recipient" not in out[0]["body"])
 
         # Legacy history: a conversation saved under the phone key, then the same person
         # arrives with phone and BSUID. Their conversation should move to the BSUID key.
         message, contacts = text("wamid.e2e.3", "help", phone="254700000003")
+        before = len(replies())
         webhook(message, contacts)
+        wait_for_replies(before + 1)
         legacy_before = sql(f"SELECT count(*) FROM whatsapp_conversations WHERE sender_ref = '{ref('254700000003')}'")
         message, contacts = text("wamid.e2e.4", "history", phone="254700000003", bsuid="KE.E2E333")
+        before = len(replies())
         webhook(message, contacts)
+        wait_for_replies(before + 1)
         moved = sql(f"SELECT count(*) FROM whatsapp_conversations WHERE sender_ref = '{ref('KE.E2E333')}'")
         legacy_after = sql(f"SELECT count(*) FROM whatsapp_conversations WHERE sender_ref = '{ref('254700000003')}'")
         check("Phone-keyed conversation moves to the BSUID key (real PostgreSQL)", (legacy_before, moved, legacy_after) == ("1", "1", "0"), f"{legacy_before}/{moved}/{legacy_after}")
 
-        before = len(sent)
+        before = len(replies())
         message, contacts = text("wamid.e2e.5", "Is Nairobi the capital of Kenya?", bsuid="KE.E2E444")
         status = webhook(message, contacts)
-        out = sent[before:]
-        check("Free text gets a reply even when the AI service fails", status == 200 and len(out) == 1, json.dumps(out[0]["body"])[:160] if out else "no reply")
+        out = wait_for_replies(before + 1, timeout=60)[before:]
+        reply_text = json.dumps(out[0]["body"]) if out else ""
+        check("When the AI fails, a claim still gets a claim preview, not an error",
+              status == 200 and "Is Nairobi the capital of Kenya?" in reply_text and "Submit claim" in reply_text
+              and "trouble" not in reply_text, reply_text[:160] or "no reply")
+
+        before = len(replies())
+        message, contacts = text("wamid.e2e.6", "habari", bsuid="KE.E2E555")
+        webhook(message, contacts)
+        out = wait_for_replies(before + 1, timeout=60)[before:]
+        check("When the AI fails, a greeting gets a greeting", bool(out) and "Hi!" in json.dumps(out[0]["body"]), json.dumps(out[0]["body"])[:120] if out else "no reply")
     finally:
         if api:
             api.terminate()

@@ -2266,3 +2266,111 @@ def test_saved_but_unsent_reply_is_resent_on_retry() -> None:
     assert _claim_inbound_event(
         session, conversation=_conversation_fixture(), event=turn, sender_ref="hmac-sender", now=now
     ) == "Hello"
+
+
+def _timeout_turn(conversation, text):
+    from app.modules.conversations.schemas import ConversationTurn
+    from app.modules.conversations.service import ConversationService
+    from app.modules.investigations.investigator import ModelInvocationFailed
+    from app.modules.investigations.provider_errors import FailureCategory
+
+    session = MagicMock()
+    session.scalar.return_value = conversation
+    session.get.return_value = SimpleNamespace(id=UUID(int=1))
+
+    async def immediate(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    failure = ModelInvocationFailed(provider="openai", model="m", category=FailureCategory.TIMEOUT)
+    with (
+        patch("app.modules.conversations.service.inbound._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service.inbound._complete_inbound_event"),
+        patch("app.modules.conversations.service.identity._notification_preference", return_value=None),
+        patch("app.modules.conversations.service.ports.ModelGateway") as gateway,
+        patch("app.modules.conversations.service.ports.run_in_threadpool", side_effect=immediate),
+    ):
+        gateway.return_value.interpret_whatsapp_turn = AsyncMock(side_effect=failure)
+        send = MagicMock()
+        assert asyncio.run(ConversationService(session, _settings()).handle_turn(
+            ConversationTurn(message_id=f"w.{abs(hash(text))}", sender="254700000000",
+                             message_type="text", text=text), send,
+        ))
+    return send
+
+
+def test_ai_timeout_on_a_claim_still_gives_a_claim_preview_not_an_error() -> None:
+    conversation = _conversation_fixture()
+    send = _timeout_turn(conversation, "Schools in Nairobi will close on Friday")
+    message = send.call_args.args[1]
+    assert "Schools in Nairobi will close on Friday" in message
+    assert "trouble" not in message.casefold() and "took" not in message.casefold()
+    assert conversation.state == "AWAITING_CONFIRMATION"
+    assert send.call_args.args[2][0][1] == "Submit claim"
+
+
+def test_ai_timeout_on_a_greeting_gets_a_greeting() -> None:
+    for greeting in ("hi", "Habari yako", "good morning!"):
+        send = _timeout_turn(_conversation_fixture(), greeting)
+        assert send.call_args.args[1].startswith("Hi! I check claims")
+
+
+def test_ai_timeout_with_a_waiting_preview_offers_it_again() -> None:
+    conversation = _conversation_fixture(
+        state="AWAITING_CONFIRMATION",
+        proposed_claims=[{"text": "A waiting claim.", "claim_type": "CHECKABLE_EVENT"}],
+        confirmation_token="ABCD1234",
+        draft_expires_at=datetime.now(UTC) + timedelta(minutes=20),
+    )
+    send = _timeout_turn(conversation, "what do you think about it")
+    assert "A waiting claim." in send.call_args.args[1]
+    assert send.call_args.args[2][0] == ("SUBMIT ABCD1234", "Submit claim")
+
+
+def test_webhook_acknowledges_meta_and_handles_messages_in_the_background() -> None:
+    from fastapi import BackgroundTasks
+
+    payload = {"object": "whatsapp_business_account", "entry": [{"changes": [{"field": "messages", "value": {
+        "metadata": {"phone_number_id": "12345"},
+        "messages": [{"id": "wamid.bg", "from": "254700000000", "type": "text", "text": {"body": "hi"}}],
+    }}]}]}
+    raw_body = json.dumps(payload).encode()
+    signature = "sha256=" + hmac.new(b"app-secret", raw_body, hashlib.sha256).hexdigest()
+    tasks = BackgroundTasks()
+    with (
+        patch("app.modules.channels.whatsapp.get_settings", return_value=_settings()),
+        patch("app.modules.channels.whatsapp._handle_message") as handle,
+    ):
+        result = asyncio.run(receive_webhook(_request_with_body(raw_body), MagicMock(), signature, tasks))
+    assert result == {"status": "ok"}
+    handle.assert_not_called()
+    assert len(tasks.tasks) == 1
+
+
+def test_background_worker_shows_typing_and_retries_a_failed_send() -> None:
+    from app.modules.channels import whatsapp
+
+    event = IncomingWhatsAppMessage(
+        message_id="wamid.bg2", sender="254700000000", phone_number_id="12345",
+        message_type="text", text="hi",
+    )
+    attempts = []
+
+    async def fake_handle(session, incoming, settings, send_message=None):
+        send_message(incoming.sender, "Hello")
+        return True
+
+    def flaky_send(recipient, body, buttons=None):
+        attempts.append(body)
+        if len(attempts) == 1:
+            raise whatsapp.WhatsAppSendError("temporary")
+
+    with (
+        patch.object(whatsapp, "send_typing_indicator") as typing,
+        patch.object(whatsapp, "_handle_message", side_effect=fake_handle),
+        patch.object(whatsapp, "_send_whatsapp_reply", side_effect=flaky_send),
+        patch.object(whatsapp, "SessionLocal", MagicMock()),
+        patch.object(whatsapp.time, "sleep"),
+    ):
+        whatsapp._process_events_in_background([event], _settings())
+    typing.assert_called_once_with("wamid.bg2")
+    assert attempts == ["Hello", "Hello"]

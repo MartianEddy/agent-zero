@@ -103,3 +103,12 @@ _STRICT_CONFIRMATIONS = frozenset(
         "anza",
     }
 )
+
+
+# Time budget for one WhatsApp turn. Turns run after Meta is acknowledged, so they are not
+# limited by the 18-second proxy; the user sees "typing..." meanwhile.
+TURN_BUDGET_SECONDS = 50.0
+CLASSIFY_BUDGET_SECONDS = 25.0
+ANSWER_BUDGET_SECONDS = 25.0
+# A sourced quick answer is only started if at least this much time is left.
+MIN_ANSWER_SECONDS = 6.0

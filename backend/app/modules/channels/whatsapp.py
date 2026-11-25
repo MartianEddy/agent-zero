@@ -7,22 +7,24 @@ not implement a second research or assessment pipeline.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from fastapi import Request as FastAPIRequest
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.modules.conversations.schemas import ConversationTurn
 from app.modules.conversations.service import (
     ConversationService,
@@ -575,6 +577,26 @@ def _send_cloud_message(recipient: str, payload: dict) -> None:
         payload["recipient"] = recipient
     else:
         payload["to"] = recipient
+    _post_cloud_payload(settings, payload)
+
+
+def send_typing_indicator(message_id: str) -> None:
+    """Mark the user's message as read and show "typing..." while we prepare the reply.
+
+    Meta shows the indicator for up to 25 seconds or until our reply arrives.
+    """
+    _post_cloud_payload(
+        _configured_settings(),
+        {
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": message_id,
+            "typing_indicator": {"type": "text"},
+        },
+    )
+
+
+def _post_cloud_payload(settings, payload: dict) -> None:
     phone_number_id = settings.whatsapp_phone_number_id
     endpoint = (
         f"{getattr(settings, 'whatsapp_graph_base_url', 'https://graph.facebook.com').rstrip('/')}/"
@@ -631,7 +653,10 @@ def _send_whatsapp_reply(
 
 
 async def _handle_message(
-    session: Session, event: IncomingWhatsAppMessage, settings
+    session: Session,
+    event: IncomingWhatsAppMessage,
+    settings,
+    send_message=None,
 ) -> bool:
     """Normalize one authenticated Meta event and delegate conversation behavior."""
     if event.phone_number_id != settings.whatsapp_phone_number_id:
@@ -644,7 +669,56 @@ async def _handle_message(
         text=event.text,
         user_id=event.user_id,
     )
-    return await ConversationService(session, settings).handle_turn(turn, _send_whatsapp_reply)
+    return await ConversationService(session, settings).handle_turn(
+        turn, send_message or _send_whatsapp_reply
+    )
+
+
+SEND_RETRY_DELAYS_SECONDS = (1.0, 3.0)
+
+
+def _send_with_retries(
+    recipient: str, body: str, buttons: list[tuple[str, str]] | None = None
+) -> None:
+    """Send a reply, retrying briefly. Meta has already been acknowledged, so it won't retry."""
+    for delay in (*SEND_RETRY_DELAYS_SECONDS, None):
+        try:
+            _send_whatsapp_reply(recipient, body, buttons)
+            return
+        except WhatsAppSendError:
+            if delay is None:
+                raise
+            time.sleep(delay)
+
+
+def _process_events_in_background(events: list[IncomingWhatsAppMessage], settings) -> None:
+    """Handle messages after Meta has been acknowledged, so slow AI calls never time out.
+
+    Runs in a worker thread with its own event loop and database session, so one user's
+    blocking database lock cannot stall the server's main event loop.
+    """
+    for event in events:
+        if event.message_type in {"text", "interactive"}:
+            try:
+                send_typing_indicator(event.message_id)
+            except Exception:  # noqa: BLE001 - the indicator is optional
+                logger.info("WhatsApp typing indicator could not be sent")
+        with SessionLocal() as session:
+            try:
+                asyncio.run(
+                    _handle_message(session, event, settings, send_message=_send_with_retries)
+                )
+            except ConversationTurnInProgress:
+                logger.info("WhatsApp duplicate delivery ignored while the first is in progress")
+            except WhatsAppSendError as exc:
+                sender_ref = _sender_reference(
+                    event.sender, settings.whatsapp_identity_key.get_secret_value()
+                )
+                logger.warning(
+                    "WhatsApp outbound reply failed sender_ref=%s: %s", sender_ref, exc
+                )
+            except Exception:
+                logger.exception("WhatsApp background message processing failed")
 
 
 @router.get("/webhook", response_class=PlainTextResponse)
@@ -673,6 +747,7 @@ async def receive_webhook(
     request: FastAPIRequest,
     session: Session = Depends(get_db),  # noqa: B008
     signature: str | None = Header(default=None, alias="X-Hub-Signature-256"),
+    background_tasks: BackgroundTasks = None,  # type: ignore[assignment]
 ) -> dict[str, str]:
     try:
         settings = _configured_settings()
@@ -725,6 +800,12 @@ async def receive_webhook(
         )
     if len(events) == MAX_MESSAGES_PER_WEBHOOK:
         raise HTTPException(status_code=413, detail="Too many messages in one webhook")
+    if events and background_tasks is not None:
+        # Acknowledge Meta now and reply when ready. The reply is no longer limited by
+        # the 18-second proxy timeout, so a slow AI call is not a failure.
+        background_tasks.add_task(_process_events_in_background, list(events), settings)
+        logger.info("WhatsApp webhook messages queued=%d", len(events))
+        return {"status": "ok"}
     handled_messages = 0
     for event in events:
         try:

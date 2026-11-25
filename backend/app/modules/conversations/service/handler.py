@@ -176,6 +176,8 @@ async def _handle_turn(session: Session, event: ConversationTurn, settings, send
             }
         )
     gateway = ports.ModelGateway()
+    # One time budget for the whole turn (see common.TURN_BUDGET_SECONDS).
+    turn_deadline = ports.monotonic() + common.TURN_BUDGET_SECONDS
     try:
         model_run = await gateway.interpret_whatsapp_turn(
             text=command,
@@ -185,20 +187,40 @@ async def _handle_turn(session: Session, event: ConversationTurn, settings, send
             confirmation_token=conversation.confirmation_token if pending else None,
             session=session,
             conversation_id=conversation.id,
+            timeout_seconds=min(common.CLASSIFY_BUDGET_SECONDS, turn_deadline - ports.monotonic()),
         )
         factual_run = None
-        if model_run.output.intent == "FACTUAL_ANSWER_REQUEST":
+        answer_seconds = turn_deadline - ports.monotonic()
+        if (
+            model_run.output.intent == "FACTUAL_ANSWER_REQUEST"
+            and answer_seconds >= common.MIN_ANSWER_SECONDS
+        ):
             factual_run = await gateway.answer_whatsapp_factual_question(
                 text=command,
                 context=context,
                 session=session,
                 conversation_id=conversation.id,
+                timeout_seconds=min(answer_seconds, common.ANSWER_BUDGET_SECONDS),
             )
     except (ModelInvocationFailed, ModelCallBudgetExceeded) as exc:
         common.logger.warning(
-            "WhatsApp conversational model unavailable category=%s", type(exc).__name__
+            "WhatsApp conversational model unavailable category=%s detail=%s",
+            type(exc).__name__,
+            getattr(getattr(exc, "category", None), "value", "budget"),
         )
-        reply = case_replies._model_unavailable_reply(exc)
+        buttons = None
+        if isinstance(exc, ModelCallBudgetExceeded):
+            reply = case_replies._model_unavailable_reply(exc)
+        else:
+            reply, buttons = drafts._reply_without_model(
+                session,
+                conversation=conversation,
+                settings=settings,
+                sender_ref=sender_ref,
+                command=command,
+                pending=pending,
+                now=now,
+            )
         await inbound._send_saved_reply(
             session,
             conversation=conversation,
@@ -206,6 +228,7 @@ async def _handle_turn(session: Session, event: ConversationTurn, settings, send
             send_message=send_message,
             user_text=event.text,
             reply=reply,
+            buttons=buttons,
         )
         return True
 

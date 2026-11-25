@@ -5,7 +5,8 @@ from __future__ import annotations
 import hmac
 import re
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -354,3 +355,71 @@ def _offer_check_as_written(conversation: WhatsAppConversation, question: str) -
         "wrote it. Or reply *CANCEL*. Nothing has started yet."
     )
     return reply, [("CHECK AS IS", "Check as written")]
+
+
+_GREETING = re.compile(
+    r"^(hi|hey|hello|hallo|good (morning|afternoon|evening)|habari|mambo|niaje|sasa|"
+    r"vipi|salamu|jambo|hujambo)\b[\s!.,?]*\w{0,12}[\s!.,?]*$",
+    re.IGNORECASE,
+)
+
+
+def _reply_without_model(
+    session: Session,
+    *,
+    conversation: WhatsAppConversation,
+    settings,
+    sender_ref: str,
+    command: str,
+    pending: bool,
+    now: datetime,
+) -> tuple[str, list[tuple[str, str]] | None]:
+    """A useful reply built from the user's own words when the AI does not answer in time.
+
+    The user never sees an error: a waiting preview is offered again, a greeting gets a
+    greeting, and anything that reads like a claim or question becomes a claim preview.
+    """
+    if (
+        pending
+        and conversation.state == "AWAITING_CONFIRMATION"
+        and conversation.confirmation_token
+    ):
+        token = conversation.confirmation_token
+        claims = "\n".join(f"- {item['text']}" for item in conversation.proposed_claims or [])
+        return (
+            f"Your claim is ready to check:\n\n{claims}\n\n"
+            "Reply *YES* to start, *EDIT* to change it, or *CANCEL*.",
+            [
+                (f"SUBMIT {token}", "Submit claim"),
+                (f"EDIT {token}", "Edit claim"),
+                (f"CANCEL {token}", "Cancel"),
+            ],
+        )
+    text = " ".join(command.split())
+    if _GREETING.match(text):
+        return (
+            "Hi! I check claims against public sources. Send me a claim, a link, or a "
+            "question you want checked, and I’ll show you what I’ll check before I start.",
+            None,
+        )
+    if len(text.split()) >= 4:
+        parsed = urlsplit(text)
+        conversation.draft_text = text
+        conversation.draft_input_type = (
+            InputType.URL.value if parsed.scheme in {"http", "https"} else InputType.TEXT.value
+        )
+        conversation.preview_version += 1
+        conversation.draft_expires_at = now + timedelta(minutes=30)
+        return _prepare_preview(
+            session,
+            conversation=conversation,
+            settings=settings,
+            sender_ref=sender_ref,
+            claims=[{"text": text[:600], "claim_type": "CHECKABLE_EVENT"}],
+            queries=[],
+        )
+    return (
+        "What would you like me to check? Send the claim, a link, or the message you "
+        "received, and I’ll take it from there.",
+        None,
+    )
