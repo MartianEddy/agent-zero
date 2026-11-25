@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { backendUrl } from "@/lib/backend-url";
+import { backendFetch } from "@/lib/backend-fetch";
 
 export async function POST(request: NextRequest) {
   try {
-    const response = await fetch(`${backendUrl}/api/v1/investigations/triage`, {
+    const response = await backendFetch(`/api/v1/investigations/triage`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: await request.text(),

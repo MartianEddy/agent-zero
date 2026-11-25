@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { backendUrl } from "@/lib/backend-url";
+import { backendFetch } from "@/lib/backend-fetch";
 
 export async function GET(request: NextRequest) {
   const reference = request.nextUrl.searchParams.get("reference")?.trim().toUpperCase();
@@ -10,8 +10,8 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const response = await fetch(
-      `${backendUrl}/api/v1/investigations/reference/${encodeURIComponent(reference)}`,
+    const response = await backendFetch(
+      `/api/v1/investigations/reference/${encodeURIComponent(reference)}`,
       { cache: "no-store" },
     );
     return new NextResponse(response.body, {

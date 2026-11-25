@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { backendUrl } from "@/lib/backend-url";
+import { backendFetch } from "@/lib/backend-fetch";
 
 export async function GET() {
   try {
-    const response = await fetch(`${backendUrl}/api/v1/investigations/history`, { cache: "no-store" });
+    const response = await backendFetch(`/api/v1/investigations/history`, { cache: "no-store" });
     return new NextResponse(response.body, {
       status: response.status,
       headers: { "content-type": response.headers.get("content-type") ?? "application/json" },

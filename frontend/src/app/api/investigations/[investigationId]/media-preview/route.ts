@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { backendUrl } from "@/lib/backend-url";
+import { backendFetch } from "@/lib/backend-fetch";
 
 export async function GET(
   _request: Request,
@@ -7,8 +7,8 @@ export async function GET(
 ) {
   const { investigationId } = await params;
   try {
-    const response = await fetch(
-      `${backendUrl}/api/v1/investigations/${encodeURIComponent(investigationId)}/media-preview`,
+    const response = await backendFetch(
+      `/api/v1/investigations/${encodeURIComponent(investigationId)}/media-preview`,
       { cache: "no-store" },
     );
     return new NextResponse(response.body, {

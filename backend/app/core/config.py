@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     # Only changed for end-to-end tests that point at a local fake of the Graph API.
     whatsapp_graph_base_url: str = "https://graph.facebook.com"
     whatsapp_support_url: AnyHttpUrl | None = None
+    # When set, the investigations API only answers the web server (which sends this
+    # secret) and scopes cases to the browser identifier it forwards.
+    web_proxy_secret: SecretStr | None = None
+    # Key that turns a browser identifier into a case owner. Rotating it hides
+    # existing web cases from their browsers.
+    web_client_identity_key: SecretStr | None = None
     whatsapp_conversation_enabled: bool = False
     # Who Agent Zero says built it.
     agent_zero_builder: str = "Sinaps Technology"

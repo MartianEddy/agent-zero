@@ -1,6 +1,9 @@
 import hashlib
+import hmac
 import json
+import re
 import uuid
+from contextvars import ContextVar
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -11,6 +14,7 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
+    Request,
     Response,
     UploadFile,
     status,
@@ -62,11 +66,53 @@ from app.modules.investigations.triage import normalize_claim_text
 from app.modules.sources.registry import classify_source
 from app.storage.s3 import delete_private_object, get_private_object, put_private_object
 
-router = APIRouter(prefix="/investigations", tags=["investigations"])
+_web_owner: ContextVar[UUID | None] = ContextVar("web_owner", default=None)
+_CLIENT_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,128}")
+
+
+def web_owner_for(client_token: str, key: str) -> UUID:
+    """A stable owner for one browser; never equal to the WhatsApp or local owner."""
+    digest = hmac.new(key.encode(), f"web:{client_token}".encode(), hashlib.sha256).digest()
+    return uuid.UUID(bytes=digest[:16], version=4)
+
+
+async def bind_web_client(request: Request) -> None:
+    """Accept only the web server, and scope cases to the browser it forwards.
+
+    Async on purpose: it runs in the request's own context, so the owner it sets is
+    visible to the sync route that FastAPI then runs in a worker thread.
+    """
+    settings = get_settings()
+    secret = settings.web_proxy_secret.get_secret_value() if settings.web_proxy_secret else ""
+    if not secret:
+        _web_owner.set(None)
+        return
+    presented = request.headers.get("x-agent-zero-proxy", "")
+    if not hmac.compare_digest(presented.encode(), secret.encode()):
+        raise HTTPException(status_code=401, detail="Not authorised")
+    token = request.headers.get("x-agent-zero-client", "")
+    if not _CLIENT_TOKEN.fullmatch(token):
+        raise HTTPException(status_code=401, detail="Not authorised")
+    key = (
+        settings.web_client_identity_key.get_secret_value()
+        if settings.web_client_identity_key
+        else secret
+    )
+    _web_owner.set(web_owner_for(token, key))
+
+
+router = APIRouter(
+    prefix="/investigations",
+    tags=["investigations"],
+    dependencies=[Depends(bind_web_client)],
+)
 DbSession = Annotated[Session, Depends(get_db)]
 
 
 def current_owner_id() -> UUID:
+    web_owner = _web_owner.get()
+    if web_owner is not None:
+        return web_owner
     settings = get_settings()
     if settings.app_env not in {"development", "test"} or settings.auth_mode != "disabled":
         raise HTTPException(status_code=503, detail="Authentication adapter is not configured")

@@ -21,6 +21,9 @@ services:
           property: hostport
       - key: NEXT_TELEMETRY_DISABLED
         value: "1"
+      # Must equal WEB_PROXY_SECRET on the API; the API refuses requests without it.
+      - key: AGENT_ZERO_PROXY_SECRET
+        sync: false
 
   - type: web
     name: agent-zero-api
@@ -87,6 +90,11 @@ services:
       - key: WHATSAPP_CONVERSATION_ENABLED
         sync: false
       - key: WHATSAPP_SUPPORT_URL
+        sync: false
+      # Investigations API: answer only the web server, and scope cases per browser.
+      - key: WEB_PROXY_SECRET
+        sync: false
+      - key: WEB_CLIENT_IDENTITY_KEY
         sync: false
 
   - type: worker

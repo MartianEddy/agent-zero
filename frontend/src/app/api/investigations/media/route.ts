@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { backendUrl } from "@/lib/backend-url";
+import { backendFetch } from "@/lib/backend-fetch";
 
 export async function POST(request: NextRequest) {
   try {
@@ -7,7 +7,7 @@ export async function POST(request: NextRequest) {
     const headers = new Headers();
     const idempotencyKey = request.headers.get("idempotency-key");
     if (idempotencyKey) headers.set("idempotency-key", idempotencyKey);
-    const response = await fetch(`${backendUrl}/api/v1/investigations/media`, {
+    const response = await backendFetch(`/api/v1/investigations/media`, {
       method: "POST",
       headers,
       body: form,
