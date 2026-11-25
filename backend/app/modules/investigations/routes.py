@@ -44,6 +44,7 @@ from app.modules.investigations.models import (
     Submission,
     VerificationBrief,
 )
+from app.modules.investigations.references import parse_reference
 from app.modules.investigations.schemas import (
     ContinueInvestigationRequest,
     CreateInvestigationRequest,
@@ -315,9 +316,12 @@ def list_investigation_history(session: DbSession) -> list[InvestigationHistoryR
 
 @router.get("/reference/{reference}", response_model=InvestigationResponse)
 def get_investigation_by_reference(reference: str, session: DbSession) -> InvestigationResponse:
+    stored = parse_reference(reference)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="Investigation not found")
     investigation = session.scalar(
         select(Investigation).where(
-            Investigation.reference == reference.strip().upper(),
+            Investigation.reference == stored,
             Investigation.owner_id == current_owner_id(),
         )
     )

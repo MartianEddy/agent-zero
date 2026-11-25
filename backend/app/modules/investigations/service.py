@@ -1,4 +1,3 @@
-from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -16,6 +15,7 @@ from app.modules.investigations.models import (
     User,
 )
 from app.modules.investigations.provider_errors import FailureCategory, is_retryable
+from app.modules.investigations.references import new_reference
 
 
 def is_retryable_failure_code(error_code: str | None) -> bool:
@@ -123,7 +123,12 @@ class InvestigationService:
             self.session.add(User(id=owner_id, external_subject=f"local:{owner_id}"))
             self.session.flush()
         investigation_id = uuid4()
-        reference = f"AZ-{datetime.now(UTC):%y%m%d}-{investigation_id.hex[:6].upper()}"
+        reference = new_reference(
+            lambda candidate: self.session.scalar(
+                select(Investigation.id).where(Investigation.reference == candidate)
+            )
+            is not None
+        )
         investigation = Investigation(
             id=investigation_id,
             reference=reference,

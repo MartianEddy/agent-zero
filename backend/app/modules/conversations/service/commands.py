@@ -18,6 +18,7 @@ from app.modules.conversations.models import (
 )
 from app.modules.conversations.schemas import ConversationTurn
 from app.modules.conversations.service import case_replies, common, drafts, identity, inbound
+from app.modules.investigations.references import parse_reference
 
 
 @dataclass
@@ -154,11 +155,14 @@ async def handle_command(turn: Turn) -> bool:
         return True
     if folded == "retry" or folded == "try again" or folded.startswith("retry "):
         reference = command[5:].strip() if folded.startswith("retry ") else None
-        if reference and not re.fullmatch(r"AZ-[0-9]{6}-[A-F0-9]{6}", reference, re.IGNORECASE):
+        if reference and parse_reference(reference) is None:
             reply = "To retry, reply *RETRY* or *RETRY* followed by the reference."
         else:
             reply = case_replies._retry_message(
-                session, settings=settings, sender_ref=sender_ref, reference=reference
+                session,
+                settings=settings,
+                sender_ref=sender_ref,
+                reference=parse_reference(reference),
             )
         await inbound._send_saved_reply(
             session,
@@ -171,14 +175,14 @@ async def handle_command(turn: Turn) -> bool:
         return True
     if folded in {"result", "results"} or folded.startswith(("result ", "results ")):
         reference = re.sub(r"^results?\s*", "", command, flags=re.IGNORECASE).strip() or None
-        if reference and not re.fullmatch(r"AZ-[0-9]{6}-[A-F0-9]{6}", reference, re.IGNORECASE):
+        if reference and parse_reference(reference) is None:
             reply = "To see a result, reply *RESULT* or *RESULT* followed by the reference."
         else:
             reply = case_replies._result_message(
                 session,
                 settings=settings,
                 sender_ref=sender_ref,
-                reference=reference,
+                reference=parse_reference(reference),
                 conversation_id=conversation.id,
             )
         await inbound._send_saved_reply(
@@ -192,11 +196,14 @@ async def handle_command(turn: Turn) -> bool:
         return True
     if folded == "status" or folded.startswith("status "):
         reference = command[6:].strip() or None
-        if reference and not re.fullmatch(r"AZ-[0-9]{6}-[A-F0-9]{6}", reference, re.IGNORECASE):
+        if reference and parse_reference(reference) is None:
             reply = "To check progress, reply *STATUS* or *STATUS* followed by the reference."
         else:
             reply = case_replies._status_message(
-                session, settings=settings, sender_ref=sender_ref, reference=reference
+                session,
+                settings=settings,
+                sender_ref=sender_ref,
+                reference=parse_reference(reference),
             )
         await inbound._send_saved_reply(
             session,

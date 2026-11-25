@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from app.modules.investigations.references import parse_reference
+
 MAX_MESSAGE = 3900
 
 # Labels match frontend/src/app/investigate/presentation.mjs statusPresentation so the
@@ -100,8 +102,8 @@ def normalize_command_alias(command: str) -> str:
         rest = parts[alias_words:]
         if not rest:
             return english
-        if len(rest) == 1 and rest[0].upper().startswith("AZ-"):
-            return f"{english} {rest[0]}"
+        if len(rest) <= 2 and parse_reference(" ".join(rest)) is not None:
+            return f"{english} {' '.join(rest)}"
     return command
 
 

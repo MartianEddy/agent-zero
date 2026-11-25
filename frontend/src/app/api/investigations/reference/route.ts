@@ -3,8 +3,10 @@ import { backendUrl } from "@/lib/backend-url";
 
 export async function GET(request: NextRequest) {
   const reference = request.nextUrl.searchParams.get("reference")?.trim().toUpperCase();
-  if (!reference || !/^AZ-\d{6}-[A-F0-9]{6}$/.test(reference)) {
-    return NextResponse.json({ detail: "Enter a reference such as AZ-261004-ABC123." }, { status: 400 });
+  // The API normalises spacing, a missing "AZ-" and look-alike letters; this only
+  // rejects input that cannot be a reference.
+  if (!reference || !/^[A-Z0-9][A-Z0-9 _#-]{3,22}[A-Z0-9]$/.test(reference)) {
+    return NextResponse.json({ detail: "Enter a reference such as AZ-7KQ2F." }, { status: 400 });
   }
 
   try {

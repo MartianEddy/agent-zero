@@ -61,7 +61,7 @@ export default function CasesPage() {
             <div className="relative"><Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-faint" aria-hidden /><Input id="case-search" type="search" className="pl-10" placeholder="Search by claim or reference" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
           </div>
           <form onSubmit={openByReference} className="flex items-end gap-2">
-            <div><Label htmlFor="case-reference">Open by reference</Label><Input id="case-reference" className="w-52 font-mono uppercase" placeholder="AZ-261004-ABC123" value={reference} onChange={(event) => setReference(event.target.value.toUpperCase())} autoComplete="off" required /></div>
+            <div><Label htmlFor="case-reference">Open by reference</Label><Input id="case-reference" className="w-40 font-mono uppercase" placeholder="AZ-7KQ2F" value={reference} onChange={(event) => setReference(event.target.value.toUpperCase())} autoComplete="off" required /></div>
             <Button type="submit" variant="outline" disabled={lookupBusy}>{lookupBusy ? <LoaderCircle className="animate-spin" /> : null}Open</Button>
           </form>
         </div>
