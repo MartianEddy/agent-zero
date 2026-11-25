@@ -90,12 +90,12 @@ def test_share_card_is_self_contained_and_has_no_commands():
         [("Kenya won the 2022 FIFA World Cup.", "CONTRADICTED", "FIFA records show Argentina won.")],
         source_names=["FIFA", "Wikipedia"],
         reference="AZ-7KQ2F",
-        whatsapp_number="+254 750 288 942",
+        whatsapp_number="+254 794 954839",
         site_url="https://agent-zero-web.onrender.com/",
     )
     assert card.startswith("*Agent Zero fact-check*")
     assert "Evidence challenges this claim" in card and "Argentina" in card
-    assert "https://wa.me/254750288942" in card
+    assert "https://wa.me/254794954839" in card
     assert "https://agent-zero-web.onrender.com" in card and card.endswith("Ref: AZ-7KQ2F")
     for command in ("RESULT", "HELP", "STATUS", "Tap"):
         assert command not in card
