@@ -234,3 +234,44 @@ class SettledReferenceTests(unittest.TestCase):
         self.assertEqual(
             assess_verdict("SETTLED_FACT", "SUPPORTED", evidence).verdict, "INSUFFICIENT_EVIDENCE"
         )
+
+
+class RebuttalAndCitationTests(unittest.TestCase):
+    """Production case "Mombasa is the capital city of Kenya." (November 2026)."""
+
+    claim = "Mombasa is the capital city of Kenya."
+
+    def test_recognised_rebuttal_may_name_the_true_answer(self) -> None:
+        from app.modules.investigations.orchestrator.findings_stage import _passage_addresses_claim
+
+        passage = "Most Kenyans live in the highlands, where Nairobi, the capital, sits."
+        self.assertFalse(_passage_addresses_claim(self.claim, passage))
+        self.assertTrue(_passage_addresses_claim(self.claim, passage, rebuttal=True))
+        self.assertFalse(_passage_addresses_claim(
+            self.claim, "Woman found slain in home.", rebuttal=True
+        ))
+
+    def _signals(self):
+        return [
+            EvidenceSignal("eac", "CONTRADICTS", "PRIMARY", "eac.go.ke"),
+            EvidenceSignal("visit", "CONTRADICTS", "UNKNOWN", "visitkenya.com"),
+        ]
+
+    def test_uncited_passages_count_when_the_decision_is_cited(self) -> None:
+        from app.modules.investigations.orchestrator.findings_stage import _judge
+
+        result, counted = _judge(
+            "SETTLED_FACT", "CONTRADICTED", self._signals(), {"visit"}, claim_text=self.claim
+        )
+        self.assertEqual((result.verdict, result.confidence), ("CONTRADICTED", "MEDIUM"))
+        self.assertEqual(len(counted), 2)
+
+    def test_verdict_the_explanation_does_not_cite_falls_back_to_cited_passages(self) -> None:
+        from app.modules.investigations.orchestrator.findings_stage import _judge
+
+        signals = self._signals() + [EvidenceSignal("s", "SUPPORTS", "PRIMARY", "other.go.ke")]
+        result, counted = _judge(
+            "SETTLED_FACT", "CONTRADICTED", signals, {"s"}, claim_text=self.claim
+        )
+        self.assertEqual(result.verdict, "INSUFFICIENT_EVIDENCE")
+        self.assertEqual([item.evidence_id for item in counted], ["s"])

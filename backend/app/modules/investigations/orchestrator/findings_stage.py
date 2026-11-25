@@ -27,6 +27,7 @@ from app.modules.investigations.orchestrator import common
 from app.modules.investigations.summary import finding_result_summary
 from app.modules.investigations.verdict_policy import (
     EvidenceSignal,
+    VerdictAssessment,
     assess_verdict,
     build_independence_groups,
 )
@@ -149,12 +150,16 @@ def _persist_findings(
                 continue
             if relationship not in {"SUPPORTS", "CONTRADICTS"}:
                 continue
-            if not _passage_addresses_claim(claim.text, evidence.content):
+            tier = source_tier_for_domain(source.domain)
+            if not _passage_addresses_claim(
+                claim.text,
+                evidence.content,
+                rebuttal=relationship == "CONTRADICTS" and tier in RECOGNISED_TIERS,
+            ):
                 # The model labelled a passage that does not mention the claim's subject
                 # (for example a page's sidebar headline). Keep it as context only.
                 off_topic += 1
                 continue
-            tier = source_tier_for_domain(source.domain)
             group_id = evidence.independence_group_id
             if not group_id or group_id == "unknown":
                 group_id = independence_groups.get(str(source.id), "")
@@ -206,11 +211,11 @@ def _persist_findings(
             for sentence in checked_sentences
             for evidence_id in sentence["evidence_ids"]
         }
-        citation_signals = [signal for signal in signals if signal.evidence_id in cited_ids]
         if candidate is not None:
-            assessment = assess_verdict(
-                claim.claim_type, candidate.status, citation_signals, claim_text=claim.text
+            assessment, signals = _judge(
+                claim.claim_type, candidate.status, signals, cited_ids, claim_text=claim.text
             )
+        citation_signals = signals
         status = assessment.verdict
         support_group_count = len(
             {item.independence_group_id for item in citation_signals if item.stance == "SUPPORTS"}
@@ -341,6 +346,33 @@ def _persist_findings(
         )
     session.commit()
     common._audit(session, investigation.id, "FINDINGS_CREATED", {"count": len(claims)})
+
+
+def _judge(
+    claim_type: str,
+    proposal: str,
+    signals: list[EvidenceSignal],
+    cited_ids: set[str],
+    *,
+    claim_text: str,
+) -> tuple[VerdictAssessment, list[EvidenceSignal]]:
+    """Apply the verdict policy to a model proposal; return the verdict and counted signals.
+
+    Every validated, on-topic passage the model labelled counts toward the threshold, but
+    the explanation must cite at least one passage on the side that decides the verdict.
+    Otherwise only the passages the explanation cites are judged.
+    """
+    assessment = assess_verdict(claim_type, proposal, signals, claim_text=claim_text)
+    decided_stance = {"SUPPORTED": "SUPPORTS", "CONTRADICTED": "CONTRADICTS"}.get(
+        assessment.verdict
+    )
+    if assessment.verdict == "PARTLY_TRUE" or any(
+        signal.evidence_id in cited_ids and signal.stance == decided_stance
+        for signal in signals
+    ):
+        return assessment, signals
+    cited = [signal for signal in signals if signal.evidence_id in cited_ids]
+    return assess_verdict(claim_type, proposal, cited, claim_text=claim_text), cited
 
 
 def _record_deterministic_finding(
@@ -484,11 +516,17 @@ _GENERIC = {
 }
 
 
-def _passage_addresses_claim(claim_text: str, passage: str) -> bool:
+# Tiers whose rebuttals may name the true answer instead of the claim's subject.
+RECOGNISED_TIERS = frozenset({"PRIMARY", "AUTHORITATIVE_REFERENCE", "REPUTABLE_REPORTING"})
+
+
+def _passage_addresses_claim(claim_text: str, passage: str, *, rebuttal: bool = False) -> bool:
     """Whether a passage shares enough distinctive terms with the claim to judge it.
 
     A cheap, deterministic check on the model's stance label: at least two of the claim's
     distinctive terms (one, if the claim only has one or two) must appear in the passage.
+    A rebuttal from a recognised source needs one: "Nairobi, the capital" rebuts
+    "Mombasa is the capital city" without naming Mombasa.
     """
     from app.modules.investigations.orchestrator.search_stage import _relevance_terms
 
@@ -498,7 +536,7 @@ def _passage_addresses_claim(claim_text: str, passage: str) -> bool:
     passage_terms = _relevance_terms(passage)
     stems = {term[:6] for term in passage_terms}
     shared = {term for term in claim_terms if term in passage_terms or term[:6] in stems}
-    needed = 1 if len(claim_terms) <= 2 else 2
+    needed = 1 if len(claim_terms) <= 2 or rebuttal else 2
     return len(shared) >= needed
 
 
