@@ -533,7 +533,10 @@ def test_cloud_api_send_accepts_business_scoped_user_id() -> None:
         send_text_message("KE.opaqueABC123", "Received")
 
         request = build_opener.return_value.open.call_args.args[0]
-        assert json.loads(request.data)["to"] == "KE.opaqueABC123"
+        body = json.loads(request.data)
+        # Meta requires BSUIDs in "recipient"; a BSUID in "to" is undeliverable (131026).
+        assert body["recipient"] == "KE.opaqueABC123"
+        assert "to" not in body
 
 
 def test_cloud_api_send_accepts_parent_business_scoped_user_id() -> None:
@@ -557,7 +560,9 @@ def test_cloud_api_send_accepts_parent_business_scoped_user_id() -> None:
         send_text_message("KE.ENT.opaqueABC123", "Received")
 
         request = build_opener.return_value.open.call_args.args[0]
-        assert json.loads(request.data)["to"] == "KE.ENT.opaqueABC123"
+        body = json.loads(request.data)
+        assert body["recipient"] == "KE.ENT.opaqueABC123"
+        assert "to" not in body
 
 
 def test_cloud_api_send_normalizes_plus_prefixed_phone_recipient() -> None:
@@ -1084,7 +1089,7 @@ def test_placeholder_claim_from_luna_is_rejected_before_preview() -> None:
     assert conversation.proposed_claims == []
     assert conversation.confirmation_token is None
     assert "particular date" not in send.call_args.args[1]
-    assert "No investigation has started" in send.call_args.args[1]
+    assert "Nothing has started" in send.call_args.args[1]
 
 
 def test_edit_button_reopens_draft_without_preserving_old_preview() -> None:
@@ -1832,7 +1837,8 @@ def test_cited_quick_answer_uses_search_and_does_not_create_case() -> None:
 def test_quick_answer_without_citations_fails_closed() -> None:
     message = _factual_answer_message("The answer is 42.", ())
     assert "won’t guess" in message
-    assert "No investigation was started" in message
+    assert "won’t guess" in message
+    assert "Reply *CHECK*" in message
 
 
 def test_quick_answer_keeps_long_source_lists_within_whatsapp_limit() -> None:
@@ -2002,3 +2008,216 @@ def test_button_tap_from_an_older_preview_still_cannot_start_a_check() -> None:
     service, send = _run_pending_preview_turn("SUBMIT 00000000", message_type="interactive")
     service.return_value.create.assert_not_called()
     assert "Nothing has started" in send.call_args.args[1]
+
+
+def _send_settings():
+    return SimpleNamespace(
+        whatsapp_access_token=SimpleNamespace(get_secret_value=lambda: "access-token"),
+        whatsapp_app_secret=SimpleNamespace(get_secret_value=lambda: "app-secret"),
+        whatsapp_verify_token=SimpleNamespace(get_secret_value=lambda: "verify-token"),
+        whatsapp_identity_key=SimpleNamespace(get_secret_value=lambda: "i" * 32),
+        whatsapp_phone_number_id="12345",
+        whatsapp_graph_api_version="v25.0",
+    )
+
+
+def _sent_body(send) -> dict:
+    response = type("Response", (), {"status": 200, "read": lambda self, _size: b"{}"})()
+    with (
+        patch("app.modules.channels.whatsapp.get_settings", return_value=_send_settings()),
+        patch("app.modules.channels.whatsapp.build_opener") as build_opener,
+    ):
+        build_opener.return_value.open.return_value.__enter__.return_value = response
+        send()
+        return json.loads(build_opener.return_value.open.call_args.args[0].data)
+
+
+def test_phone_numbers_are_addressed_with_to_and_buttons_with_recipient_for_bsuid() -> None:
+    from app.modules.channels.whatsapp import send_reply_buttons, send_text_message
+
+    phone = _sent_body(lambda: send_text_message("+254700000000", "Hi"))
+    assert phone["to"] == "254700000000" and "recipient" not in phone
+    buttons = _sent_body(
+        lambda: send_reply_buttons("KE.abc123", "Pick one", [("SUBMIT 1", "Submit claim")])
+    )
+    assert buttons["recipient"] == "KE.abc123" and "to" not in buttons
+
+
+def test_username_user_without_phone_is_parsed_with_bsuid_identity_and_reply_address() -> None:
+    from app.modules.channels.whatsapp import parse_message_events
+
+    payload = {"object": "whatsapp_business_account", "entry": [{"changes": [{"field": "messages", "value": {
+        "metadata": {"phone_number_id": "12345", "display_phone_number": "254711000000"},
+        "contacts": [{"profile": {"name": "A", "username": "ann.k"}, "user_id": "KE.111AAA"}],
+        "messages": [{"id": "wamid.1", "from_user_id": "KE.111AAA", "type": "text",
+                      "text": {"body": "Is this true?"}}],
+    }}]}]}
+    [event] = parse_message_events(payload)
+    assert event.sender == "KE.111AAA"
+    assert event.user_id == "KE.111AAA"
+
+
+def test_phone_is_the_reply_address_and_bsuid_the_identity_when_both_are_present() -> None:
+    from app.modules.channels.whatsapp import parse_message_events
+
+    payload = {"object": "whatsapp_business_account", "entry": [{"changes": [{"field": "messages", "value": {
+        "metadata": {"phone_number_id": "12345"},
+        "contacts": [{"wa_id": "254700000000", "user_id": "KE.222BBB"}],
+        "messages": [{"id": "wamid.2", "from": "254700000000", "from_user_id": "KE.222BBB",
+                      "type": "text", "text": {"body": "hello"}}],
+    }}]}]}
+    [event] = parse_message_events(payload)
+    assert event.sender == "254700000000"
+    assert event.user_id == "KE.222BBB"
+
+
+def test_identity_ref_is_stable_when_the_phone_number_disappears() -> None:
+    from app.modules.conversations.service import _identity_refs
+
+    key = "k" * 32
+    with_phone = ConversationTurn(
+        message_id="1", sender="254700000000", message_type="text", text="x", user_id="KE.333"
+    )
+    hidden = ConversationTurn(
+        message_id="2", sender="KE.333", message_type="text", text="x", user_id="KE.333"
+    )
+    ref_a, legacy_a = _identity_refs(with_phone, key)
+    ref_b, legacy_b = _identity_refs(hidden, key)
+    assert ref_a == ref_b
+    assert legacy_a is not None and legacy_b is None
+    phone_only = ConversationTurn(message_id="3", sender="254700000000", message_type="text", text="x")
+    assert _identity_refs(phone_only, key) == (legacy_a, None)
+
+
+def test_failed_status_for_bsuid_send_is_still_diagnosed() -> None:
+    from app.modules.channels.whatsapp import _status_diagnostics
+
+    payload = {"entry": [{"changes": [{"field": "messages", "value": {"statuses": [
+        {"status": "failed", "recipient_user_id": "KE.444", "errors": [{"code": 131026}]}
+    ]}}]}]}
+    [diagnostic] = _status_diagnostics(payload, identity_key="k" * 32)
+    assert diagnostic["state"] == "failed" and diagnostic["error_codes"] == [131026]
+
+
+def _flow_turn(conversation, text, output, *, factual=None, message_type="text"):
+    """Run one turn through the real handler with the model mocked; return (send, gateway)."""
+    from app.modules.conversations.schemas import ConversationTurn
+    from app.modules.conversations.service import ConversationService
+
+    session = MagicMock()
+    session.scalar.return_value = conversation
+    session.get.return_value = SimpleNamespace(id=UUID(int=1))
+
+    async def immediate_in_threadpool(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    with (
+        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service._complete_inbound_event"),
+        patch("app.modules.conversations.service._notification_preference", return_value=None),
+        patch("app.modules.conversations.service.InvestigationService") as service,
+        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch("app.modules.conversations.service.run_in_threadpool", side_effect=immediate_in_threadpool),
+    ):
+        send = MagicMock()
+        gateway.return_value.interpret_whatsapp_turn = AsyncMock(return_value=SimpleNamespace(output=output))
+        gateway.return_value.answer_whatsapp_factual_question = AsyncMock(return_value=factual)
+        assert asyncio.run(ConversationService(session, _settings()).handle_turn(
+            ConversationTurn(message_id=f"wamid.{abs(hash(text))}", sender="254700000000",
+                             message_type=message_type, text=text),
+            send,
+        ))
+    return send, gateway, service
+
+
+def _output(intent, claims=(), question=None):
+    return SimpleNamespace(
+        intent=intent, reply="ok", queries=[], reference=None, clarification_question=question,
+        claims=[SimpleNamespace(text=text, claim_type="CHECKABLE_EVENT") for text in claims],
+    )
+
+
+def test_repeated_clarification_offers_check_as_written_instead_of_looping() -> None:
+    conversation = _conversation_fixture(
+        state="NEEDS_CLARIFICATION",
+        draft_text="the governor thing\nClarification: the one in the news\nClarification: you know",
+        draft_expires_at=datetime.now(UTC) + timedelta(minutes=20),
+    )
+    send, _gateway, _service = _flow_turn(
+        conversation, "it was last week", _output("INVESTIGATION_REQUEST", question="Which governor?")
+    )
+    message, buttons = send.call_args.args[1], send.call_args.args[2]
+    assert "Check as written" in message
+    assert buttons == [("CHECK AS IS", "Check as written")]
+
+
+def test_check_as_written_builds_a_preview_from_the_users_own_words() -> None:
+    conversation = _conversation_fixture(
+        state="NEEDS_CLARIFICATION",
+        draft_text="Governor Sakaja closed Gikomba market\nClarification: in March 2025",
+        draft_expires_at=datetime.now(UTC) + timedelta(minutes=20),
+    )
+    send, gateway, _service = _flow_turn(
+        conversation, "CHECK AS IS", _output("CONVERSATION"), message_type="interactive"
+    )
+    gateway.return_value.interpret_whatsapp_turn.assert_not_called()
+    assert conversation.state == "AWAITING_CONFIRMATION"
+    assert conversation.proposed_claims == [{
+        "text": "Governor Sakaja closed Gikomba market in March 2025",
+        "claim_type": "CHECKABLE_EVENT",
+    }]
+    assert "Nothing has started yet" in send.call_args.args[1]
+
+
+def test_yes_after_a_quick_answer_moves_to_a_claim_preview() -> None:
+    conversation = _conversation_fixture(context_json=[
+        {"role": "user", "content": "Did Kenya ban plastic bags in 2017?"},
+        {"role": "assistant", "content": "Quick answer from a fresh web search (not a full investigation): Yes."},
+    ])
+    send, gateway, _service = _flow_turn(
+        conversation, "yes", _output("INVESTIGATION_REQUEST", claims=["Kenya banned plastic bags in 2017."])
+    )
+    sent_text = gateway.return_value.interpret_whatsapp_turn.call_args.kwargs["text"]
+    assert "Did Kenya ban plastic bags in 2017?" in sent_text
+    assert conversation.state == "AWAITING_CONFIRMATION"
+    assert "Kenya banned plastic bags in 2017." in send.call_args.args[1]
+
+
+def test_question_while_preview_waits_is_answered_and_preview_kept() -> None:
+    conversation = _conversation_fixture(
+        state="AWAITING_CONFIRMATION",
+        proposed_claims=[{"text": "A claim.", "claim_type": "CHECKABLE_EVENT"}],
+        confirmation_token="ABCD1234",
+        draft_expires_at=datetime.now(UTC) + timedelta(minutes=20),
+    )
+    factual = SimpleNamespace(
+        output=SimpleNamespace(answer="Nairobi is the capital."),
+        citations=({"url": "https://example.org/a", "title": "Source"},),
+    )
+    send, _gateway, _service = _flow_turn(
+        conversation, "What is the capital of Kenya?", _output("FACTUAL_ANSWER_REQUEST"), factual=factual
+    )
+    message = send.call_args.args[1]
+    assert "Nairobi is the capital." in message
+    assert "preview is still waiting" in message
+    assert conversation.state == "AWAITING_CONFIRMATION"
+
+
+def test_correction_after_edit_replaces_the_old_claim() -> None:
+    conversation = _conversation_fixture(
+        state="NEEDS_CLARIFICATION",
+        draft_text="Old wrong claim",
+        clarification_question="Send the corrected claim or missing detail.",
+        draft_expires_at=datetime.now(UTC) + timedelta(minutes=20),
+    )
+    _flow_turn(conversation, "The new correct claim about the budget", _output(
+        "INVESTIGATION_REQUEST", claims=["The new correct claim about the budget."]
+    ))
+    assert "Old wrong claim" not in (conversation.draft_text or "")
+
+
+def test_opinion_gets_a_clear_explanation_and_a_way_forward() -> None:
+    conversation = _conversation_fixture()
+    send, _gateway, _service = _flow_turn(conversation, "This budget is bad", _output("INVESTIGATION_REQUEST"))
+    message = send.call_args.args[1]
+    assert "Opinions and predictions" in message and "send just that part" in message

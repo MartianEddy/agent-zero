@@ -119,6 +119,24 @@ def _sender_identifier(message: dict, contacts: object) -> str | None:
     return None
 
 
+def _is_bsuid(value: str) -> bool:
+    return bool(_BSUID_PATTERN.fullmatch(value))
+
+
+def _business_scoped_user_id(message: dict, contacts: object) -> str | None:
+    """Return the user's BSUID, preferring the portfolio-scoped ID over a parent ID."""
+    for key in ("from_user_id", "from_parent_user_id"):
+        value = message.get(key)
+        if isinstance(value, str) and _is_bsuid(value):
+            return value
+    if isinstance(contacts, list) and len(contacts) == 1 and isinstance(contacts[0], dict):
+        for key in ("user_id", "parent_user_id"):
+            value = contacts[0].get(key)
+            if isinstance(value, str) and _is_bsuid(value):
+                return value
+    return None
+
+
 def _sender_fallback_fields(message: dict, contacts: object) -> list[str]:
     """Return only known sender-ID field names for safe rejection diagnostics."""
     fields = [
@@ -141,10 +159,14 @@ def _sender_fallback_fields(message: dict, contacts: object) -> list[str]:
 @dataclass(frozen=True)
 class IncomingWhatsAppMessage:
     message_id: str
+    # Reply address: the phone number when Meta includes it, otherwise the BSUID.
     sender: str
     phone_number_id: str
     message_type: str
     text: str | None
+    # Business-scoped user ID. Present in every webhook since April 2026, even when the
+    # phone number is hidden, so it is the stable identity for a user.
+    user_id: str | None = None
 
 
 class WhatsAppConfigurationError(RuntimeError):
@@ -233,6 +255,7 @@ def _message_event(
             phone_number_id=phone_number_id,
             message_type=message_type,
             text=text,
+            user_id=_business_scoped_user_id(message, contacts),
         ),
         None,
     )
@@ -450,7 +473,7 @@ def _status_diagnostics(payload: object, *, identity_key: str) -> list[dict[str,
                 if not isinstance(status, dict):
                     continue
                 state = status.get("status")
-                recipient = status.get("recipient_id")
+                recipient = status.get("recipient_user_id") or status.get("recipient_id")
                 if not isinstance(state, str) or not isinstance(recipient, str):
                     continue
                 errors = status.get("errors")
@@ -543,7 +566,15 @@ def _send_cloud_message(recipient: str, payload: dict) -> None:
     settings = _configured_settings()
     if _E164_SENDER_PATTERN.fullmatch(recipient):
         recipient = recipient[1:]
-    payload["to"] = recipient
+    # Meta only accepts phone numbers in "to". A business-scoped user ID (a user who has
+    # hidden their number behind a username) must go in "recipient"; putting it in "to"
+    # makes Meta treat it as a phone number and the reply is never delivered.
+    payload.pop("to", None)
+    payload.pop("recipient", None)
+    if _is_bsuid(recipient):
+        payload["recipient"] = recipient
+    else:
+        payload["to"] = recipient
     phone_number_id = settings.whatsapp_phone_number_id
     endpoint = (
         f"https://graph.facebook.com/{settings.whatsapp_graph_api_version}/"
@@ -610,6 +641,7 @@ async def _handle_message(
         sender=event.sender,
         message_type=event.message_type,
         text=event.text,
+        user_id=event.user_id,
     )
     return await ConversationService(session, settings).handle_turn(turn, _send_whatsapp_reply)
 

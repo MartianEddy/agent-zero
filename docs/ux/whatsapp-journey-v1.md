@@ -88,3 +88,12 @@ Button replies must be idempotent and preview-bound. If interactive messages are
 - `RESULT` for a completed case includes the approved claim, persisted assessment, limitations, and up to three retrieved source links connected to the finding. A stopped case includes its saved claim, a safe explanation derived from the worker error category, up to three retrieved pages clearly marked as not assessed, and whether retry is available.
 - `RETRY [reference]` is an explicit user action and requires a reference to avoid retrying the wrong case. It requeues the same saved case through the shared retry service only for transient failure categories, checks ownership through the WhatsApp sender mapping, respects the existing investigation model-call budget, and returns the existing reference. Authentication, quota, exhausted-budget, and other non-transient failures must not invite a retry. Duplicate or concurrent retries must not create parallel active runs.
 - Do not expose prior cases or cross-case material without authorization.
+
+
+## Loop prevention (2026-11-25)
+
+- After two clarification rounds without a checkable claim, the bot stops re-asking and offers a *Check as written* button that previews the user's own words.
+- A correction sent after tapping *Edit* replaces the old claim.
+- A factual question asked while a preview is waiting is answered, followed by a one-line reminder that the preview is still waiting.
+- After a quick answer, *CHECK*, *yes* or *investigate* turns that question into a claim preview.
+- Opinions get a clear explanation and an example of what can be checked.

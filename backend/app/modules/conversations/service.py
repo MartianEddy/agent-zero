@@ -67,6 +67,17 @@ _UNRESOLVED_CLAIM_PATTERN = re.compile(
 )
 
 _FAILURE_COPY = copy.FAILURE_REASONS
+_EDIT_PROMPT = "Send the corrected claim or missing detail."
+_CLARIFICATION_MARKER = "\nClarification: "
+# After this many unanswered clarification rounds, stop asking and offer to check the
+# user's own words, so the chat never loops on the same question.
+MAX_CLARIFICATION_ROUNDS = 2
+_CHECK_AS_IS = frozenset({"check as is", "check as written", "check it as is", "check my words"})
+_RUN_FULL_CHECK = frozenset({
+    "check", "check it", "check this", "full check", "investigate", "investigate it",
+    "yes", "yes please", "yes check", "go ahead", "ndiyo", "ndio", "chunguza",
+})
+_QUICK_ANSWER_MARKER = "(not a full investigation)"
 
 
 def _retrieved_sources(
@@ -135,12 +146,12 @@ def _factual_answer_message(answer: str, citations: tuple[dict[str, str], ...]) 
     text = " ".join(answer.split()).strip()[:1400]
     if not text or not clean_citations:
         return (
-            "I couldn’t find a cited source for a reliable quick answer, so I won’t guess. "
-            "No investigation was started. Ask me to investigate the question for a fuller check."
+            "I couldn’t find a source for a reliable quick answer, so I won’t guess. "
+            "Reply *CHECK* and I’ll run a full check instead."
         )
     header = "Quick answer from a fresh web search (not a full investigation):\n\n"
     source_header = "\n\nSources:\n"
-    footer = "\n\nAsk me to investigate this question for a fuller evidence review."
+    footer = "\n\nReply *CHECK* for a full check that compares sources."
     source_lines: list[str] = []
     for title, url in clean_citations:
         line = f"• {title}: {url}"
@@ -149,8 +160,8 @@ def _factual_answer_message(answer: str, citations: tuple[dict[str, str], ...]) 
             source_lines.append(line)
     if not source_lines:
         return (
-            "I couldn’t fit a cited source into a reliable quick answer, so I won’t guess. "
-            "No investigation was started. Ask me to investigate the question for a fuller check."
+            "I couldn’t fit a source into a reliable quick answer, so I won’t guess. "
+            "Reply *CHECK* and I’ll run a full check instead."
         )
     return header + text + source_header + "\n".join(source_lines) + footer
 
@@ -206,6 +217,95 @@ def _model_unavailable_reply(error: Exception) -> str:
 
 def _sender_reference(sender: str, identity_key: str) -> str:
     return hmac.new(identity_key.encode(), sender.encode(), hashlib.sha256).hexdigest()
+
+
+def _identity_refs(event: ConversationTurn, identity_key: str) -> tuple[str, str | None]:
+    """Return (identity ref, legacy phone ref).
+
+    Meta includes the business-scoped user ID (BSUID) in every webhook, but hides the
+    phone number for users with a username. Keying on the BSUID keeps one conversation
+    and one case history per person. The phone-based ref is returned so history saved
+    before BSUIDs were used can be moved across once.
+    """
+    if event.user_id:
+        legacy = event.sender if event.sender != event.user_id else None
+        return (
+            _sender_reference(event.user_id, identity_key),
+            _sender_reference(legacy, identity_key) if legacy else None,
+        )
+    return _sender_reference(event.sender, identity_key), None
+
+
+def _adopt_legacy_identity(
+    session: Session, *, owner_id: UUID, sender_ref: str, legacy_ref: str
+) -> None:
+    """Move a phone-keyed conversation, preference and cases to the BSUID key, once."""
+    if legacy_ref == sender_ref:
+        return
+    has_new = session.scalar(
+        select(WhatsAppConversation.id).where(
+            WhatsAppConversation.owner_id == owner_id,
+            WhatsAppConversation.sender_ref == sender_ref,
+        )
+    )
+    legacy = session.scalar(
+        select(WhatsAppConversation)
+        .where(
+            WhatsAppConversation.owner_id == owner_id,
+            WhatsAppConversation.sender_ref == legacy_ref,
+        )
+        .with_for_update()
+    )
+    moved = False
+    if legacy is not None and has_new is None:
+        legacy.sender_ref = sender_ref
+        moved = True
+    preference = session.scalar(
+        select(WhatsAppNotificationPreference).where(
+            WhatsAppNotificationPreference.owner_id == owner_id,
+            WhatsAppNotificationPreference.sender_ref == legacy_ref,
+        )
+    )
+    if (
+        preference is not None
+        and _notification_preference_for(session, owner_id, sender_ref) is None
+    ):
+        preference.sender_ref = sender_ref
+        moved = True
+    submissions = list(
+        session.scalars(
+            select(Submission)
+            .join(Investigation, Investigation.id == Submission.investigation_id)
+            .where(
+                Investigation.owner_id == owner_id,
+                Submission.channel == Channel.WHATSAPP,
+                Submission.source_metadata["sender_ref"].as_string() == legacy_ref,
+            )
+        )
+    )
+    for submission in submissions:
+        submission.source_metadata = {
+            **(submission.source_metadata or {}),
+            "sender_ref": sender_ref,
+        }
+        moved = True
+    if moved:
+        session.commit()
+        logger.info(
+            "WhatsApp identity moved to BSUID conversation=%s preference=%s cases=%s",
+            legacy is not None and has_new is None,
+            preference is not None,
+            len(submissions),
+        )
+
+
+def _notification_preference_for(session: Session, owner_id: UUID, sender_ref: str):
+    return session.scalar(
+        select(WhatsAppNotificationPreference).where(
+            WhatsAppNotificationPreference.owner_id == owner_id,
+            WhatsAppNotificationPreference.sender_ref == sender_ref,
+        )
+    )
 
 
 def _recipient_cipher(settings) -> Fernet:
@@ -1084,14 +1184,80 @@ async def _confirm_conversation_draft(
     return reply, True
 
 
+def _draft_words(draft_text: str) -> str:
+    """The user's own words from a draft, with clarification labels removed."""
+    parts = [part.strip() for part in draft_text.split(_CLARIFICATION_MARKER) if part.strip()]
+    return " ".join(parts)[:600]
+
+
+def _clarification_rounds(draft_text: str | None) -> int:
+    return (draft_text or "").count(_CLARIFICATION_MARKER)
+
+
+def _last_exchange(conversation: WhatsAppConversation) -> tuple[str, str]:
+    turns = list(conversation.context_json or [])
+    if len(turns) >= 2 and turns[-2].get("role") == "user" and turns[-1].get("role") == "assistant":
+        return str(turns[-2].get("content", "")), str(turns[-1].get("content", ""))
+    return "", ""
+
+
+def _prepare_preview(
+    session: Session,
+    *,
+    conversation: WhatsAppConversation,
+    settings,
+    sender_ref: str,
+    claims: list[dict[str, str]],
+    queries: list[dict[str, object]],
+) -> tuple[str, list[tuple[str, str]]]:
+    """Store a claim preview awaiting approval and return its message and buttons."""
+    conversation.proposed_claims = claims
+    conversation.proposed_queries = queries
+    conversation.state = "AWAITING_CONFIRMATION"
+    conversation.confirmation_token = secrets.token_hex(4).upper()
+    conversation.clarification_question = None
+    preference = _notification_preference(session, settings=settings, sender_ref=sender_ref)
+    if preference is not None and preference.notifications_disabled:
+        notice = "Automatic messages are off, so reply *RESULT* later to see it."
+    elif getattr(settings, "whatsapp_support_url", None):
+        notice = (
+            "I’ll message you here with the result. Reply *STOP* if you’d rather not "
+            "get automatic messages."
+        )
+    else:
+        notice = "Reply *RESULT* a few minutes after submitting to see it."
+    reply = copy.preview_message([claim["text"] for claim in claims], notification_notice=notice)
+    buttons = [
+        (f"SUBMIT {conversation.confirmation_token}", "Submit claim"),
+        (f"EDIT {conversation.confirmation_token}", "Edit claim"),
+        (f"CANCEL {conversation.confirmation_token}", "Cancel"),
+    ]
+    return reply, buttons
+
+
+def _offer_check_as_written(conversation: WhatsAppConversation, question: str) -> tuple[str, list]:
+    conversation.state = "NEEDS_CLARIFICATION"
+    conversation.proposed_claims = []
+    conversation.confirmation_token = None
+    reply = (
+        f"{question}\n\n"
+        "If it’s easier, tap *Check as written* and I’ll check your message exactly as you "
+        "wrote it. Or reply *CANCEL*. Nothing has started yet."
+    )
+    return reply, [("CHECK AS IS", "Check as written")]
+
+
 async def _handle_turn(
     session: Session, event: ConversationTurn, settings, send_message
 ) -> bool:
     """Handle conversation turns separately from investigation records."""
-    sender_ref = _sender_reference(
-        event.sender, settings.whatsapp_identity_key.get_secret_value()
-    )
+    identity_key = settings.whatsapp_identity_key.get_secret_value()
+    sender_ref, legacy_ref = _identity_refs(event, identity_key)
     now = datetime.now(UTC)
+    if legacy_ref is not None:
+        _adopt_legacy_identity(
+            session, owner_id=_owner_id(settings), sender_ref=sender_ref, legacy_ref=legacy_ref
+        )
     conversation = _conversation_for_sender(
         session, owner_id=_owner_id(settings), sender_ref=sender_ref, now=now
     )
@@ -1193,7 +1359,7 @@ async def _handle_turn(
         "submit claim",
         "confirm",
         "yes",
-    }:
+    } and _QUICK_ANSWER_MARKER not in _last_exchange(conversation)[1]:
         await _send_saved_reply(
             session,
             conversation=conversation,
@@ -1446,7 +1612,7 @@ async def _handle_turn(
         conversation.proposed_queries = []
         conversation.confirmation_token = None
         conversation.preview_version += 1
-        conversation.clarification_question = "Send the corrected claim or missing detail."
+        conversation.clarification_question = _EDIT_PROMPT
         conversation.draft_expires_at = now + timedelta(minutes=30)
         await _send_saved_reply(
             session,
@@ -1505,7 +1671,44 @@ async def _handle_turn(
                 )
             return True
 
+    if pending and conversation.state == "NEEDS_CLARIFICATION" and (
+        folded.strip(" .!") in _CHECK_AS_IS
+    ):
+        words = _draft_words(conversation.draft_text or "")
+        if len(words) >= 5:
+            reply, buttons = _prepare_preview(
+                session,
+                conversation=conversation,
+                settings=settings,
+                sender_ref=sender_ref,
+                claims=[{"text": words, "claim_type": "CHECKABLE_EVENT"}],
+                queries=[],
+            )
+            conversation.preview_version += 1
+            conversation.draft_expires_at = now + timedelta(minutes=30)
+            await _send_saved_reply(
+                session,
+                conversation=conversation,
+                event=event,
+                send_message=send_message,
+                user_text=command,
+                reply=reply,
+                buttons=buttons,
+            )
+            return True
+
+    if not pending and folded.strip(" .!") in _RUN_FULL_CHECK:
+        previous_user, previous_reply = _last_exchange(conversation)
+        if _QUICK_ANSWER_MARKER in previous_reply and previous_user:
+            # Turn the question that got a quick answer into a full check, so "yes" or
+            # "check" after a quick answer moves forward instead of starting over.
+            command = f"Please check this claim: {previous_user}"
+            folded = command.casefold()
+
     draft_text = conversation.draft_text if pending else None
+    if pending and conversation.clarification_question == _EDIT_PROMPT:
+        # A correction after tapping Edit replaces the old claim instead of adding to it.
+        draft_text = None
     if pending and folded.startswith("edit "):
         command = command[5:].strip()
         draft_text = command
@@ -1532,7 +1735,7 @@ async def _handle_turn(
             conversation_id=conversation.id,
         )
         factual_run = None
-        if model_run.output.intent == "FACTUAL_ANSWER_REQUEST" and not pending:
+        if model_run.output.intent == "FACTUAL_ANSWER_REQUEST":
             factual_run = await gateway.answer_whatsapp_factual_question(
                 text=command,
                 context=context,
@@ -1603,15 +1806,13 @@ async def _handle_turn(
         # still owns intents, authorization, case creation, and all side effects.
         reply = output.reply.strip() or "I’m here. What would you like to talk about?"
     elif output.intent == "FACTUAL_ANSWER_REQUEST":
-        if pending:
-            reply = (
-                "There’s a claim preview waiting in this chat. Approve, edit, or cancel it first; "
-                "I won’t change its scope while it’s awaiting your decision."
+        answer = factual_run.output.answer if factual_run else ""
+        citations = factual_run.citations if factual_run else ()
+        reply = _factual_answer_message(answer, citations)
+        if pending and conversation.state == "AWAITING_CONFIRMATION":
+            reply += (
+                "\n\nYour claim preview is still waiting. Reply *YES* to start it, or *CANCEL*."
             )
-        else:
-            answer = factual_run.output.answer if factual_run else ""
-            citations = factual_run.citations if factual_run else ()
-            reply = _factual_answer_message(answer, citations)
     elif output.intent == "CASE_LIST_REQUEST":
         reply = _case_list_message(session, settings=settings, sender_ref=sender_ref)
     elif output.intent == "STATUS_REQUEST":
@@ -1649,16 +1850,18 @@ async def _handle_turn(
         conversation.confirmation_token = None
         conversation.preview_version += 1
         conversation.draft_expires_at = now + timedelta(minutes=30)
-        conversation.clarification_question = (
-            "Which exact entity or public source should I use to identify this subject?"
+        question = (
+            "To check this I need one more detail: who or what exactly is it about, and when? "
+            "A name, a place or a link is enough."
         )
-        conversation.state = "NEEDS_CLARIFICATION"
-        reply = (
-            "I can’t prepare a reliable claim preview from that question without filling in "
-            "missing facts. Please share a public URL or enough context to identify the exact "
-            "subject. I won’t guess at a date or what kind of entity it is. "
-            "No investigation has started."
-        )
+        conversation.clarification_question = question
+        if _clarification_rounds(conversation.draft_text) >= MAX_CLARIFICATION_ROUNDS:
+            reply, reply_buttons = _offer_check_as_written(
+                conversation, "I still can’t pin down one exact claim from this."
+            )
+        else:
+            conversation.state = "NEEDS_CLARIFICATION"
+            reply = f"{question} Nothing has started yet."
     elif output.intent == "INVESTIGATION_REQUEST":
         conversation.draft_text = (
             f"{draft_text}\nClarification: {command}"
@@ -1689,61 +1892,48 @@ async def _handle_turn(
                 conversation.state = (
                     "NEEDS_CLARIFICATION" if output.clarification_question else "IDLE"
                 )
-                if output.clarification_question:
+                if output.clarification_question and (
+                    _clarification_rounds(conversation.draft_text) >= MAX_CLARIFICATION_ROUNDS
+                ):
+                    reply, reply_buttons = _offer_check_as_written(
+                        conversation, output.clarification_question
+                    )
+                elif output.clarification_question:
                     reply = (
                         f"{output.clarification_question}\n\n"
-                        "No investigation has started. Reply with the missing detail or CANCEL."
+                        "Nothing has started yet. Reply with the detail, or *CANCEL*."
                     )
                 else:
                     _clear_conversation_draft(conversation)
                     reply = (
-                        "I couldn't identify a clear factual claim to investigate from that. "
-                        "Please send a specific claim or ask a focused question."
+                        "I couldn’t find a fact I can check in that. Opinions and predictions "
+                        "can’t be fact-checked. If there’s a specific fact in it, like a number, "
+                        "a date, or who said or did what, send just that part, or paste the "
+                        "exact message you received."
                     )
             else:
-                conversation.proposed_claims = [
-                    {"text": claim.text, "claim_type": claim.claim_type}
-                    for claim in output.claims
-                ]
-                conversation.proposed_queries = [
-                    {
-                        "text": query.text,
-                        "claim_index": query.claim_index,
-                        "freshness": query.freshness,
-                        "topic": query.topic,
-                        "jurisdiction": query.jurisdiction,
-                        "source_lane": query.source_lane,
-                        "widening_reason": query.widening_reason,
-                    }
-                    for query in output.queries
-                ]
-                conversation.state = "AWAITING_CONFIRMATION"
-                conversation.confirmation_token = secrets.token_hex(4).upper()
-                preference = _notification_preference(
-                    session, settings=settings, sender_ref=sender_ref
+                reply, reply_buttons = _prepare_preview(
+                    session,
+                    conversation=conversation,
+                    settings=settings,
+                    sender_ref=sender_ref,
+                    claims=[
+                        {"text": claim.text, "claim_type": claim.claim_type}
+                        for claim in output.claims
+                    ],
+                    queries=[
+                        {
+                            "text": query.text,
+                            "claim_index": query.claim_index,
+                            "freshness": query.freshness,
+                            "topic": query.topic,
+                            "jurisdiction": query.jurisdiction,
+                            "source_lane": query.source_lane,
+                            "widening_reason": query.widening_reason,
+                        }
+                        for query in output.queries
+                    ],
                 )
-                if preference is not None and preference.notifications_disabled:
-                    notification_notice = (
-                        "Automatic messages are off, so reply *RESULT* later to see it."
-                    )
-                elif getattr(settings, "whatsapp_support_url", None):
-                    notification_notice = (
-                        "I’ll message you here with the result. Reply *STOP* if you’d rather not "
-                        "get automatic messages."
-                    )
-                else:
-                    notification_notice = (
-                        "Reply *RESULT* a few minutes after submitting to see it."
-                    )
-                reply = copy.preview_message(
-                    [claim.text for claim in output.claims],
-                    notification_notice=notification_notice,
-                )
-                reply_buttons = [
-                    (f"SUBMIT {conversation.confirmation_token}", "Submit claim"),
-                    (f"EDIT {conversation.confirmation_token}", "Edit claim"),
-                    (f"CANCEL {conversation.confirmation_token}", "Cancel"),
-                ]
     await _send_saved_reply(
         session,
         conversation=conversation,
