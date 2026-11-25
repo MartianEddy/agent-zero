@@ -22,6 +22,7 @@ export default function AboutPage() {
         <Container className="grid gap-12 px-0 sm:px-0 lg:grid-cols-[1fr_1.2fr]">
           <div>
             <h2 className="text-3xl font-semibold leading-[1.1]">Why Agent 0 exists</h2>
+            <p className="mt-4 leading-8 text-muted">Agent Zero is built by Sinaps Technology, a technology company in Nairobi, Kenya. It uses AI models, including models from OpenAI, to read sources; Agent Zero&rsquo;s own system plans each check, reads the sources and applies the rules that decide a result.</p>
             <p className="mt-4 leading-8 text-muted">Information moves quickly between people and platforms. Checking it takes deliberate work: finding sources, comparing accounts, understanding media, and being clear about what remains unknown. Agent 0 is being built to make that work easier to follow.</p>
           </div>
           <ol className="grid gap-3">

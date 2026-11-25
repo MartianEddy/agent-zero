@@ -2100,7 +2100,7 @@ def test_failed_status_for_bsuid_send_is_still_diagnosed() -> None:
     assert diagnostic["state"] == "failed" and diagnostic["error_codes"] == [131026]
 
 
-def _flow_turn(conversation, text, output, *, factual=None, message_type="text"):
+def _flow_turn(conversation, text, output, *, factual=None, message_type="text"):  # noqa: E501
     """Run one turn through the real handler with the model mocked; return (send, gateway)."""
     from app.modules.conversations.schemas import ConversationTurn
     from app.modules.conversations.service import ConversationService
@@ -2374,3 +2374,28 @@ def test_background_worker_shows_typing_and_retries_a_failed_send() -> None:
         whatsapp._process_events_in_background([event], _settings())
     typing.assert_called_once_with("wamid.bg2")
     assert attempts == ["Hello", "Hello"]
+
+
+def test_who_built_you_is_answered_from_the_profile_without_ai_or_search() -> None:
+    conversation = _conversation_fixture()
+    send, gateway, _service = _flow_turn(conversation, "who built you?", _output("FACTUAL_ANSWER_REQUEST"))
+    gateway.return_value.interpret_whatsapp_turn.assert_not_called()
+    gateway.return_value.answer_whatsapp_factual_question.assert_not_called()
+    message = send.call_args.args[1]
+    assert "Sinaps Technology" in message and "OpenAI built" not in message
+
+
+def test_quick_answer_links_drop_tracking_parameters_and_inline_markdown() -> None:
+    from app.modules.conversations.service.case_replies import _factual_answer_message
+
+    answer = (
+        "Sinaps Technology is a Nairobi-based Kenyan tech company. "
+        "([sinapstechnology.tech](https://sinapstechnology.tech/?utm_source=openai))"
+    )
+    message = _factual_answer_message(answer, ({
+        "url": "https://sinapstechnology.tech/?utm_source=openai&page=2",
+        "title": "Sinaps Technology",
+    },))
+    assert "utm_source" not in message
+    assert "https://sinapstechnology.tech/?page=2" in message
+    assert "](" not in message

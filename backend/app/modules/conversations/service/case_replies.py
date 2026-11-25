@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from urllib.parse import urlsplit
+import re
+from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -69,6 +70,20 @@ def _source_bullets(sources: list[Source]) -> str:
     return "\n".join(f"• {label}: {url}" for label, url in _source_pairs(sources))
 
 
+_TRACKING_PARAMS = re.compile(r"^(utm_|c_correlation_id|c_tenant_id|fbclid|gclid|mc_|ref$|ref_src)")
+_INLINE_LINK = re.compile(r"\s*\(?\[[^\]]{1,120}\]\(https?://[^)\s]+\)\)?")
+
+
+def _clean_url(url: str) -> str:
+    """Drop tracking parameters such as utm_source from a citation link."""
+    parts = urlsplit(url)
+    query = "&".join(
+        pair for pair in parts.query.split("&")
+        if pair and not _TRACKING_PARAMS.match(pair.split("=", 1)[0])
+    )
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
+
+
 def _factual_answer_message(answer: str, citations: tuple[dict[str, str], ...]) -> str:
     clean_citations: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -87,12 +102,16 @@ def _factual_answer_message(answer: str, citations: tuple[dict[str, str], ...]) 
             or url in seen
         ):
             continue
+        url = _clean_url(url)
+        if url in seen:
+            continue
         seen.add(url)
         clean_citations.append((title or parsed.hostname, url))
         if len(clean_citations) >= 3:
             break
 
-    text = " ".join(answer.split()).strip()[:1400]
+    # Sources are listed separately, so drop inline markdown links the model may add.
+    text = _INLINE_LINK.sub("", " ".join(answer.split())).strip()[:1400]
     if not text or not clean_citations:
         return (
             "I couldn’t find a source for a reliable quick answer, so I won’t guess. "

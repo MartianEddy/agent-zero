@@ -48,6 +48,22 @@ async def handle_command(turn: Turn) -> bool:
     command = turn.command
     folded = turn.folded
 
+    if copy.is_question_about_agent_zero(command):
+        site = getattr(settings, "public_site_url", None)
+        reply = copy.about_agent_zero(
+            getattr(settings, "agent_zero_builder", "Sinaps Technology"),
+            str(site) if site else None,
+        )
+        await inbound._send_saved_reply(
+            session,
+            conversation=conversation,
+            event=event,
+            send_message=send_message,
+            user_text=command,
+            reply=reply,
+        )
+        return True
+
     if (
         not pending
         and folded

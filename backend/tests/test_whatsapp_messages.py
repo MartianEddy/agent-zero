@@ -137,3 +137,20 @@ def test_user_facing_copy_contains_no_emoji():
         [_finding()], sources=[], limitations=[], reference="AZ-1"
     ) + m.help_message() + m.registered_message("AZ-1", "x")
     assert not emoji.search(sample)
+
+
+def test_questions_about_agent_zero_are_recognised_in_english_and_kiswahili():
+    for text in ("who are you?", "Who built you", "who made u", "are you chatgpt?",
+                 "Are you an AI?", "what model do you use", "Tell me about yourself",
+                 "wewe ni nani", "nani alikutengeneza?", "umetengenezwa na nani"):
+        assert m.is_question_about_agent_zero(text), text
+    for text in ("Who built the Thika superhighway?", "Who owns Safaricom?",
+                 "What are you checking for me?", "Is Nairobi the capital of Kenya?"):
+        assert not m.is_question_about_agent_zero(text), text
+
+
+def test_about_message_names_sinaps_and_is_honest_about_openai():
+    text = m.about_agent_zero("Sinaps Technology", "https://agent-zero-web.onrender.com/")
+    assert "built by Sinaps Technology" in text
+    assert "including models from OpenAI" in text and "not ChatGPT" in text
+    assert "https://agent-zero-web.onrender.com/methodology" in text

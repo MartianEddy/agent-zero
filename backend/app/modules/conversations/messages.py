@@ -7,6 +7,7 @@ tone, formatting and length are reviewed in one place. WhatsApp renders ``*bold*
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 MAX_MESSAGE = 3900
@@ -304,3 +305,40 @@ def failed_without_summary(
 
 def failure_reason(code: str | None) -> str:
     return FAILURE_REASONS.get(code or "", DEFAULT_FAILURE_REASON)
+
+
+# Questions about Agent Zero itself. Answered from this fixed profile, never by a web
+# search or the AI model, so the bot cannot describe itself as ChatGPT or another product.
+_SELF_QUESTION = re.compile(
+    r"\b("
+    r"who\s+(are|r)\s+(you|u)|what\s+(are|r)\s+(you|u)\b(?!\s+(doing|saying|checking))"
+    r"|who\s+(built|made|created|developed|designed|owns|runs|trained|programmed)\s+(you|u|this|agent\s*(zero|0))"
+    r"|who\s+is\s+behind\s+(you|this|agent\s*(zero|0))"
+    r"|are\s+(you|u)\s+(chat\s*gpt|gpt|open\s*ai|gemini|claude|an?\s+(ai|bot|robot)|a\s+human|human|real)"
+    r"|(what|which)\s+(ai|model|llm|gpt)\b.*\b(you|agent\s*(zero|0))"
+    r"|what\s+powers\s+(you|agent\s*(zero|0))|tell\s+me\s+about\s+(yourself|agent\s*(zero|0))"
+    r"|wewe\s+ni\s+nani|nani\s+(alikutengeneza|aliyekutengeneza|amekutengeneza)"
+    r"|umetengenezwa\s+na\s+nani|wewe\s+ni\s+(chatgpt|gpt|roboti|binadamu)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def is_question_about_agent_zero(text: str) -> bool:
+    return bool(_SELF_QUESTION.search(" ".join(text.split())))
+
+
+def about_agent_zero(builder: str = "Sinaps Technology", site_url: str | None = None) -> str:
+    lines = [
+        f"I’m *Agent Zero*, a fact-checking assistant built by {builder}, a technology "
+        "company in Nairobi, Kenya.",
+        "I check claims against public sources and tell you plainly what holds up, what "
+        "doesn’t, and what I couldn’t confirm.",
+        "Inside, I use AI models, including models from OpenAI, to read sources and draft "
+        "explanations. I’m not ChatGPT: Agent Zero’s own system plans each check, finds and "
+        "reads the sources, and its rules decide the result. Every result links to its sources.",
+    ]
+    if site_url:
+        lines.append(f"More about how I work: {site_url.rstrip('/')}/methodology")
+    lines.append("Send me a claim or a link whenever you’re ready.")
+    return "\n\n".join(lines)

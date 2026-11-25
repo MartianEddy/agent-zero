@@ -1,7 +1,7 @@
 import re
-from urllib.parse import urlsplit
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import AnyHttpUrl, SecretStr, model_validator
@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     whatsapp_graph_base_url: str = "https://graph.facebook.com"
     whatsapp_support_url: AnyHttpUrl | None = None
     whatsapp_conversation_enabled: bool = False
+    # Who Agent Zero says built it.
+    agent_zero_builder: str = "Sinaps Technology"
+    # Public website, linked from the "about Agent Zero" reply when set.
+    public_site_url: AnyHttpUrl | None = None
 
     @model_validator(mode="after")
     def require_auth_outside_development(self) -> "Settings":

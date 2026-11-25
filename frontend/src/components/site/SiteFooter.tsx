@@ -16,6 +16,7 @@ export function SiteFooter() {
         <div>
           <Link href="/" aria-label="Agent 0 home"><Logo /></Link>
           <p className="mt-4 max-w-xs text-sm leading-6 text-white/55">Evidence for better-informed human decisions. Assume nothing. Follow the evidence.</p>
+          <p className="mt-3 text-xs text-white/40">A product of Sinaps Technology, Nairobi.</p>
         </div>
         {columns.map((column) => (
           <nav key={column.title} aria-label={column.title}>
@@ -31,7 +32,7 @@ export function SiteFooter() {
         </div>
       </div>
       <div className="border-t border-night-line">
-        <p className="mx-auto w-full max-w-6xl px-5 py-5 text-xs text-white/40 sm:px-8">AI investigates. Humans decide. This is a shared demo: please use public information only.</p>
+        <p className="mx-auto w-full max-w-6xl px-5 py-5 text-xs text-white/40 sm:px-8">AI investigates. Humans decide. Agent Zero is built by Sinaps Technology. This is a shared demo: please use public information only.</p>
       </div>
     </footer>
   );
