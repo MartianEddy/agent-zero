@@ -222,11 +222,17 @@ def send_whatsapp_result_notification(event_id: str) -> str:
         return delivery_state.lower()
 
 
+QUEUED_STALL_MINUTES = 60
+
+
 @celery_app.task(name="agent_zero.recover_stalled_investigations")
 def recover_stalled_investigations() -> int:
     """Stop reporting work as active when its worker has disappeared."""
     now = datetime.now(UTC)
     cutoff = now - timedelta(minutes=10)
+    # A queued job is waiting behind other cases, not stalled: the worker runs one case at
+    # a time, so a short burst of messages can keep a case queued for many minutes.
+    queued_cutoff = now - timedelta(minutes=QUEUED_STALL_MINUTES)
     recovered = 0
     active_statuses = (
         InvestigationStatus.RECEIVED,
@@ -249,7 +255,10 @@ def recover_stalled_investigations() -> int:
                         & ProcessingJob.lease_expires_at.is_not(None)
                         & (ProcessingJob.lease_expires_at <= now)
                     )
-                    | ((ProcessingJob.status == "QUEUED") & (Investigation.updated_at < cutoff))
+                    | (
+                        (ProcessingJob.status == "QUEUED")
+                        & (Investigation.updated_at < queued_cutoff)
+                    )
                     | (
                         (ProcessingJob.status == "RUNNING")
                         & ProcessingJob.lease_expires_at.is_(None)
@@ -268,8 +277,13 @@ def recover_stalled_investigations() -> int:
             if lease_expires_at is not None and lease_expires_at.tzinfo is None:
                 lease_expires_at = lease_expires_at.replace(tzinfo=UTC)
             lease_expired = lease_expires_at is not None and lease_expires_at <= now
+            updated_at = investigation.updated_at
+            if updated_at is not None and updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=UTC)
             stale_legacy_or_queued = (
-                job.lease_expires_at is None and investigation.updated_at < cutoff
+                job.lease_expires_at is None
+                and updated_at is not None
+                and updated_at < (queued_cutoff if job.status == "QUEUED" else cutoff)
             )
             if job.status not in {"QUEUED", "RUNNING"} or not (
                 lease_expired or stale_legacy_or_queued

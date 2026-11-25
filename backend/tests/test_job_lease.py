@@ -184,3 +184,41 @@ def test_celery_duplicate_delivery_does_not_reenter_pipeline(sessions) -> None:
     assert first == "complete"
     assert duplicate == "already_claimed"
     run_pipeline.assert_called_once()
+
+
+def _queue_job_last_updated(factory, job_id, minutes_ago: int):
+    with factory.begin() as session:
+        job = session.get(ProcessingJob, job_id)
+        investigation = session.get(Investigation, job.investigation_id)
+        job.status = "QUEUED"
+        investigation.status = InvestigationStatus.PROCESSING
+        investigation.updated_at = datetime.now(UTC) - timedelta(minutes=minutes_ago)
+        return investigation.id
+
+
+def test_job_waiting_in_the_queue_is_not_marked_stalled(sessions) -> None:
+    # Production: five cases sent together; the fifth waited over 10 minutes behind the
+    # others on a one-case-at-a-time worker and was wrongly failed as stalled.
+    factory, job_id = sessions
+    investigation_id = _queue_job_last_updated(factory, job_id, minutes_ago=15)
+    with patch("app.tasks.SessionLocal", factory):
+        from app.tasks import recover_stalled_investigations
+
+        assert recover_stalled_investigations.run() == 0
+    with factory() as session:
+        assert session.get(ProcessingJob, job_id).status == "QUEUED"
+        assert session.get(Investigation, investigation_id).status == (
+            InvestigationStatus.PROCESSING
+        )
+
+
+def test_job_queued_past_the_queue_window_is_recovered(sessions) -> None:
+    factory, job_id = sessions
+    investigation_id = _queue_job_last_updated(factory, job_id, minutes_ago=61)
+    with patch("app.tasks.SessionLocal", factory):
+        from app.tasks import recover_stalled_investigations
+
+        assert recover_stalled_investigations.run() == 1
+    with factory() as session:
+        assert session.get(ProcessingJob, job_id).status == "BLOCKED"
+        assert session.get(Investigation, investigation_id).status == InvestigationStatus.FAILED
