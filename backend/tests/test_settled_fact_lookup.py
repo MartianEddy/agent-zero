@@ -67,3 +67,54 @@ def test_best_matching_passage_finds_the_fact_beyond_the_intro():
     assert "gained independence on 12 December 1963" in passage
     assert passage in article
     assert best_matching_passage("Unrelated words here.", article) is None
+
+
+def test_named_phrase_finds_what_the_claim_is_about():
+    from app.modules.sources.settled_fact import named_phrase
+
+    assert named_phrase("Kenya won the 2022 FIFA World Cup.") == "2022 FIFA World Cup"
+    assert named_phrase("William Ruto became President of Kenya in 2022.") == "William Ruto"
+    assert named_phrase("The 2019 Kenya census counted 47.6 million people.") == "2019 Kenya"
+    assert named_phrase("Nairobi is the capital of Kenya.") is None
+
+
+def test_named_article_goes_first_only_when_its_title_matches_the_phrase():
+    from unittest.mock import patch
+
+    from app.modules.sources import settled_fact
+
+    def page(title, index, extract):
+        url = f"https://en.wikipedia.org/wiki/{title}"
+        return {"title": title, "index": index, "fullurl": url, "extract": extract}
+
+    def search(query, *, limit, deadline):
+        if query == "2022 FIFA World Cup":
+            return [page("2022 FIFA World Cup", 1, "The 2022 FIFA World Cup was held in Qatar.")]
+        if query == "2019 Kenya":
+            return [page("Kenya Barris", 1, "Kenya Barris is a television writer.")]
+        return [page("FIFA U-17 Women's World Cup", 1, "A youth tournament.")]
+
+    with (
+        patch.object(settled_fact, "_wikipedia_search", side_effect=search),
+        patch.object(settled_fact, "_full_extract", return_value=None),
+        patch.object(settled_fact.time, "monotonic", return_value=0.0),
+    ):
+        won = settled_fact.lookup_settled_fact("Kenya won the 2022 FIFA World Cup.")
+        census = settled_fact.lookup_settled_fact("The 2019 Kenya census counted 47.6 million.")
+    assert won.excerpts[0].title == "2022 FIFA World Cup"
+    assert census.excerpts[0].title == "FIFA U-17 Women's World Cup"
+    assert all(item.title != "Kenya Barris" for item in census.excerpts)
+
+
+def test_passage_choice_prefers_rare_claim_words_over_the_article_subject():
+    from app.modules.sources.settled_fact import best_matching_passage
+
+    article = (
+        "The census was run by the bureau. The census used tablets. The census took a week. "
+        "The census had staff. The census was costly. Kenya's population was 47.6 million "
+        "during the 2019 census."
+    )
+    passage = best_matching_passage(
+        "The 2019 Kenya census counted about 47.6 million people.", article, sentences=1
+    )
+    assert passage == "Kenya's population was 47.6 million during the 2019 census."

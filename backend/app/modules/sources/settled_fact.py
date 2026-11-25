@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 from dataclasses import dataclass
@@ -63,7 +64,7 @@ def _request_json(url: str, *, deadline: float) -> dict[str, object]:
     return value
 
 
-_SENTENCE = re.compile(r"[^.!?\n]+[.!?]?")
+_SENTENCE = re.compile(r"(?:[^.!?\n]|(?<=\d)\.(?=\d))+[.!?]?")
 _TERM = re.compile(r"[a-z0-9]{3,}")
 _STOP = {"the", "and", "was", "were", "for", "with", "that", "this", "from", "are", "has", "had"}
 
@@ -81,11 +82,21 @@ def best_matching_passage(claim_text: str, article: str, *, sentences: int = 3) 
     spans = [(m.start(), m.end()) for m in _SENTENCE.finditer(article) if m.group().strip()]
     if not claim_terms or not spans:
         return None
-    best: tuple[int, int, int] | None = None
+    # Words found all through the article (its own subject, such as "FIFA World Cup")
+    # say little about where the claimed fact is; rarer claim words ("won") decide.
+    sentence_terms = [_terms(article[start:end]) for start, end in spans]
+    count = len(spans)
+    weight = {
+        term: math.log((count + 1) / (1 + sum(term in terms for terms in sentence_terms))) + 0.1
+        for term in claim_terms
+    }
+    best: tuple[float, int, int] | None = None
     for i in range(len(spans)):
         window = spans[i : i + sentences]
-        text = article[window[0][0] : window[-1][1]]
-        score = len(claim_terms & _terms(text))
+        shared = claim_terms & set().union(
+            *sentence_terms[i : i + sentences]
+        )
+        score = sum(weight[term] for term in shared)
         if best is None or score > best[0]:
             best = (score, window[0][0], window[-1][1])
     if best is None or best[0] == 0:
@@ -116,6 +127,57 @@ def _full_extract(title: str, *, deadline: float) -> str | None:
     return None
 
 
+_NAME_TOKEN = re.compile(r"^(?:[A-Z][\w'’.-]*|\d{4})$")
+_NOT_NAMES = frozenset({"A", "An", "The", "In", "On", "At", "This", "That", "It", "I"})
+
+
+def named_phrase(claim_text: str) -> str | None:
+    """The longest run of capitalised words or years, e.g. "2022 FIFA World Cup".
+
+    Searching the whole sentence ranks articles that share the claim's other words
+    ("Kenya won ...") above the article about the thing the claim is about.
+    """
+    best: list[str] = []
+    run: list[str] = []
+    for raw in (claim_text or "").split():
+        token = raw.strip(",.;:!?()\"")
+        if token and token not in _NOT_NAMES and _NAME_TOKEN.match(token):
+            run.append(token)
+            if len(run) > len(best):
+                best = list(run)
+        else:
+            run = []
+    return " ".join(best) if len(best) >= 2 else None
+
+
+def _wikipedia_search(query: str, *, limit: int, deadline: float) -> list[dict]:
+    params = urlencode(
+        {
+            "action": "query",
+            "generator": "search",
+            "gsrsearch": query[:500],
+            "gsrlimit": str(limit),
+            "prop": "extracts|info",
+            "inprop": "url",
+            "explaintext": "1",
+            "exintro": "1",
+            "exsentences": "4",
+            "format": "json",
+            "formatversion": "2",
+        }
+    )
+    result = _request_json(f"https://en.wikipedia.org/w/api.php?{params}", deadline=deadline)
+    query_result = result.get("query")
+    pages = query_result.get("pages", []) if isinstance(query_result, dict) else []
+    if not isinstance(pages, list):
+        return []
+    # Search results arrive unordered; "index" is the search rank.
+    return sorted(
+        (page for page in pages if isinstance(page, dict)),
+        key=lambda page: page.get("index", 99),
+    )
+
+
 def lookup_settled_fact(
     claim_text: str,
     *,
@@ -127,33 +189,24 @@ def lookup_settled_fact(
     excerpts: list[ReferenceExcerpt] = []
     unavailable: list[str] = []
 
-    wikipedia_params = urlencode(
-        {
-            "action": "query",
-            "generator": "search",
-            "gsrsearch": claim_text[:500],
-            "gsrlimit": "3",
-            "prop": "extracts|info",
-            "inprop": "url",
-            "explaintext": "1",
-            "exintro": "1",
-            "exsentences": "4",
-            "format": "json",
-            "formatversion": "2",
-        }
-    )
-    wikipedia_url = f"https://en.wikipedia.org/w/api.php?{wikipedia_params}"
     try:
-        result = _request_json(wikipedia_url, deadline=deadline)
-        query = result.get("query")
-        pages = query.get("pages", []) if isinstance(query, dict) else []
-        if not isinstance(pages, list):
-            pages = []
-        # Search results arrive unordered; "index" is the search rank.
-        pages = sorted(
-            (page for page in pages if isinstance(page, dict)),
-            key=lambda page: page.get("index", 99),
-        )
+        pages = _wikipedia_search(claim_text, limit=3, deadline=deadline)
+        phrase = named_phrase(claim_text)
+        if phrase and time.monotonic() < deadline - 0.6:
+            try:
+                named = _wikipedia_search(phrase, limit=1, deadline=deadline)
+            except RuntimeError:
+                named = []
+            # Only an article named after the phrase, not one that merely shares a word
+            # ("2019 Kenya" must not put "Kenya Barris" first).
+            words = phrase.casefold().split()
+            named = [
+                page
+                for page in named
+                if all(word in str(page.get("title", "")).casefold().split() for word in words)
+            ]
+            titles = {page.get("title") for page in named}
+            pages = named + [page for page in pages if page.get("title") not in titles]
         for rank, page in enumerate(pages[:3]):
             if not isinstance(page, dict):
                 continue

@@ -42,6 +42,10 @@ from app.modules.investigations.usage import (
 )
 
 
+# Seconds of the case budget kept for the evidence review after searching and reading.
+REASONING_RESERVE_SECONDS = 40.0
+
+
 def _run_widening_lane(
     session: Session,
     investigation: Investigation,
@@ -90,6 +94,9 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
     case_deadline = ports.monotonic() + getattr(
         ports.get_settings(), "investigation_deadline_seconds", 120.0
     )
+    # Searching and reading stop early enough to leave the evidence review its time:
+    # without it a case ends "not enough evidence" even when supporting passages were read.
+    research_deadline = case_deadline - REASONING_RESERVE_SECONDS
     try:
         if investigation.status == InvestigationStatus.RECEIVED:
             common._stage(session, investigation, InvestigationStatus.PROCESSING)
@@ -222,7 +229,7 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
             session,
             investigation,
             case_deadline=min(case_deadline, ports.monotonic() + 45.0),
-            lookup_deadline=fast_path_deadline,
+            lookup_deadline=min(fast_path_deadline, research_deadline),
         )
         searchable_indices = {
             index
@@ -241,7 +248,7 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
             investigation,
             source_lanes={"PRIMARY"},
             claim_indices=searchable_indices,
-            case_deadline=case_deadline,
+            case_deadline=research_deadline,
         )
         common._stage(session, investigation, InvestigationStatus.CORROBORATING)
         settings = ports.get_settings()
@@ -251,7 +258,7 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
             investigation,
             source_lanes={"PRIMARY"},
             retrieval_cap=primary_retrieval_cap,
-            case_deadline=case_deadline,
+            case_deadline=research_deadline,
         )
         evidence_review._persist_evidence(session, investigation, retrieved)
         evidence_review._detect_source_relationships(session, investigation, retrieved)
@@ -268,7 +275,7 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
                     lane=lane,
                     claim_indices=needing,
                     retrieved=retrieved,
-                    case_deadline=case_deadline,
+                    case_deadline=research_deadline,
                 )
             else:
                 planning._mark_routes_not_needed(session, investigation, source_lanes={lane})
@@ -278,10 +285,10 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
             investigation,
             source_lanes={"SOCIAL"},
             claim_indices=searchable_indices,
-            case_deadline=case_deadline,
+            case_deadline=research_deadline,
         )
         retrieved.update(
-            search_stage._retrieve_candidates(session, investigation, case_deadline=case_deadline)
+            search_stage._retrieve_candidates(session, investigation, case_deadline=research_deadline)
         )
         evidence_review._detect_source_relationships(session, investigation, retrieved)
         claims = list(

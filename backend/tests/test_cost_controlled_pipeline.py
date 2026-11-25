@@ -471,6 +471,36 @@ class CostControlledPipelineTests(unittest.TestCase):
         self.assertNotIn("query wrongly assigned to a second claim", {item.query for item in traces})
         self.assertTrue(all(item.route_metadata["claim_index"] == 0 for item in traces))
 
+    def test_research_leaves_time_for_the_evidence_review(self) -> None:
+        # Production case "Nairobi is the capital of Kenya." (November 2026): reading
+        # sources used the whole budget, the review was skipped, and the case reported
+        # no evidence although supporting passages had been read.
+        from app.modules.investigations.orchestrator import pipeline, search_stage
+
+        seen: list[float] = []
+        real_execute, real_retrieve = (
+            search_stage._execute_searches,
+            search_stage._retrieve_candidates,
+        )
+
+        def spy(real):
+            def call(*args, **kwargs):
+                seen.append(kwargs["case_deadline"])
+                return real(*args, **kwargs)
+
+            return call
+
+        self.settings.investigation_deadline_seconds = 120.0
+        patches = self._provider_patches(final_error=True)
+        patches += [
+            patch("app.modules.investigations.orchestrator.ports.monotonic", return_value=0.0),
+            patch.object(search_stage, "_execute_searches", spy(real_execute)),
+            patch.object(search_stage, "_retrieve_candidates", spy(real_retrieve)),
+        ]
+        self._run_with_patches(patches)
+        self.assertTrue(seen)
+        self.assertEqual(set(seen), {120.0 - pipeline.REASONING_RESERVE_SECONDS})
+
     def test_retrieval_budget_limits_pages(self) -> None:
         self.settings.max_retrieved_sources = 1
         self._run_with_patches(self._provider_patches(final_error=True, queries=["one", "two"]))
