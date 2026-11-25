@@ -3,6 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node test/index.test.js"
+    "test": "node test/index.test.js",
+    "check": "wrangler deploy --dry-run",
+    "deploy": "wrangler deploy --keep-vars"
+  },
+  "devDependencies": {
+    "wrangler": "^4.168.0"
   }
 }

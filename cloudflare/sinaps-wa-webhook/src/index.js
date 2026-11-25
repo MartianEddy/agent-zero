@@ -1,5 +1,6 @@
 const MAX_WEBHOOK_BYTES = 1_000_000;
-const UPSTREAM_TIMEOUT_MS = 10_000;
+// Leave room for the bounded classifier + optional source-backed answer turn.
+const UPSTREAM_TIMEOUT_MS = 18_000;
 const AGENT_ZERO_PATH = "/api/v1/channels/whatsapp/webhook";
 
 export default {

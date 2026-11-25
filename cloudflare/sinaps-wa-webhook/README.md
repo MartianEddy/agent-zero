@@ -35,7 +35,7 @@ npx wrangler deploy --dry-run
 
 ## Deployment
 
-The production Worker was deployed on 2026-10-27 as version `f6a95135-21e2-4727-b3b0-f21a2c3ff06a`. Its `AGENT_ZERO_WEBHOOK_URL` targets the Render-confirmed API route below. Render currently reports the API and its database, Redis, and worker dependencies as suspended, so do not treat the channel as live until those services are resumed and API-side WhatsApp settings are confirmed.
+The production Worker was redeployed on 2026-11-25 as version `ba92bc75-b9d9-4cb2-bbf0-96ecb9521313` (18-second upstream timeout), replacing `f6a95135-21e2-4727-b3b0-f21a2c3ff06a`. Wrangler is now a dev dependency: run `npm install`, then `npm run check` (dry run) and `npm run deploy` (`npm run deploy` passes `--keep-vars`, so dashboard variables are preserved). Its `AGENT_ZERO_WEBHOOK_URL` targets the Render-confirmed API route below. Render currently reports the API and its database, Redis, and worker dependencies as suspended, so do not treat the channel as live until those services are resumed and API-side WhatsApp settings are confirmed.
 
 For a future deployment after backend readiness is confirmed, run from this directory:
 
