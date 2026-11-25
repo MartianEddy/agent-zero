@@ -480,7 +480,8 @@ def _result_buttons(
     case = _completed_case(session, settings=settings, sender_ref=sender_ref, reference=reference)
     if case is None:
         return None
-    return copy.result_buttons(case[0].reference)
+    has_sources = bool(_decisive_sources(session, case[1], limit=1))
+    return copy.result_buttons(case[0].reference, has_sources=has_sources)
 
 
 def _retry_message(

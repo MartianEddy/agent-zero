@@ -72,9 +72,22 @@ class FindingView:
     confidence_reason: str
 
 
+# Emoji and pictographs, removed from quoted and user text: replies never show them.
+_EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D]")
+
+
+def _truncate(text: str, limit: int) -> str:
+    """Cut to `limit` characters at a line or word boundary, keeping line breaks."""
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    cut = cut.rsplit("\n", 1)[0] if "\n" in cut[limit // 2 :] else cut.rsplit(" ", 1)[0]
+    return cut.rstrip(",;: \n") + "…"
+
+
 def clip(text: str, limit: int) -> str:
-    """Collapse whitespace and cut at a word boundary."""
-    text = " ".join((text or "").split())
+    """Collapse whitespace, drop emoji and cut at a word boundary."""
+    text = " ".join(_EMOJI.sub("", text or "").split())
     if len(text) <= limit:
         return text
     cut = text[: limit - 1].rsplit(" ", 1)[0].rstrip(",;: ")
@@ -130,10 +143,11 @@ RESULT_BUTTON_LABELS = ("Sources", "Share", "Check another")
 INTERACTIVE_BODY_LIMIT = 1024
 
 
-def result_buttons(reference: str) -> list[tuple[str, str]]:
+def result_buttons(reference: str, *, has_sources: bool = True) -> list[tuple[str, str]]:
     """Button IDs double as typed commands: SOURCES <ref>, SHARE <ref>, NEW."""
     sources, share, new = RESULT_BUTTON_LABELS
-    return [(f"SOURCES {reference}", sources), (f"SHARE {reference}", share), ("NEW", new)]
+    buttons = [(f"SHARE {reference}", share), ("NEW", new)]
+    return ([(f"SOURCES {reference}", sources)] if has_sources else []) + buttons
 
 
 def _how_sure(confidence: str) -> str | None:
@@ -186,12 +200,18 @@ def result_message(
     if details:
         lines.append("\n".join(details))
     if findings:
-        lines.append("Tap *Sources* for the links and quotes, or *Share* to forward it.")
+        lines.append(
+            "Tap *Sources* for the links and quotes, or *Share* to forward it."
+            if source_names
+            else "Tap *Share* to forward it."
+        )
     message = fit("\n\n".join(lines), reference)
     if len(message) > INTERACTIVE_BODY_LIMIT and findings:
         # Too long for a message with buttons: keep the verdicts, drop the detail.
         lines = [line for line in lines if not line.startswith(("*Sources:*", "Tap "))]
-        message = clip(fit("\n\n".join(lines), reference), INTERACTIVE_BODY_LIMIT)
+        footer = f"\n\n_Ref: {reference}_"
+        body = _truncate("\n\n".join(lines), INTERACTIVE_BODY_LIMIT - len(footer))
+        message = body + footer
     return message
 
 
@@ -236,7 +256,7 @@ def share_card(
     if invite:
         lines.append("\n".join(invite))
     lines.append(f"Ref: {reference}")
-    return clip("\n\n".join(lines), MAX_MESSAGE)
+    return _truncate("\n\n".join(lines), MAX_MESSAGE)
 
 
 def no_result_yet() -> str:

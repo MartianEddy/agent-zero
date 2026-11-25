@@ -185,3 +185,27 @@ def test_about_message_names_sinaps_and_is_honest_about_openai():
     assert "built by Sinaps Technology" in text
     assert "including models from OpenAI" in text and "not ChatGPT" in text
     assert "https://agent-zero-web.onrender.com/methodology" in text
+
+
+def test_share_card_keeps_its_line_breaks_and_drops_emoji():
+    card = m.share_card(
+        [("Big news \U0001F4A1 today", "SUPPORTED", "Two sources agree.")],
+        source_names=["Wikipedia"], reference="AZ-1", whatsapp_number=None, site_url=None,
+    )
+    assert "\n\nClaim:" in card and "\n\nSources: Wikipedia" in card
+    assert "\U0001F4A1" not in card
+
+
+def test_without_sources_there_is_no_sources_button_or_hint():
+    assert [t for _i, t in m.result_buttons("AZ-1", has_sources=False)] == [
+        "Share", "Check another"
+    ]
+    text = m.result_message([_finding()], source_names=[], reference="AZ-1")
+    assert "Tap *Share* to forward it." in text and "*Sources*" not in text
+
+
+def test_quoted_source_text_has_no_emoji():
+    text = m.sources_message(
+        [("LinkedIn", "https://linkedin.com/x", "\U0001F4A1 How It Started")], reference="AZ-1"
+    )
+    assert "\U0001F4A1" not in text and "How It Started" in text
