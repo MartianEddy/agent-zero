@@ -141,7 +141,12 @@ def _claim_inbound_event(
         if receipt.conversation_id != conversation.id or receipt.sender_ref != sender_ref:
             session.rollback()
             raise ValueError("WhatsApp provider event identity collision")
+        if receipt.state == "DELIVERED":
+            # Meta retried a message we already answered (for example after a slow
+            # response). Acknowledge it without messaging the user again.
+            return ""
         if receipt.state == "COMPLETED":
+            # The reply was saved but the send did not go through; send it now.
             return receipt.reply_text or "I already handled that message."
         if receipt.state == "IGNORED":
             return ""
@@ -231,7 +236,35 @@ async def _send_saved_reply(
     )
     _complete_inbound_event(session, event=event, reply=reply)
     session.commit()
+    await _deliver(session, event=event, send_message=send_message, reply=reply, buttons=buttons)
+
+
+async def _deliver(
+    session: Session,
+    *,
+    event: ConversationTurn,
+    send_message,
+    reply: str,
+    buttons: list[tuple[str, str]] | None = None,
+) -> None:
+    """Send a reply, then record that it was delivered so a retry is not answered twice.
+
+    If sending raises, the receipt stays COMPLETED and Meta's retry resends the saved reply.
+    """
     if buttons:
         await ports.run_in_threadpool(send_message, event.sender, reply, buttons)
     else:
         await ports.run_in_threadpool(send_message, event.sender, reply)
+    _mark_delivered(session, event)
+
+
+def _mark_delivered(session: Session, event: ConversationTurn) -> None:
+    receipt = session.scalar(
+        select(WhatsAppInboundEvent).where(
+            WhatsAppInboundEvent.provider == common.INBOUND_EVENT_PROVIDER,
+            WhatsAppInboundEvent.message_id == event.message_id,
+        )
+    )
+    if receipt is not None and receipt.state == "COMPLETED":
+        receipt.state = "DELIVERED"
+        session.commit()

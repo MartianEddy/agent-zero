@@ -47,7 +47,9 @@ async def _handle_turn(session: Session, event: ConversationTurn, settings, send
     )
     if saved_reply is not None:
         if saved_reply:
-            await ports.run_in_threadpool(send_message, event.sender, saved_reply)
+            await inbound._deliver(
+                session, event=event, send_message=send_message, reply=saved_reply
+            )
         return True
 
     conversation.recipient_encrypted = identity._encrypt_recipient(event.sender, settings)
@@ -93,7 +95,9 @@ async def _handle_turn(session: Session, event: ConversationTurn, settings, send
     if previous_reply is not None:
         inbound._complete_inbound_event(session, event=event, reply=previous_reply)
         session.commit()
-        await ports.run_in_threadpool(send_message, event.sender, previous_reply)
+        await inbound._deliver(
+            session, event=event, send_message=send_message, reply=previous_reply
+        )
         return True
 
     normalized_command = " ".join(command.casefold().split())
@@ -235,7 +239,7 @@ async def _handle_turn(session: Session, event: ConversationTurn, settings, send
                 confirmation_code=code,
             )
             if saved:
-                await ports.run_in_threadpool(send_message, event.sender, reply)
+                await inbound._deliver(session, event=event, send_message=send_message, reply=reply)
                 return True
             await inbound._send_saved_reply(
                 session,

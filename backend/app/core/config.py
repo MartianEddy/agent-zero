@@ -1,4 +1,5 @@
 import re
+from urllib.parse import urlsplit
 from functools import lru_cache
 from typing import Literal
 from uuid import UUID
@@ -64,6 +65,8 @@ class Settings(BaseSettings):
     whatsapp_identity_key: SecretStr | None = None
     whatsapp_owner_id: UUID | None = None
     whatsapp_graph_api_version: str = "v25.0"
+    # Only changed for end-to-end tests that point at a local fake of the Graph API.
+    whatsapp_graph_base_url: str = "https://graph.facebook.com"
     whatsapp_support_url: AnyHttpUrl | None = None
     whatsapp_conversation_enabled: bool = False
 
@@ -120,6 +123,20 @@ class Settings(BaseSettings):
                 raise ValueError("WHATSAPP_PHONE_NUMBER_ID must contain only digits")
             if len(self.whatsapp_identity_key.get_secret_value()) < 32:
                 raise ValueError("WHATSAPP_IDENTITY_KEY must be at least 32 characters")
+        graph = urlsplit(self.whatsapp_graph_base_url)
+        local_http = graph.scheme == "http" and graph.hostname in {"127.0.0.1", "localhost"}
+        if (
+            graph.scheme not in {"https", "http"}
+            or (graph.scheme == "http" and not local_http)
+            or (local_http and self.app_env not in {"development", "test"})
+            or graph.username
+            or graph.password
+            or graph.path not in {"", "/"}
+        ):
+            raise ValueError(
+                "WHATSAPP_GRAPH_BASE_URL must be an https origin (plain http only on localhost "
+                "in development or test)"
+            )
         if not re.fullmatch(r"v[0-9]+\.[0-9]+", self.whatsapp_graph_api_version):
             raise ValueError("WHATSAPP_GRAPH_API_VERSION must look like v25.0")
         return self

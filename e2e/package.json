@@ -1,0 +1,12 @@
+{
+  "name": "agent-zero-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "web": "node web_e2e.mjs",
+    "whatsapp": "../backend/.venv/bin/python whatsapp_e2e.py"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.0.0"
+  }
+}

@@ -17,7 +17,7 @@ from app.modules.conversations.models import (
     WhatsAppNotificationPreference,
 )
 from app.modules.conversations.schemas import ConversationTurn
-from app.modules.conversations.service import case_replies, common, drafts, identity, inbound, ports
+from app.modules.conversations.service import case_replies, common, drafts, identity, inbound
 
 
 @dataclass
@@ -358,7 +358,7 @@ async def handle_command(turn: Turn) -> bool:
                 confirmation_code=code,
             )
             if saved:
-                await ports.run_in_threadpool(send_message, event.sender, reply)
+                await inbound._deliver(session, event=event, send_message=send_message, reply=reply)
             else:
                 await inbound._send_saved_reply(
                     session,

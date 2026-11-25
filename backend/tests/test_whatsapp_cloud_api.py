@@ -1235,7 +1235,8 @@ def test_explicit_submit_creates_one_investigation_from_approved_claims() -> Non
         preview_version=1,
         confirmation_token="1234ABCD",
     )
-    session.scalar.side_effect = [conversation, None, None]
+    # conversation, idempotency lookup, notification preference, delivery receipt
+    session.scalar.side_effect = [conversation, None, None, None]
     investigation = SimpleNamespace(
         id=UUID(int=200), reference="AZ-261027-ABC123", current_stage="TRIAGE_PENDING"
     )
@@ -2221,3 +2222,47 @@ def test_opinion_gets_a_clear_explanation_and_a_way_forward() -> None:
     send, _gateway, _service = _flow_turn(conversation, "This budget is bad", _output("INVESTIGATION_REQUEST"))
     message = send.call_args.args[1]
     assert "Opinions and predictions" in message and "send just that part" in message
+
+
+def test_graph_base_url_only_allows_local_http_in_development() -> None:
+    import pytest
+
+    from app.core.config import Settings
+
+    assert Settings(whatsapp_graph_base_url="http://127.0.0.1:18999").whatsapp_graph_base_url
+    for bad in ("http://example.com", "ftp://127.0.0.1", "https://user:pw@graph.example", "https://graph.facebook.com/v1"):
+        with pytest.raises(ValueError):
+            Settings(whatsapp_graph_base_url=bad)
+
+
+def test_retry_of_a_delivered_message_is_acknowledged_without_a_second_reply() -> None:
+    from app.modules.conversations.service.inbound import _claim_inbound_event
+
+    now = datetime.now(UTC)
+    receipt = SimpleNamespace(
+        conversation_id=UUID(int=100), sender_ref="hmac-sender", state="DELIVERED",
+        reply_text="Hello", expires_at=now + timedelta(hours=1), lease_expires_at=now,
+    )
+    session = MagicMock()
+    session.scalar.return_value = receipt
+    turn = ConversationTurn(message_id="m", sender="254700000000", message_type="text", text="hi")
+    reply = _claim_inbound_event(
+        session, conversation=_conversation_fixture(), event=turn, sender_ref="hmac-sender", now=now
+    )
+    assert reply == ""
+
+
+def test_saved_but_unsent_reply_is_resent_on_retry() -> None:
+    from app.modules.conversations.service.inbound import _claim_inbound_event
+
+    now = datetime.now(UTC)
+    receipt = SimpleNamespace(
+        conversation_id=UUID(int=100), sender_ref="hmac-sender", state="COMPLETED",
+        reply_text="Hello", expires_at=now + timedelta(hours=1), lease_expires_at=now,
+    )
+    session = MagicMock()
+    session.scalar.return_value = receipt
+    turn = ConversationTurn(message_id="m", sender="254700000000", message_type="text", text="hi")
+    assert _claim_inbound_event(
+        session, conversation=_conversation_fixture(), event=turn, sender_ref="hmac-sender", now=now
+    ) == "Hello"

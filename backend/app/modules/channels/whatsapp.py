@@ -577,7 +577,8 @@ def _send_cloud_message(recipient: str, payload: dict) -> None:
         payload["to"] = recipient
     phone_number_id = settings.whatsapp_phone_number_id
     endpoint = (
-        f"https://graph.facebook.com/{settings.whatsapp_graph_api_version}/"
+        f"{getattr(settings, 'whatsapp_graph_base_url', 'https://graph.facebook.com').rstrip('/')}/"
+        f"{settings.whatsapp_graph_api_version}/"
         f"{phone_number_id}/messages"
     )
     request = Request(
