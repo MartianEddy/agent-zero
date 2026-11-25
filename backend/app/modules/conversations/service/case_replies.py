@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.domain.investigation import Channel, InvestigationStatus
 from app.modules.conversations import messages as copy
 from app.modules.conversations.service import common, ports
+from app.modules.investigations.evidence_ledger import owner_key
 from app.modules.investigations.models import (
     Claim,
     Evidence,
@@ -30,6 +31,7 @@ from app.modules.investigations.service import (
     is_retryable_failure_code,
 )
 from app.modules.investigations.usage import ModelCallBudgetExceeded
+from app.modules.sources.registry import SUFFIX_ENTRIES, lookup_source
 
 
 def _retrieved_sources(session: Session, *, investigation_id: UUID, limit: int = 3) -> list[Source]:
@@ -179,14 +181,15 @@ def _model_unavailable_reply(error: Exception) -> str:
     )
 
 
-def _result_message(
+def _find_case(
     session: Session,
     *,
     settings,
     sender_ref: str,
     reference: str | None,
     conversation_id: UUID | None = None,
-) -> str:
+) -> Investigation | None:
+    """The sender's case with this reference, or their latest case; never anyone else's."""
     reference = reference.upper() if reference else None
     statement = (
         select(Investigation)
@@ -226,6 +229,24 @@ def _result_message(
                 Investigation.created_at.desc()
             ).limit(1)
         investigation = session.scalar(conversation_statement)
+    return investigation
+
+
+def _result_message(
+    session: Session,
+    *,
+    settings,
+    sender_ref: str,
+    reference: str | None,
+    conversation_id: UUID | None = None,
+) -> str:
+    investigation = _find_case(
+        session,
+        settings=settings,
+        sender_ref=sender_ref,
+        reference=reference,
+        conversation_id=conversation_id,
+    )
     if investigation is None:
         return copy.no_check_found()
 
@@ -318,51 +339,148 @@ def _result_message(
             select(Claim).where(Claim.investigation_id == investigation.id)
         )
     }
-    finding_evidence_ids = list(
-        session.scalars(
-            select(FindingEvidence.evidence_id)
-            .join(Finding, Finding.id == FindingEvidence.finding_id)
-            .where(Finding.investigation_id == investigation.id)
-        )
-    )
-    source_ids = {
-        source_id
-        for source_id in session.scalars(
-            select(Evidence.source_id).where(
-                Evidence.id.in_(finding_evidence_ids), Evidence.source_id.is_not(None)
-            )
-        )
-        if source_id is not None
-    }
-    linked_sources = list(
-        session.scalars(
-            select(Source)
-            .where(
-                Source.id.in_(source_ids),
-                Source.retrieval_status == "RETRIEVED",
-            )
-            .order_by(Source.retrieved_at.desc().nullslast(), Source.id)
-            .limit(3)
-        )
-    )
     return copy.result_message(
         [
             copy.FindingView(
                 status=item.status,
                 claim=claims_by_id.get(item.claim_id, ""),
-                headline=item.statement,
+                headline=_plain_why(item),
                 confidence=item.evidence_confidence,
                 confidence_reason=item.confidence_rationale or "",
             )
             for item in findings
         ],
-        sources=_source_pairs(linked_sources),
-        limitations=[item for item in (brief.limitations or [])[:2] if item],
+        source_names=[name for name, _source, _passage in _decisive_sources(session, findings)],
         reference=investigation.reference,
         stopped_early=stopped_early,
         stopped_reason=stopped_reason,
         retry_hint=retry_hint,
     )
+
+
+# Words from the verdict rules that mean nothing to someone reading a result.
+_INTERNAL_WORDING = re.compile(
+    r"threshold|source group|independen\w* group|corroboration requirement|eligible|"
+    r"finding|verdict|excerpt|retrieved evidence|sufficiency",
+    re.IGNORECASE,
+)
+
+
+def _plain_why(finding: Finding) -> str:
+    """One or two plain sentences on what the sources say, from the cited explanation."""
+    sentences = [
+        str(item.get("sentence") or "").strip()
+        for item in (finding.explanation_json or [])
+        if isinstance(item, dict)
+    ]
+    plain = [sentence for sentence in sentences if sentence and not _INTERNAL_WORDING.search(sentence)]
+    why = " ".join(plain[:2])
+    fallback = copy.PLAIN_REASONS.get(finding.status, "")
+    if finding.status == "INSUFFICIENT_EVIDENCE":
+        return f"{why} {fallback}".strip() if why else fallback
+    return why or fallback
+
+
+def _source_name(source: Source) -> str:
+    domain = (source.domain or "").removeprefix("www.")
+    entry = lookup_source(domain) if domain else None
+    if entry is not None and entry.domain not in SUFFIX_ENTRIES:
+        return entry.name
+    if (source.publisher or "") in {"Wikipedia", "Wikidata"}:
+        return source.publisher
+    return domain or "Source"
+
+
+def _decisive_sources(
+    session: Session, findings: list[Finding], *, limit: int = 3
+) -> list[tuple[str, Source, str]]:
+    """Distinct retrieved sources behind the findings: deciding passages first."""
+    if not findings:
+        return []
+    rows = session.execute(
+        select(Evidence, Source)
+        .join(FindingEvidence, FindingEvidence.evidence_id == Evidence.id)
+        .join(Source, Source.id == Evidence.source_id)
+        .where(
+            FindingEvidence.finding_id.in_([item.id for item in findings]),
+            Source.retrieval_status == "RETRIEVED",
+        )
+    ).all()
+    decided = {"SUPPORTS": 0, "CONTRADICTS": 0}
+    rows.sort(key=lambda row: (decided.get(row[0].stance or "", 1), str(row[1].id)))
+    picked: list[tuple[str, Source, str]] = []
+    seen: set[str] = set()
+    for evidence, source in rows:
+        owner = owner_key(source.domain) or str(source.id)
+        if owner in seen:
+            continue
+        seen.add(owner)
+        picked.append((_source_name(source), source, evidence.content or ""))
+        if len(picked) >= limit:
+            break
+    return picked
+
+
+def _completed_case(
+    session: Session, *, settings, sender_ref: str, reference: str | None
+) -> tuple[Investigation, list[Finding]] | None:
+    investigation = _find_case(
+        session, settings=settings, sender_ref=sender_ref, reference=reference
+    )
+    if investigation is None:
+        return None
+    findings = list(
+        session.scalars(
+            select(Finding)
+            .where(Finding.investigation_id == investigation.id)
+            .order_by(Finding.created_at)
+            .limit(5)
+        )
+    )
+    return (investigation, findings) if findings else None
+
+
+def _sources_message(session: Session, *, settings, sender_ref: str, reference: str | None) -> str:
+    case = _completed_case(session, settings=settings, sender_ref=sender_ref, reference=reference)
+    if case is None:
+        return copy.no_result_yet()
+    investigation, findings = case
+    entries = []
+    for name, source, passage in _decisive_sources(session, findings, limit=5):
+        pairs = _source_pairs([source])
+        if pairs:
+            entries.append((name, pairs[0][1], passage))
+    return copy.sources_message(entries, reference=investigation.reference)
+
+
+def _share_message(session: Session, *, settings, sender_ref: str, reference: str | None) -> str:
+    case = _completed_case(session, settings=settings, sender_ref=sender_ref, reference=reference)
+    if case is None:
+        return copy.no_result_yet()
+    investigation, findings = case
+    claims = {
+        claim.id: claim.text
+        for claim in session.scalars(
+            select(Claim).where(Claim.investigation_id == investigation.id)
+        )
+    }
+    return copy.share_card(
+        [(claims.get(item.claim_id, ""), item.status, _plain_why(item)) for item in findings],
+        source_names=[name for name, _source, _passage in _decisive_sources(session, findings)],
+        reference=investigation.reference,
+        whatsapp_number=getattr(settings, "whatsapp_public_number", None),
+        site_url=str(settings.public_site_url) if getattr(settings, "public_site_url", None) else None,
+    )
+
+
+def _result_buttons(
+    session: Session, *, settings, sender_ref: str, reference: str | None
+) -> list[tuple[str, str]] | None:
+    """Sources, Share and Check another, for a result with saved findings."""
+    case = _completed_case(session, settings=settings, sender_ref=sender_ref, reference=reference)
+    if case is None:
+        return None
+    return copy.result_buttons(case[0].reference)
 
 
 def _retry_message(

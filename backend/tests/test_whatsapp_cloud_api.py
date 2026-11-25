@@ -1330,38 +1330,6 @@ def test_meta_redelivery_repeats_saved_conversation_reply_without_retriage() -> 
     gateway.return_value.interpret_whatsapp_turn.assert_not_called()
     send.assert_called_once_with(event.sender, "I received that message.")
 
-def test_result_lookup_is_scoped_to_the_hmac_sender_and_includes_saved_limits() -> None:
-    from app.domain.investigation import InvestigationStatus
-
-    session = MagicMock()
-    investigation = SimpleNamespace(
-        id=UUID(int=42),
-        reference="AZ-261026-ABC123",
-        status=InvestigationStatus.COMPLETE,
-    )
-    brief = SimpleNamespace(limitations=["Only accessible public sources were reviewed."])
-    finding = SimpleNamespace(
-        status="INSUFFICIENT_EVIDENCE",
-        statement="The sources did not establish this claim.",
-        evidence_confidence="LOW",
-        confidence_rationale="Few direct sources.",
-        claim_id=UUID(int=7),
-    )
-    session.scalar.side_effect = [investigation, brief]
-    session.scalars.side_effect = [[finding], [], [], [], []]
-    sender_ref = "private-hmac-reference"
-
-    response = _result_message(
-        session, settings=_settings(), sender_ref=sender_ref, reference="AZ-261026-ABC123"
-    )
-
-    query = session.scalar.call_args_list[0].args[0]
-    assert sender_ref in str(query.compile().params.values())
-    assert "not establish this claim" in response
-    assert "Only accessible public sources were reviewed." in response
-    assert "AZ-261026-ABC123" in response
-
-
 def test_processing_result_shows_actual_stage_and_discourages_resubmitting_claim() -> None:
     from app.domain.investigation import InvestigationStatus
 
@@ -1514,55 +1482,6 @@ def test_failed_result_makes_clear_that_no_assessment_was_produced() -> None:
     assert "https://registry.example/company/123" in response
     assert "tracking=private" not in response
     assert "RETRY AZ-261027-55065A" not in response
-
-
-def test_completed_result_includes_only_sources_linked_to_saved_findings() -> None:
-    from app.domain.investigation import InvestigationStatus
-
-    session = MagicMock()
-    investigation = SimpleNamespace(
-        id=UUID(int=45),
-        reference="AZ-261027-ABC123",
-        status=InvestigationStatus.COMPLETE,
-        current_stage="COMPLETE",
-    )
-    brief = SimpleNamespace(limitations=[])
-    finding = SimpleNamespace(
-        status="SUPPORTED",
-        statement="The record supports the claim.",
-        evidence_confidence="MEDIUM",
-        confidence_rationale="A direct public record was retrieved.",
-        claim_id=UUID(int=8),
-    )
-    linked_source = SimpleNamespace(
-        title="Official company record",
-        publisher="Companies Registry",
-        domain="registry.example",
-        canonical_url="https://registry.example/company/123",
-        url="https://registry.example/company/123",
-    )
-    session.scalar.side_effect = [investigation, brief]
-    session.scalars.side_effect = [
-        [finding],
-        [SimpleNamespace(id=UUID(int=8), text="The company is owned by its shareholders.")],
-        [UUID(int=901)],
-        [UUID(int=902)],
-        [linked_source],
-    ]
-
-    response = _result_message(
-        session,
-        settings=_settings(),
-        sender_ref="private-hmac-reference",
-        reference="az-261027-abc123",
-    )
-
-    assert "*Claim:* The company is owned by its shareholders." in response
-    assert "Evidence supports this claim" in response
-    assert "Evidence strength:* Medium" in response
-    assert "Official company record" in response
-    assert "https://registry.example/company/123" in response
-    assert "AZ-261027-ABC123" in response
 
 
 def test_retry_command_queues_same_sender_case_and_reuses_its_reference() -> None:

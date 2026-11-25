@@ -522,7 +522,7 @@ def send_text_message(recipient: str, body: str) -> None:
 
 
 def send_reply_buttons(
-    recipient: str, body: str, buttons: list[tuple[str, str]]
+    recipient: str, body: str, buttons: list[tuple[str, str]], *, footer: str | None = None
 ) -> None:
     """Send up to three Meta quick-reply buttons with stable application action IDs."""
     if (
@@ -530,6 +530,7 @@ def send_reply_buttons(
         or not body.strip()
         or len(body) > 1024
         or not 1 <= len(buttons) <= 3
+        or (footer is not None and not 0 < len(footer) <= 60)
     ):
         raise WhatsAppSendError("Interactive WhatsApp message is invalid")
     ids = [button_id for button_id, _title in buttons]
@@ -550,6 +551,7 @@ def send_reply_buttons(
             "interactive": {
                 "type": "button",
                 "body": {"text": body.strip()},
+                **({"footer": {"text": footer}} if footer else {}),
                 "action": {
                     "buttons": [
                         {

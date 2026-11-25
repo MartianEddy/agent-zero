@@ -107,17 +107,50 @@ def normalize_command_alias(command: str) -> str:
     return command
 
 
+# Plain reasons, used when the cited explanation has nothing a reader can use.
+PLAIN_REASONS = {
+    "SUPPORTED": "Reliable sources confirm this claim.",
+    "CONTRADICTED": "Reliable sources contradict this claim.",
+    "PARTLY_TRUE": "Sources support part of this claim, but not all of it.",
+    "INSUFFICIENT_EVIDENCE": (
+        "I couldn’t find enough reliable sources that address this directly. "
+        "That doesn’t mean it is true or false."
+    ),
+    "NOT_VERIFIABLE": "This is an opinion or a prediction, so it can’t be checked as a fact.",
+}
+
+HOW_SURE = {
+    "HIGH": "High. Several independent sources agree, including official records.",
+    "MEDIUM": "Medium. Reliable sources agree, but only one or two address this directly.",
+    "LOW": "Low. Little reliable evidence addresses this directly.",
+}
+
+# Button labels are at most 20 characters (Meta).
+RESULT_BUTTON_LABELS = ("Sources", "Share", "Check another")
+INTERACTIVE_BODY_LIMIT = 1024
+
+
+def result_buttons(reference: str) -> list[tuple[str, str]]:
+    """Button IDs double as typed commands: SOURCES <ref>, SHARE <ref>, NEW."""
+    sources, share, new = RESULT_BUTTON_LABELS
+    return [(f"SOURCES {reference}", sources), (f"SHARE {reference}", share), ("NEW", new)]
+
+
+def _how_sure(confidence: str) -> str | None:
+    line = HOW_SURE.get(confidence)
+    return f"*How sure:* {line}" if line else None
+
+
 def result_message(
     findings: list[FindingView],
     *,
-    sources: list[tuple[str, str]],
-    limitations: list[str],
+    source_names: list[str],
     reference: str,
     stopped_early: bool = False,
     stopped_reason: str | None = None,
     retry_hint: str | None = None,
 ) -> str:
-    """Verdict first, then why, then how sure, then where to look."""
+    """Verdict, what the sources say, who they are, how sure. Short enough for buttons."""
     lines: list[str] = []
     if stopped_early:
         note = "*This check stopped early, so treat the result below as preliminary.*"
@@ -133,51 +166,88 @@ def result_message(
         )
     elif len(findings) == 1:
         item = findings[0]
-        label = VERDICT_HEADLINES.get(item.status, "No result yet")
-        lines.append(f"*{label}*")
-        lines.append(f"*Claim:* {clip(item.claim, 240)}")
-        lines.append(f"*Why:* {clip(item.headline, 420)}")
-        lines.append(_confidence_line(item))
+        lines.append(f"*{VERDICT_HEADLINES.get(item.status, 'No result yet')}*")
+        lines.append(f"“{clip(item.claim, 200)}”\n{clip(item.headline, 360)}")
     else:
         lines.append(f"*{len(findings)} claims checked*")
         for number, item in enumerate(findings, start=1):
             label = VERDICT_HEADLINES.get(item.status, "No result yet")
             lines.append(
-                f"{number}. *{label}*\n"
-                f"   {clip(item.claim, 140)}\n"
-                f"   {clip(item.headline, 200)}"
+                f"{number}. *{label}*\n“{clip(item.claim, 110)}”\n{clip(item.headline, 150)}"
             )
-        lines.append(
-            "_Evidence strength shows how much solid evidence was found, "
-            "not the chance a claim is true._"
-        )
 
-    if sources:
-        listed = "\n".join(f"• {title}: {url}" for title, url in sources)
-        lines.append("*Read the sources*\n" + listed)
-    else:
-        lines.append("_No source links to show in this summary._")
+    details = []
+    if source_names:
+        details.append("*Sources:* " + ", ".join(source_names[:3]))
+    if len(findings) == 1:
+        sure = _how_sure(findings[0].confidence)
+        if sure:
+            details.append(sure)
+    if details:
+        lines.append("\n".join(details))
+    if findings:
+        lines.append("Tap *Sources* for the links and quotes, or *Share* to forward it.")
+    message = fit("\n\n".join(lines), reference)
+    if len(message) > INTERACTIVE_BODY_LIMIT and findings:
+        # Too long for a message with buttons: keep the verdicts, drop the detail.
+        lines = [line for line in lines if not line.startswith(("*Sources:*", "Tap "))]
+        message = clip(fit("\n\n".join(lines), reference), INTERACTIVE_BODY_LIMIT)
+    return message
 
-    if limitations:
-        noted = "\n".join(f"• {clip(item, 160)}" for item in limitations[:2])
-        lines.append("*Keep in mind*\n" + noted)
 
-    lines.append("Send me another claim any time, or reply *HELP* to see what I can do.")
+def sources_message(entries: list[tuple[str, str, str]], *, reference: str) -> str:
+    """entries: (source name, link, quoted passage)."""
+    if not entries:
+        return fit("I don’t have source links saved for this check.", reference)
+    lines = ["*Sources for this check*"]
+    for number, (name, url, passage) in enumerate(entries, start=1):
+        quote = " ".join(passage.split())
+        block = f"*{number}. {name}*"
+        if quote:
+            block += f"\n_“{clip(quote, 220)}”_"
+        lines.append(f"{block}\n{url}")
     return fit("\n\n".join(lines), reference)
 
 
-def _confidence_line(item: FindingView) -> str:
-    if item.confidence == "UNASSESSED":
-        return "*Evidence strength:* not recorded for this earlier result."
-    word = CONFIDENCE_WORDS.get(item.confidence, item.confidence.title())
-    reason = clip(item.confidence_reason, 200)
-    line = f"*Evidence strength:* {word}"
-    if reason:
-        line += f". {reason}"
+def share_card(
+    findings: list[tuple[str, str, str]],
+    *,
+    source_names: list[str],
+    reference: str,
+    whatsapp_number: str | None,
+    site_url: str | None,
+) -> str:
+    """A self-contained message made to be forwarded: no commands, no buttons.
+
+    findings: (claim, status, plain reason).
+    """
+    lines = ["*Agent Zero fact-check*"]
+    for claim, status, why in findings[:3]:
+        label = VERDICT_HEADLINES.get(status, "No result yet")
+        lines.append(f"Claim: “{clip(claim, 160)}”\nResult: *{label}*. {clip(why, 200)}")
+    if source_names:
+        lines.append("Sources: " + ", ".join(source_names[:3]))
+    invite = []
+    if whatsapp_number:
+        digits = "".join(ch for ch in whatsapp_number if ch.isdigit())
+        invite.append(f"Check a claim yourself on WhatsApp: https://wa.me/{digits}")
+    if site_url:
+        invite.append(f"Learn more: {site_url.rstrip('/')}")
+    if invite:
+        lines.append("\n".join(invite))
+    lines.append(f"Ref: {reference}")
+    return clip("\n\n".join(lines), MAX_MESSAGE)
+
+
+def no_result_yet() -> str:
     return (
-        line
-        + "\n_This shows how much solid evidence was found, not the chance the claim is true._"
+        "That check doesn’t have a result yet. Reply *STATUS* to see how it’s going, "
+        "or *HISTORY* to see your checks."
     )
+
+
+def new_check_prompt() -> str:
+    return "Send me the next claim, link or screenshot you want checked."
 
 
 def preview_message(claims: list[str], *, notification_notice: str) -> str:
@@ -276,6 +346,8 @@ def help_message() -> str:
         "I’ll show you what I understood *before* I start, so you stay in control.\n\n"
         "*Shortcuts*\n"
         "• *RESULT*: your latest result\n"
+        "• *SOURCES*: the links and quotes behind it\n"
+        "• *SHARE*: a short version to forward to a group\n"
         "• *HISTORY*: your recent checks\n"
         "• *STATUS*: how a check is going\n"
         "• *STOP*: turn off automatic result messages\n\n"

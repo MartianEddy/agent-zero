@@ -232,7 +232,11 @@ def test_completion_notification_sends_saved_result_inside_reply_window():
         patch("app.modules.channels.whatsapp._configured_settings", return_value=_settings()),
         patch("app.modules.conversations.service.identity._decrypt_recipient", return_value="254700000000"),
         patch("app.modules.conversations.service.case_replies._result_message", return_value="Grounded result with sources.") as result,
-        patch("app.modules.channels.whatsapp.send_text_message") as send,
+        patch(
+            "app.modules.conversations.service.case_replies._result_buttons",
+            return_value=[("SOURCES AZ-261028-ED24C0", "Sources"), ("NEW", "Check another")],
+        ),
+        patch("app.modules.channels.whatsapp.send_reply_buttons") as send,
     ):
         session_factory.return_value.__enter__.return_value = session
         status = send_whatsapp_result_notification(str(event.id))
@@ -241,8 +245,9 @@ def test_completion_notification_sends_saved_result_inside_reply_window():
     result.assert_called_once()
     send.assert_called_once_with(
         "254700000000",
-        "Your result is ready. Reference: AZ-261028-ED24C0.\n\n"
-        "Grounded result with sources.\n\nNeed human help? https://support.example.test/contact",
+        "Grounded result with sources.",
+        [("SOURCES AZ-261028-ED24C0", "Sources"), ("NEW", "Check another")],
+        footer="Need a person? https://support.example.test/contact",
     )
     assert event.payload["delivery_state"] == "SENT"
 

@@ -1,6 +1,27 @@
 # WhatsApp experience: findings and proposals (2026-11-25)
 
-Status: proposal for review. Nothing below is built except where marked "done".
+Status, 2026-11-25 (second pass):
+
+| Proposal | Status |
+|---|---|
+| P1 Plain-language result | Built |
+| P2 Buttons (Sources, Share, Check another) | Built; also typed as SOURCES, SHARE, NEW |
+| P3 Forwardable card | Built (SHARE) |
+| P4 One message for fast checks | Built; active once automatic results are on |
+| P5 Progress update | Not built |
+| P6 "Result ready" template | Dropped, see below |
+
+**Correction.** The first pass said the agent already sends results on its own. It does
+not in production. Automatic results only go out when `WHATSAPP_SUPPORT_URL` names a real
+human support route (ADR-009, Meta's human-escalation rule). That variable is unset, and
+the worker had no WhatsApp credentials, so all 7 result notifications so far were
+skipped (`support_escalation_not_configured`). The worker now has the credentials;
+setting the support URL turns automatic results on.
+
+**Why P6 was dropped.** The user's encrypted phone route lives only in the 24-hour
+conversation record (ADR-009), so nothing could be sent after the window anyway. It is
+also not needed: a case waits at most 60 minutes in the queue and runs at most 9, and it
+always starts from a user message, so results arrive inside the window.
 
 ## What a check looks like today
 
@@ -12,8 +33,8 @@ Status: proposal for review. Nothing below is built except where marked "done".
 | 4 | Agent Zero | "Got it. I'm checking this now ... Ref: AZ-7KQ2F" | service |
 | 5 | Agent Zero | Result, sent automatically when the case finishes (1 to 3 minutes) | service |
 
-So the agent already answers on its own after research (step 5). Each check costs three
-business messages.
+Step 5 only happens when automatic results are on (see the correction above). Each check
+costs three business messages.
 
 ## Rules and costs that shape the design
 

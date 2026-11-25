@@ -175,6 +175,7 @@ async def handle_command(turn: Turn) -> bool:
         return True
     if folded in {"result", "results"} or folded.startswith(("result ", "results ")):
         reference = re.sub(r"^results?\s*", "", command, flags=re.IGNORECASE).strip() or None
+        buttons = None
         if reference and parse_reference(reference) is None:
             reply = "To see a result, reply *RESULT* or *RESULT* followed by the reference."
         else:
@@ -185,6 +186,14 @@ async def handle_command(turn: Turn) -> bool:
                 reference=parse_reference(reference),
                 conversation_id=conversation.id,
             )
+            buttons = case_replies._result_buttons(
+                session,
+                settings=settings,
+                sender_ref=sender_ref,
+                reference=parse_reference(reference),
+            )
+            if buttons and len(reply) > copy.INTERACTIVE_BODY_LIMIT:
+                buttons = None
         await inbound._send_saved_reply(
             session,
             conversation=conversation,
@@ -192,6 +201,40 @@ async def handle_command(turn: Turn) -> bool:
             send_message=send_message,
             user_text=command,
             reply=reply,
+            buttons=buttons,
+        )
+        return True
+    for word, build in (
+        ("sources", case_replies._sources_message),
+        ("share", case_replies._share_message),
+    ):
+        if folded == word or folded.startswith(f"{word} "):
+            reference = command[len(word) :].strip() or None
+            reply = build(
+                session,
+                settings=settings,
+                sender_ref=sender_ref,
+                reference=parse_reference(reference) if reference else None,
+            )
+            await inbound._send_saved_reply(
+                session,
+                conversation=conversation,
+                event=event,
+                send_message=send_message,
+                user_text=command,
+                reply=reply,
+            )
+            return True
+    if folded in {"new", "new check", "check another"}:
+        if pending:
+            inbound._clear_conversation_draft(conversation)
+        await inbound._send_saved_reply(
+            session,
+            conversation=conversation,
+            event=event,
+            send_message=send_message,
+            user_text=command,
+            reply=copy.new_check_prompt(),
         )
         return True
     if folded == "status" or folded.startswith("status "):

@@ -91,6 +91,11 @@ services:
         sync: false
       - key: WHATSAPP_SUPPORT_URL
         sync: false
+      # Agent Zero's own number (Meta display number), for the wa.me link in share cards.
+      - key: WHATSAPP_PUBLIC_NUMBER
+        sync: false
+      - key: PUBLIC_SITE_URL
+        sync: false
       # Investigations API: answer only the web server, and scope cases per browser.
       - key: WEB_PROXY_SECRET
         sync: false

@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     # Only changed for end-to-end tests that point at a local fake of the Graph API.
     whatsapp_graph_base_url: str = "https://graph.facebook.com"
     whatsapp_support_url: AnyHttpUrl | None = None
+    # Agent Zero's own WhatsApp number, used in forwarded result cards (wa.me link).
+    whatsapp_public_number: str | None = None
+    # After Submit, wait this long for a fast result before sending "I'm checking".
+    whatsapp_fast_result_wait_seconds: float = 20.0
     # When set, the investigations API only answers the web server (which sends this
     # secret) and scopes cases to the browser identifier it forwards.
     web_proxy_secret: SecretStr | None = None

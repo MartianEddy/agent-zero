@@ -89,9 +89,13 @@ def send_whatsapp_result_notification(event_id: str) -> str:
     from app.modules.channels.whatsapp import (
         WhatsAppConfigurationError,
         _configured_settings,
+        send_reply_buttons,
         send_text_message,
     )
-    from app.modules.conversations.service.case_replies import _result_message
+    from app.modules.conversations.service.case_replies import (
+        _result_buttons,
+        _result_message,
+    )
     from app.modules.conversations.service.identity import _decrypt_recipient
 
     now = datetime.now(UTC)
@@ -191,17 +195,22 @@ def send_whatsapp_result_notification(event_id: str) -> str:
                         sender_ref=sender_ref,
                         reference=reference,
                     )
-                    if len(message) > 3900:
-                        message = (
-                            f"Your result is ready. Reference: {reference}. "
-                            f"Send RESULT {reference} to view the complete assessment and sources."
-                        )
-                    message = (
-                        f"Your result is ready. Reference: {reference}.\n\n"
-                        f"{message}\n\nNeed human help? {support_url}"
+                    buttons = _result_buttons(
+                        session,
+                        settings=settings,
+                        sender_ref=sender_ref,
+                        reference=reference,
                     )
+                    help_line = f"Need a person? {support_url}"
                     try:
-                        send_text_message(recipient, message)
+                        if buttons and len(message) <= 1024:
+                            footer = help_line if len(help_line) <= 60 else None
+                            body = message if footer else f"{message}\n\n{help_line}"
+                            if len(body) > 1024:
+                                body = message
+                            send_reply_buttons(recipient, body, buttons, footer=footer)
+                        else:
+                            send_text_message(recipient, f"{message}\n\n{help_line}")
                     except WhatsAppConfigurationError:
                         delivery_state, reason = "FAILED", "channel_not_configured"
                     except Exception as exc:  # transport failures leave polling available

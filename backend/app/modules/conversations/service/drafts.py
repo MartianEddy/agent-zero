@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import re
 import secrets
@@ -26,6 +27,7 @@ from app.modules.investigations.models import (
     OutboxEvent,
     ProcessingJob,
     SearchTrace,
+    VerificationBrief,
 )
 from app.modules.investigations.triage import normalize_claim_text
 
@@ -287,7 +289,33 @@ async def _confirm_conversation_draft(
     )
     inbound._complete_inbound_event(session, event=event, reply=reply)
     session.commit()
+    wait = float(getattr(settings, "whatsapp_fast_result_wait_seconds", 0) or 0)
+    if notification_enabled and wait > 0 and await _finished_within(
+        session, investigation.id, wait
+    ):
+        # The worker is already sending the result; "I'm checking" would arrive after it.
+        return "", True
     return reply, True
+
+
+async def _finished_within(session: Session, investigation_id, seconds: float) -> bool:
+    """Whether the case's result is saved within `seconds` (fast settled facts often are).
+
+    The user's tap already shows a typing indicator, which lasts up to 25 seconds.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    while loop.time() < deadline:
+        await asyncio.sleep(min(1.0, max(0.0, deadline - loop.time())))
+        done = session.scalar(
+            select(VerificationBrief.id).where(
+                VerificationBrief.investigation_id == investigation_id
+            )
+        )
+        session.commit()  # end the read so the next poll sees the worker's commits
+        if done is not None:
+            return True
+    return False
 
 
 def _draft_words(draft_text: str) -> str:

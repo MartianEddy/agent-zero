@@ -251,6 +251,10 @@ async def _deliver(
 
     If sending raises, the receipt stays COMPLETED and Meta's retry resends the saved reply.
     """
+    if not reply:
+        # Nothing to say: another message (such as a fast result) answers this turn.
+        _mark_delivered(session, event)
+        return
     if buttons:
         await ports.run_in_threadpool(send_message, event.sender, reply, buttons)
     else:
