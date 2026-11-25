@@ -3,7 +3,7 @@
 import hashlib
 import json
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.modules.investigations.investigator import (
@@ -13,6 +13,7 @@ from app.modules.investigations.models import (
     Claim,
     ClaimEvidence,
     Evidence,
+    Finding,
     Investigation,
     SearchTrace,
     Source,
@@ -268,7 +269,7 @@ def _run_fast_path_claims(
         )
     )
     fast_indexes: set[int] = set()
-    ready: list[Claim] = []
+    ready: list[tuple[int, Claim]] = []
     for index, claim in enumerate(claims):
         if claim.claim_type == "OPINION_OR_PREDICTION":
             findings_stage._record_deterministic_finding(
@@ -286,18 +287,9 @@ def _run_fast_path_claims(
             continue
         if claim.claim_type != "SETTLED_FACT" or claim.needs_deep_investigation:
             continue
-        fast_indexes.add(index)
         remaining = lookup_deadline - ports.monotonic()
         if remaining <= 0:
-            findings_stage._record_deterministic_finding(
-                session,
-                investigation,
-                claim,
-                status="INSUFFICIENT_EVIDENCE",
-                statement="The reference check did not finish in time to assess this claim.",
-                confidence_reason="No usable authoritative reference passage was retrieved.",
-                limitation="The reference-source check could not finish in time.",
-            )
+            # No time for the shortcut; the claim goes through full research instead.
             continue
         result = ports.lookup_settled_fact(claim.text, deadline_seconds=remaining)
         _persist_settled_reference_evidence(
@@ -317,21 +309,29 @@ def _run_fast_path_claims(
             .limit(1)
         )
         if wiki_evidence is None:
-            unavailable = (
-                "; ".join(result.unavailable) or "No relevant Wikipedia article text was returned."
-            )
-            findings_stage._record_deterministic_finding(
-                session,
-                investigation,
-                claim,
-                status="INSUFFICIENT_EVIDENCE",
-                statement=f"I couldn’t complete an authoritative reference check: {unavailable} No conclusion was drawn from model knowledge alone.",
-                confidence_reason="No retrieved authoritative reference passage was available for this claim.",
-                limitation=unavailable,
-            )
+            # No usable reference passage: research the claim fully instead of giving up.
             continue
-        ready.append(claim)
+        ready.append((index, claim))
 
     if ready:
-        _assess_settled_claims(session, investigation, ready, case_deadline=case_deadline)
+        _assess_settled_claims(
+            session, investigation, [claim for _, claim in ready], case_deadline=case_deadline
+        )
+        for index, claim in ready:
+            if _keep_fast_result(session, claim):
+                fast_indexes.add(index)
     return fast_indexes
+
+
+def _keep_fast_result(session: Session, claim: Claim) -> bool:
+    """Keep a reference-only result only if it reached a verdict.
+
+    An undecided shortcut result is removed, so the claim is searched and read in full
+    and the reference passage is reconsidered alongside the other evidence.
+    """
+    status = session.scalar(select(Finding.status).where(Finding.claim_id == claim.id).limit(1))
+    if status in {"SUPPORTED", "CONTRADICTED"}:
+        return True
+    session.execute(delete(Finding).where(Finding.claim_id == claim.id))
+    session.commit()
+    return False

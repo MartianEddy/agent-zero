@@ -511,6 +511,10 @@ class CostControlledPipelineTests(unittest.TestCase):
                 "app.modules.investigations.orchestrator.ports.ModelGateway"
             ) as gateway,
             patch("app.modules.investigations.orchestrator.findings_stage._persist_findings"),
+            patch(
+                "app.modules.investigations.orchestrator.settled_facts._keep_fast_result",
+                return_value=True,
+            ),
             patch("app.modules.investigations.orchestrator.ports.add_limitation") as add_limitation,
         ):
             gateway.return_value.reason_about_evidence.return_value = SimpleNamespace(
@@ -551,6 +555,10 @@ class CostControlledPipelineTests(unittest.TestCase):
             ) as packet,
             patch("app.modules.investigations.orchestrator.ports.ModelGateway") as gateway,
             patch("app.modules.investigations.orchestrator.findings_stage._persist_findings"),
+            patch(
+                "app.modules.investigations.orchestrator.settled_facts._keep_fast_result",
+                return_value=True,
+            ),
         ):
             gateway.return_value.reason_about_evidence.return_value = SimpleNamespace(
                 output=SimpleNamespace()
@@ -562,6 +570,41 @@ class CostControlledPipelineTests(unittest.TestCase):
         self.assertEqual(fast_indexes, {0, 1})
         gateway.return_value.reason_about_evidence.assert_called_once()
         self.assertEqual(len(packet.call_args.args[1]), 2)
+
+    def test_undecided_reference_result_is_removed_so_the_claim_is_researched(self) -> None:
+        from app.modules.investigations.models import Finding
+        from app.modules.investigations.orchestrator.settled_facts import _keep_fast_result
+
+        claim = Claim(
+            investigation_id=self.investigation.id,
+            text="Kenya gained independence in 1963.",
+            normalized_text="kenya gained independence in 1963",
+            claim_type="SETTLED_FACT",
+        )
+        self.session.add(claim)
+        self.session.flush()
+        self.session.add(
+            Finding(
+                investigation_id=self.investigation.id,
+                claim_id=claim.id,
+                status="INSUFFICIENT_EVIDENCE",
+                statement="x",
+            )
+        )
+        self.session.commit()
+        self.assertFalse(_keep_fast_result(self.session, claim))
+        self.assertIsNone(self.session.scalar(select(Finding).where(Finding.claim_id == claim.id)))
+
+        self.session.add(
+            Finding(
+                investigation_id=self.investigation.id,
+                claim_id=claim.id,
+                status="SUPPORTED",
+                statement="x",
+            )
+        )
+        self.session.commit()
+        self.assertTrue(_keep_fast_result(self.session, claim))
 
     def test_retry_endpoint_queues_once_and_preserves_existing_records(self) -> None:
         self._run_with_patches(self._provider_patches(final_error=True))

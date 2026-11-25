@@ -6,19 +6,18 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.modules.investigations.evidence_ledger import owner_key
 from app.modules.investigations.models import (
     Investigation,
     Source,
     utcnow,
 )
-from app.modules.investigations.evidence_ledger import owner_key
 from app.modules.investigations.orchestrator import common, ports
 from app.modules.sources.registry import classify_source
 from app.modules.sources.retrieval import (
     SourceRetrievalError,
 )
 from app.modules.sources.urls import normalize_source_url
-
 
 MAX_CANDIDATES_PER_SITE = 3
 

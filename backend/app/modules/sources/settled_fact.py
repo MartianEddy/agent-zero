@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
@@ -10,6 +11,11 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 MAX_RESPONSE_BYTES = 1_000_000
+# Wikimedia asks API clients to identify themselves with a way to contact the operator.
+USER_AGENT = (
+    "AgentZero/0.2 (https://agent-zero-web.onrender.com; Sinaps Technology fact-checking; "
+    "reference lookup)"
+)
 MAX_EXCERPT_CHARS = 1_500
 PER_REQUEST_TIMEOUT_SECONDS = 1.8
 
@@ -38,7 +44,7 @@ def _request_json(url: str, *, deadline: float) -> dict[str, object]:
         url,
         headers={
             "Accept": "application/json",
-            "User-Agent": "AgentZero/0.1 (settled fact reference lookup)",
+            "User-Agent": USER_AGENT,
         },
     )
     try:
@@ -55,6 +61,59 @@ def _request_json(url: str, *, deadline: float) -> dict[str, object]:
     if not isinstance(value, dict):
         raise RuntimeError("reference provider returned an invalid response")
     return value
+
+
+_SENTENCE = re.compile(r"[^.!?\n]+[.!?]?")
+_TERM = re.compile(r"[a-z0-9]{3,}")
+_STOP = {"the", "and", "was", "were", "for", "with", "that", "this", "from", "are", "has", "had"}
+
+
+def _terms(text: str) -> set[str]:
+    return {word for word in _TERM.findall(text.casefold()) if word not in _STOP}
+
+
+def best_matching_passage(claim_text: str, article: str, *, sentences: int = 3) -> str | None:
+    """Return the run of sentences in the article that shares the most terms with the claim.
+
+    The result is an exact substring of the article, so it can still be validated.
+    """
+    claim_terms = _terms(claim_text)
+    spans = [(m.start(), m.end()) for m in _SENTENCE.finditer(article) if m.group().strip()]
+    if not claim_terms or not spans:
+        return None
+    best: tuple[int, int, int] | None = None
+    for i in range(len(spans)):
+        window = spans[i : i + sentences]
+        text = article[window[0][0] : window[-1][1]]
+        score = len(claim_terms & _terms(text))
+        if best is None or score > best[0]:
+            best = (score, window[0][0], window[-1][1])
+    if best is None or best[0] == 0:
+        return None
+    return article[best[1] : best[2]].strip()[:MAX_EXCERPT_CHARS]
+
+
+def _full_extract(title: str, *, deadline: float) -> str | None:
+    params = urlencode(
+        {
+            "action": "query",
+            "prop": "extracts",
+            "titles": title[:300],
+            "explaintext": "1",
+            "exsectionformat": "plain",
+            "format": "json",
+            "formatversion": "2",
+        }
+    )
+    try:
+        result = _request_json(f"https://en.wikipedia.org/w/api.php?{params}", deadline=deadline)
+    except (RuntimeError, TimeoutError):
+        return None
+    pages = (result.get("query") or {}).get("pages") if isinstance(result, dict) else None
+    if isinstance(pages, list) and pages and isinstance(pages[0], dict):
+        text = pages[0].get("extract")
+        return text if isinstance(text, str) else None
+    return None
 
 
 def lookup_settled_fact(
@@ -77,6 +136,7 @@ def lookup_settled_fact(
             "prop": "extracts|info",
             "inprop": "url",
             "explaintext": "1",
+            "exintro": "1",
             "exsentences": "4",
             "format": "json",
             "formatversion": "2",
@@ -89,12 +149,23 @@ def lookup_settled_fact(
         pages = query.get("pages", []) if isinstance(query, dict) else []
         if not isinstance(pages, list):
             pages = []
-        for page in pages[:3]:
+        # Search results arrive unordered; "index" is the search rank.
+        pages = sorted(
+            (page for page in pages if isinstance(page, dict)),
+            key=lambda page: page.get("index", 99),
+        )
+        for rank, page in enumerate(pages[:3]):
             if not isinstance(page, dict):
                 continue
             excerpt = page.get("extract")
             url = page.get("fullurl")
             title = page.get("title")
+            if rank == 0 and isinstance(title, str) and time.monotonic() < deadline - 0.3:
+                # The intro often omits the specific fact; read the article and keep the
+                # passage that best matches the claim.
+                full = _full_extract(title, deadline=deadline)
+                if full:
+                    excerpt = best_matching_passage(claim_text, full) or excerpt
             if isinstance(excerpt, str) and excerpt.strip() and isinstance(url, str):
                 excerpts.append(
                     ReferenceExcerpt(

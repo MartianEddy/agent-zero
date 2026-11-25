@@ -95,6 +95,7 @@ A replay of production evidence showed claims with good evidence ending as "not 
 - **Relevance guard.** A SUPPORTS or CONTRADICTS label only counts if the passage shares distinctive terms with the claim.
 - **Retrieval.** Up to 14 candidates and 8 pages per case (was 8 and 5); `www.` and non-`www.` URLs are one page; at most 3 candidates and 2 reads per site per round; an earlier pass's read limit no longer blocks later passes. Previously every case stopped after 3 pages.
 - **Settled-fact timing.** The reference lookup keeps a 5-second limit, but the assessment now has up to 45 seconds (it previously shared the 5 seconds and often timed out).
+- **Settled facts fall through.** The reference lookup is a shortcut, not the final word. If it finds no usable passage, or the passage does not decide the claim, the claim is researched in full (search and page reading) with the reference passage kept as evidence. Wikipedia results are taken in search-rank order, and the passage that best matches the claim is chosen from the top article, not just its first four sentences.
 - **Clearer "not enough evidence".** When nothing countable was found, the headline says what was found and why it could not count.
 
 ## Verdict gates

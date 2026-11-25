@@ -53,3 +53,17 @@ class SettledFactLookupTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_best_matching_passage_finds_the_fact_beyond_the_intro():
+    from app.modules.sources.settled_fact import best_matching_passage
+
+    article = (
+        "Kenya is a country in East Africa. Its capital is Nairobi. "
+        "It has many national parks. Kenya gained independence on 12 December 1963. "
+        "Jomo Kenyatta led the new government."
+    )
+    passage = best_matching_passage("Kenya gained independence in 1963.", article)
+    assert "gained independence on 12 December 1963" in passage
+    assert passage in article
+    assert best_matching_passage("Unrelated words here.", article) is None
