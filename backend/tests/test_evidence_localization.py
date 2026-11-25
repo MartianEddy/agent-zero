@@ -414,11 +414,11 @@ class EvidencePipelineIntegrationTests(unittest.TestCase):
 
         with (
             patch(
-                "app.modules.investigations.orchestrator.get_settings", return_value=self.settings
+                "app.modules.investigations.orchestrator.ports.get_settings", return_value=self.settings
             ),
-            patch("app.modules.investigations.orchestrator.read_public_page", side_effect=read),
+            patch("app.modules.investigations.orchestrator.ports.read_public_page", side_effect=read),
             patch(
-                "app.modules.investigations.orchestrator.put_private_object",
+                "app.modules.investigations.orchestrator.ports.put_private_object",
                 side_effect=lambda *, key, data, content_type: self.object_store.__setitem__(
                     key, data
                 ),
@@ -442,10 +442,10 @@ class EvidencePipelineIntegrationTests(unittest.TestCase):
         calls: list[str] = []
         with (
             patch(
-                "app.modules.investigations.orchestrator.get_settings", return_value=self.settings
+                "app.modules.investigations.orchestrator.ports.get_settings", return_value=self.settings
             ),
             patch(
-                "app.modules.investigations.orchestrator.read_public_page",
+                "app.modules.investigations.orchestrator.ports.read_public_page",
                 side_effect=lambda url, **_kwargs: (
                     calls.append(url)
                     or RetrievedPage(
@@ -454,7 +454,7 @@ class EvidencePipelineIntegrationTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "app.modules.investigations.orchestrator.put_private_object",
+                "app.modules.investigations.orchestrator.ports.put_private_object",
                 side_effect=lambda *, key, data, content_type: self.object_store.__setitem__(
                     key, data
                 ),
@@ -482,14 +482,14 @@ class EvidencePipelineIntegrationTests(unittest.TestCase):
         calls: list[str] = []
         with (
             patch(
-                "app.modules.investigations.orchestrator.get_settings", return_value=self.settings
+                "app.modules.investigations.orchestrator.ports.get_settings", return_value=self.settings
             ),
             patch(
-                "app.modules.investigations.orchestrator.get_private_object",
+                "app.modules.investigations.orchestrator.ports.get_private_object",
                 side_effect=lambda *, key: self.object_store[key],
             ),
             patch(
-                "app.modules.investigations.orchestrator.read_public_page",
+                "app.modules.investigations.orchestrator.ports.read_public_page",
                 side_effect=lambda url, **_kwargs: (
                     calls.append(url)
                     or RetrievedPage(
@@ -498,7 +498,7 @@ class EvidencePipelineIntegrationTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "app.modules.investigations.orchestrator.put_private_object",
+                "app.modules.investigations.orchestrator.ports.put_private_object",
                 side_effect=lambda *, key, data, content_type: self.object_store.__setitem__(
                     key, data
                 ),
@@ -518,7 +518,7 @@ class EvidencePipelineIntegrationTests(unittest.TestCase):
             "million smartphones recorded in June 2026."
         )
         with patch(
-            "app.modules.investigations.orchestrator.get_settings", return_value=self.settings
+            "app.modules.investigations.orchestrator.ports.get_settings", return_value=self.settings
         ):
             _persist_evidence(self.session, self.investigation, {source.id: page})
         rows = list(self.session.scalars(select(Evidence).where(Evidence.source_id == source.id)))
@@ -538,20 +538,20 @@ class EvidencePipelineIntegrationTests(unittest.TestCase):
         self.settings.max_matching_regions_per_claim = 4
         with (
             patch(
-                "app.modules.investigations.orchestrator.get_settings", return_value=self.settings
+                "app.modules.investigations.orchestrator.ports.get_settings", return_value=self.settings
             ),
             patch(
-                "app.modules.investigations.orchestrator.read_public_page",
+                "app.modules.investigations.orchestrator.ports.read_public_page",
                 return_value=RetrievedPage(requested_url=source.url, text=LONG_Q4_TEXT),
             ),
             patch(
-                "app.modules.investigations.orchestrator.put_private_object",
+                "app.modules.investigations.orchestrator.ports.put_private_object",
                 side_effect=lambda *, key, data, content_type: self.object_store.__setitem__(
                     key, data
                 ),
             ),
             patch(
-                "app.modules.investigations.orchestrator.get_private_object",
+                "app.modules.investigations.orchestrator.ports.get_private_object",
                 side_effect=lambda *, key: self.object_store[key],
             ),
         ):
@@ -589,7 +589,7 @@ class EvidencePipelineIntegrationTests(unittest.TestCase):
         bulk_page = "DISCLAIMER CONTACTS TABLE OF CONTENTS " + ("irrelevant page text " * 500)
         self.object_store[source.content_storage_key] = bulk_page.encode()
         with patch(
-            "app.modules.investigations.orchestrator.get_settings", return_value=self.settings
+            "app.modules.investigations.orchestrator.ports.get_settings", return_value=self.settings
         ):
             packet = _evidence_packet(self.session, self.investigation)
         decoded = json.loads(packet)
@@ -617,7 +617,7 @@ class EvidencePipelineIntegrationTests(unittest.TestCase):
         )
         self.session.commit()
         with patch(
-            "app.modules.investigations.orchestrator.get_settings",
+            "app.modules.investigations.orchestrator.ports.get_settings",
             return_value=self.settings,
         ):
             packet = _evidence_packet(self.session, self.investigation)
@@ -631,7 +631,7 @@ class EvidencePipelineIntegrationTests(unittest.TestCase):
         second.content_sha256 = "same-hash"
         self.session.commit()
         with patch(
-            "app.modules.investigations.orchestrator.get_settings", return_value=self.settings
+            "app.modules.investigations.orchestrator.ports.get_settings", return_value=self.settings
         ):
             _detect_source_relationships(
                 self.session, self.investigation, {first.id: "first", second.id: "second"}

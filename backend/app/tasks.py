@@ -91,7 +91,8 @@ def send_whatsapp_result_notification(event_id: str) -> str:
         _configured_settings,
         send_text_message,
     )
-    from app.modules.conversations.service import _decrypt_recipient, _result_message
+    from app.modules.conversations.service.case_replies import _result_message
+    from app.modules.conversations.service.identity import _decrypt_recipient
 
     now = datetime.now(UTC)
     with SessionLocal() as session:

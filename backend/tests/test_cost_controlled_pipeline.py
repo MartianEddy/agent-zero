@@ -228,23 +228,23 @@ class CostControlledPipelineTests(unittest.TestCase):
 
         patches = [
             patch(
-                "app.modules.investigations.orchestrator.get_settings", return_value=self.settings
+                "app.modules.investigations.orchestrator.ports.get_settings", return_value=self.settings
             ),
-            patch("app.modules.investigations.orchestrator.ModelGateway", FakeInvestigator),
-            patch("app.modules.investigations.orchestrator.search_exa", side_effect=search),
+            patch("app.modules.investigations.orchestrator.ports.ModelGateway", FakeInvestigator),
+            patch("app.modules.investigations.orchestrator.ports.search_exa", side_effect=search),
             patch(
-                "app.modules.investigations.orchestrator.search_openai_web",
+                "app.modules.investigations.orchestrator.ports.search_openai_web",
                 side_effect=search_openai,
             ),
-            patch("app.modules.investigations.orchestrator.read_public_page", side_effect=retrieve),
+            patch("app.modules.investigations.orchestrator.ports.read_public_page", side_effect=retrieve),
             patch(
-                "app.modules.investigations.orchestrator.put_private_object",
+                "app.modules.investigations.orchestrator.ports.put_private_object",
                 side_effect=lambda *, key, data, content_type: self.object_store.__setitem__(
                     key, data
                 ),
             ),
             patch(
-                "app.modules.investigations.orchestrator.get_private_object",
+                "app.modules.investigations.orchestrator.ports.get_private_object",
                 side_effect=lambda *, key: self.object_store[key],
             ),
         ]
@@ -400,7 +400,7 @@ class CostControlledPipelineTests(unittest.TestCase):
             ],
         )
         with patch(
-            "app.modules.investigations.orchestrator.get_settings", return_value=self.settings
+            "app.modules.investigations.orchestrator.ports.get_settings", return_value=self.settings
         ):
             _persist_plan(self.session, self.investigation, plan)
 
@@ -432,7 +432,7 @@ class CostControlledPipelineTests(unittest.TestCase):
             ],
         )
         with patch(
-            "app.modules.investigations.orchestrator.get_settings", return_value=self.settings
+            "app.modules.investigations.orchestrator.ports.get_settings", return_value=self.settings
         ):
             _persist_plan(self.session, self.investigation, plan)
 
@@ -471,23 +471,23 @@ class CostControlledPipelineTests(unittest.TestCase):
 
         with (
             patch(
-                "app.modules.investigations.orchestrator.monotonic",
+                "app.modules.investigations.orchestrator.ports.monotonic",
                 side_effect=[0.0, 0.0, 7.0],
             ),
             patch(
-                "app.modules.investigations.orchestrator.lookup_settled_fact",
+                "app.modules.investigations.orchestrator.ports.lookup_settled_fact",
                 return_value=SimpleNamespace(),
             ),
-            patch("app.modules.investigations.orchestrator._persist_settled_reference_evidence"),
+            patch("app.modules.investigations.orchestrator.settled_facts._persist_settled_reference_evidence"),
             patch(
-                "app.modules.investigations.orchestrator._settled_claims_packet",
+                "app.modules.investigations.orchestrator.settled_facts._settled_claims_packet",
                 return_value=object(),
             ),
             patch(
-                "app.modules.investigations.orchestrator.ModelGateway"
+                "app.modules.investigations.orchestrator.ports.ModelGateway"
             ) as gateway,
-            patch("app.modules.investigations.orchestrator._persist_findings"),
-            patch("app.modules.investigations.orchestrator.add_limitation") as add_limitation,
+            patch("app.modules.investigations.orchestrator.findings_stage._persist_findings"),
+            patch("app.modules.investigations.orchestrator.ports.add_limitation") as add_limitation,
         ):
             gateway.return_value.reason_about_evidence.return_value = SimpleNamespace(
                 output=SimpleNamespace()
@@ -515,18 +515,18 @@ class CostControlledPipelineTests(unittest.TestCase):
         self.session.scalar = lambda _statement: UUID(int=123)
 
         with (
-            patch("app.modules.investigations.orchestrator.monotonic", return_value=0.0),
+            patch("app.modules.investigations.orchestrator.ports.monotonic", return_value=0.0),
             patch(
-                "app.modules.investigations.orchestrator.lookup_settled_fact",
+                "app.modules.investigations.orchestrator.ports.lookup_settled_fact",
                 return_value=SimpleNamespace(),
             ),
-            patch("app.modules.investigations.orchestrator._persist_settled_reference_evidence"),
+            patch("app.modules.investigations.orchestrator.settled_facts._persist_settled_reference_evidence"),
             patch(
-                "app.modules.investigations.orchestrator._settled_claims_packet",
+                "app.modules.investigations.orchestrator.settled_facts._settled_claims_packet",
                 return_value="{}",
             ) as packet,
-            patch("app.modules.investigations.orchestrator.ModelGateway") as gateway,
-            patch("app.modules.investigations.orchestrator._persist_findings"),
+            patch("app.modules.investigations.orchestrator.ports.ModelGateway") as gateway,
+            patch("app.modules.investigations.orchestrator.findings_stage._persist_findings"),
         ):
             gateway.return_value.reason_about_evidence.return_value = SimpleNamespace(
                 output=SimpleNamespace()
@@ -584,7 +584,7 @@ class CostControlledPipelineTests(unittest.TestCase):
                 )
 
         patches = self._provider_patches(final_error=False)
-        patches[1] = patch("app.modules.investigations.orchestrator.ModelGateway", FakeInvestigator)
+        patches[1] = patch("app.modules.investigations.orchestrator.ports.ModelGateway", FakeInvestigator)
         self.assertEqual(self._run_with_patches(patches), "needs_review")
         self.assertEqual(
             self.investigation.failure_reason,

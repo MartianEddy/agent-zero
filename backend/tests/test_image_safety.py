@@ -332,11 +332,11 @@ def test_normalized_derivative_lineage_and_retry_are_idempotent() -> None:
         normalized = fixture_image("png", 4, 4)
         with (
             patch(
-                "app.modules.investigations.orchestrator.get_private_object", return_value=original
+                "app.modules.investigations.orchestrator.ports.get_private_object", return_value=original
             ) as get,
-            patch("app.modules.investigations.orchestrator.put_private_object") as put,
+            patch("app.modules.investigations.orchestrator.ports.put_private_object") as put,
             patch(
-                "app.modules.investigations.orchestrator.inspect_media",
+                "app.modules.investigations.orchestrator.ports.inspect_media",
                 return_value=(
                     {"normalization": {"operation": "normalize_image"}},
                     [("image/png", normalized)],

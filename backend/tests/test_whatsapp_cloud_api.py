@@ -901,16 +901,16 @@ def test_natural_confirmation_requires_the_code_for_the_active_preview() -> None
         return function(*args, **kwargs)
 
     with (
-        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
-        patch("app.modules.conversations.service._complete_inbound_event"),
-            patch("app.modules.conversations.service._notification_preference", return_value=None),
-        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch("app.modules.conversations.service.inbound._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service.inbound._complete_inbound_event"),
+            patch("app.modules.conversations.service.identity._notification_preference", return_value=None),
+        patch("app.modules.conversations.service.ports.ModelGateway") as gateway,
         patch("app.modules.channels.whatsapp.send_text_message") as send,
         patch(
-            "app.modules.conversations.service.run_in_threadpool",
+            "app.modules.conversations.service.ports.run_in_threadpool",
             side_effect=immediate_in_threadpool,
         ),
-        patch("app.modules.conversations.service.InvestigationService") as investigations,
+        patch("app.modules.conversations.service.ports.InvestigationService") as investigations,
     ):
         gateway.return_value.interpret_whatsapp_turn = AsyncMock(
             return_value=SimpleNamespace(output=output)
@@ -1010,14 +1010,14 @@ def test_inbound_text_uses_luna_to_create_preview_without_creating_case() -> Non
         reference=None,
     )
     with (
-        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
-        patch("app.modules.conversations.service._complete_inbound_event"),
-        patch("app.modules.conversations.service._notification_preference", return_value=None),
-        patch("app.modules.conversations.service.InvestigationService") as service,
-        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch("app.modules.conversations.service.inbound._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service.inbound._complete_inbound_event"),
+        patch("app.modules.conversations.service.identity._notification_preference", return_value=None),
+        patch("app.modules.conversations.service.ports.InvestigationService") as service,
+        patch("app.modules.conversations.service.ports.ModelGateway") as gateway,
         patch("app.modules.channels.whatsapp.send_reply_buttons") as send,
         patch(
-            "app.modules.conversations.service.run_in_threadpool",
+            "app.modules.conversations.service.ports.run_in_threadpool",
             side_effect=immediate_in_threadpool,
         ),
     ):
@@ -1069,13 +1069,13 @@ def test_placeholder_claim_from_luna_is_rejected_before_preview() -> None:
         return function(*args, **kwargs)
 
     with (
-        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
-        patch("app.modules.conversations.service._complete_inbound_event"),
-        patch("app.modules.conversations.service.InvestigationService") as investigations,
-        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch("app.modules.conversations.service.inbound._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service.inbound._complete_inbound_event"),
+        patch("app.modules.conversations.service.ports.InvestigationService") as investigations,
+        patch("app.modules.conversations.service.ports.ModelGateway") as gateway,
         patch("app.modules.channels.whatsapp.send_text_message") as send,
         patch(
-            "app.modules.conversations.service.run_in_threadpool",
+            "app.modules.conversations.service.ports.run_in_threadpool",
             side_effect=immediate_in_threadpool,
         ),
     ):
@@ -1118,10 +1118,10 @@ def test_edit_button_reopens_draft_without_preserving_old_preview() -> None:
         return function(*args, **kwargs)
 
     with (
-        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
-        patch("app.modules.conversations.service._complete_inbound_event"),
+        patch("app.modules.conversations.service.inbound._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service.inbound._complete_inbound_event"),
         patch(
-            "app.modules.conversations.service.run_in_threadpool",
+            "app.modules.conversations.service.ports.run_in_threadpool",
             side_effect=immediate_in_threadpool,
         ),
     ):
@@ -1160,11 +1160,11 @@ def test_stale_edit_button_cannot_change_a_newer_preview() -> None:
         return function(*args, **kwargs)
 
     with (
-        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
-        patch("app.modules.conversations.service._complete_inbound_event"),
-        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch("app.modules.conversations.service.inbound._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service.inbound._complete_inbound_event"),
+        patch("app.modules.conversations.service.ports.ModelGateway") as gateway,
         patch(
-            "app.modules.conversations.service.run_in_threadpool",
+            "app.modules.conversations.service.ports.run_in_threadpool",
             side_effect=immediate_in_threadpool,
         ),
     ):
@@ -1202,10 +1202,10 @@ def test_stale_cancel_button_cannot_discard_a_newer_preview() -> None:
         return function(*args, **kwargs)
 
     with (
-        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
-        patch("app.modules.conversations.service._complete_inbound_event"),
+        patch("app.modules.conversations.service.inbound._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service.inbound._complete_inbound_event"),
         patch(
-            "app.modules.conversations.service.run_in_threadpool",
+            "app.modules.conversations.service.ports.run_in_threadpool",
             side_effect=immediate_in_threadpool,
         ),
     ):
@@ -1251,13 +1251,13 @@ def test_explicit_submit_creates_one_investigation_from_approved_claims() -> Non
         return function(*args, **kwargs)
 
     with (
-        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
-        patch("app.modules.conversations.service._complete_inbound_event"),
-        patch("app.modules.conversations.service.InvestigationService") as service,
-        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch("app.modules.conversations.service.inbound._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service.inbound._complete_inbound_event"),
+        patch("app.modules.conversations.service.ports.InvestigationService") as service,
+        patch("app.modules.conversations.service.ports.ModelGateway") as gateway,
         patch("app.modules.channels.whatsapp.send_text_message") as send,
         patch(
-            "app.modules.conversations.service.run_in_threadpool",
+            "app.modules.conversations.service.ports.run_in_threadpool",
             side_effect=immediate_in_threadpool,
         ),
     ):
@@ -1315,12 +1315,12 @@ def test_meta_redelivery_repeats_saved_conversation_reply_without_retriage() -> 
         return function(*args, **kwargs)
 
     with (
-        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
-        patch("app.modules.conversations.service._complete_inbound_event"),
-        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch("app.modules.conversations.service.inbound._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service.inbound._complete_inbound_event"),
+        patch("app.modules.conversations.service.ports.ModelGateway") as gateway,
         patch("app.modules.channels.whatsapp.send_text_message") as send,
         patch(
-            "app.modules.conversations.service.run_in_threadpool",
+            "app.modules.conversations.service.ports.run_in_threadpool",
             side_effect=immediate_in_threadpool,
         ),
     ):
@@ -1450,14 +1450,14 @@ def test_plural_results_command_uses_deterministic_result_lookup() -> None:
     session.scalar.return_value = conversation
 
     with (
-        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
-        patch("app.modules.conversations.service._complete_inbound_event"),
+        patch("app.modules.conversations.service.inbound._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service.inbound._complete_inbound_event"),
         patch(
-            "app.modules.conversations.service._result_message", return_value="latest result"
+            "app.modules.conversations.service.case_replies._result_message", return_value="latest result"
         ) as result,
         patch("app.modules.channels.whatsapp.send_text_message") as send,
         patch(
-            "app.modules.conversations.service.run_in_threadpool",
+            "app.modules.conversations.service.ports.run_in_threadpool",
             side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs),
         ),
     ):
@@ -1579,7 +1579,7 @@ def test_retry_command_queues_same_sender_case_and_reuses_its_reference() -> Non
     ]
 
     with patch(
-        "app.modules.conversations.service.queue_investigation_retry"
+        "app.modules.conversations.service.ports.queue_investigation_retry"
     ) as retry:
         response = _retry_message(
             session,
@@ -1609,7 +1609,7 @@ def test_retry_command_does_not_queue_authentication_failure() -> None:
     ]
 
     with patch(
-        "app.modules.conversations.service.queue_investigation_retry"
+        "app.modules.conversations.service.ports.queue_investigation_retry"
     ) as retry:
         response = _retry_message(
             session,
@@ -1760,13 +1760,13 @@ def test_luna_conversation_reply_is_used_without_creating_an_investigation() -> 
         return function(*args, **kwargs)
 
     with (
-        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
-        patch("app.modules.conversations.service._complete_inbound_event"),
-        patch("app.modules.conversations.service.InvestigationService") as service,
-        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch("app.modules.conversations.service.inbound._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service.inbound._complete_inbound_event"),
+        patch("app.modules.conversations.service.ports.InvestigationService") as service,
+        patch("app.modules.conversations.service.ports.ModelGateway") as gateway,
         patch("app.modules.channels.whatsapp.send_text_message") as send,
         patch(
-            "app.modules.conversations.service.run_in_threadpool",
+            "app.modules.conversations.service.ports.run_in_threadpool",
             side_effect=immediate_in_threadpool,
         ),
     ):
@@ -1805,13 +1805,13 @@ def test_cited_quick_answer_uses_search_and_does_not_create_case() -> None:
         return function(*args, **kwargs)
 
     with (
-        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
-        patch("app.modules.conversations.service._complete_inbound_event"),
-        patch("app.modules.conversations.service.InvestigationService") as service,
-        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch("app.modules.conversations.service.inbound._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service.inbound._complete_inbound_event"),
+        patch("app.modules.conversations.service.ports.InvestigationService") as service,
+        patch("app.modules.conversations.service.ports.ModelGateway") as gateway,
         patch("app.modules.channels.whatsapp.send_text_message") as send,
         patch(
-            "app.modules.conversations.service.run_in_threadpool",
+            "app.modules.conversations.service.ports.run_in_threadpool",
             side_effect=immediate_in_threadpool,
         ),
     ):
@@ -1899,11 +1899,11 @@ def test_start_without_preview_explains_next_step_without_calling_luna() -> None
         return function(*args, **kwargs)
 
     with (
-        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
-        patch("app.modules.conversations.service._complete_inbound_event"),
-        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch("app.modules.conversations.service.inbound._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service.inbound._complete_inbound_event"),
+        patch("app.modules.conversations.service.ports.ModelGateway") as gateway,
         patch(
-            "app.modules.conversations.service.run_in_threadpool",
+            "app.modules.conversations.service.ports.run_in_threadpool",
             side_effect=immediate_in_threadpool,
         ),
     ):
@@ -1962,13 +1962,13 @@ def _run_pending_preview_turn(text: str, *, message_type: str = "text", intent: 
         return function(*args, **kwargs)
 
     with (
-        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
-        patch("app.modules.conversations.service._complete_inbound_event"),
-        patch("app.modules.conversations.service._notification_preference", return_value=None),
-        patch("app.modules.conversations.service.InvestigationService") as service,
-        patch("app.modules.conversations.service.ModelGateway") as gateway,
+        patch("app.modules.conversations.service.inbound._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service.inbound._complete_inbound_event"),
+        patch("app.modules.conversations.service.identity._notification_preference", return_value=None),
+        patch("app.modules.conversations.service.ports.InvestigationService") as service,
+        patch("app.modules.conversations.service.ports.ModelGateway") as gateway,
         patch("app.modules.channels.whatsapp.send_text_message") as send,
-        patch("app.modules.conversations.service.run_in_threadpool", side_effect=immediate_in_threadpool),
+        patch("app.modules.conversations.service.ports.run_in_threadpool", side_effect=immediate_in_threadpool),
     ):
         service.return_value.create.return_value = investigation
         gateway.return_value.interpret_whatsapp_turn = AsyncMock(
@@ -2112,12 +2112,12 @@ def _flow_turn(conversation, text, output, *, factual=None, message_type="text")
         return function(*args, **kwargs)
 
     with (
-        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
-        patch("app.modules.conversations.service._complete_inbound_event"),
-        patch("app.modules.conversations.service._notification_preference", return_value=None),
-        patch("app.modules.conversations.service.InvestigationService") as service,
-        patch("app.modules.conversations.service.ModelGateway") as gateway,
-        patch("app.modules.conversations.service.run_in_threadpool", side_effect=immediate_in_threadpool),
+        patch("app.modules.conversations.service.inbound._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service.inbound._complete_inbound_event"),
+        patch("app.modules.conversations.service.identity._notification_preference", return_value=None),
+        patch("app.modules.conversations.service.ports.InvestigationService") as service,
+        patch("app.modules.conversations.service.ports.ModelGateway") as gateway,
+        patch("app.modules.conversations.service.ports.run_in_threadpool", side_effect=immediate_in_threadpool),
     ):
         send = MagicMock()
         gateway.return_value.interpret_whatsapp_turn = AsyncMock(return_value=SimpleNamespace(output=output))

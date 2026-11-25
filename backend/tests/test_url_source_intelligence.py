@@ -243,16 +243,16 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
             )
 
         with (
-            patch("app.modules.investigations.orchestrator.get_settings", return_value=settings),
-            patch("app.modules.investigations.orchestrator.ModelGateway", FakeGateway),
-            patch("app.modules.investigations.orchestrator.read_public_page", side_effect=retrieve),
-            patch("app.modules.investigations.orchestrator.search_exa", side_effect=search),
+            patch("app.modules.investigations.orchestrator.ports.get_settings", return_value=settings),
+            patch("app.modules.investigations.orchestrator.ports.ModelGateway", FakeGateway),
+            patch("app.modules.investigations.orchestrator.ports.read_public_page", side_effect=retrieve),
+            patch("app.modules.investigations.orchestrator.ports.search_exa", side_effect=search),
             patch(
-                "app.modules.investigations.orchestrator.put_private_object",
+                "app.modules.investigations.orchestrator.ports.put_private_object",
                 side_effect=lambda *, key, data, content_type: object_store.__setitem__(key, data),
             ),
             patch(
-                "app.modules.investigations.orchestrator.get_private_object",
+                "app.modules.investigations.orchestrator.ports.get_private_object",
                 side_effect=lambda *, key: object_store[key],
             ),
         ):
@@ -362,7 +362,7 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
         session.commit()
         page = "Schools in Nyeri County will remain closed tomorrow, according to the notice."
         with patch(
-            "app.modules.investigations.orchestrator.get_settings",
+            "app.modules.investigations.orchestrator.ports.get_settings",
             return_value=SimpleNamespace(
                 max_source_chars_per_source=6000, max_total_evidence_chars=24000
             ),
@@ -558,12 +558,12 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
             max_model_output_tokens_synthesis=900,
         )
         with (
-            patch("app.modules.investigations.orchestrator.get_settings", return_value=settings),
+            patch("app.modules.investigations.orchestrator.ports.get_settings", return_value=settings),
             patch(
-                "app.modules.investigations.orchestrator.read_public_page",
+                "app.modules.investigations.orchestrator.ports.read_public_page",
                 side_effect=SourceRetrievalError("not found"),
             ),
-            patch("app.modules.investigations.orchestrator.ModelGateway") as gateway,
+            patch("app.modules.investigations.orchestrator.ports.ModelGateway") as gateway,
         ):
             result = process_investigation(session, job_id=job.id)
         source = session.scalar(select(Source).where(Source.investigation_id == investigation.id))
@@ -691,10 +691,10 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
             max_model_output_tokens_synthesis=900,
         )
         with (
-            patch("app.modules.investigations.orchestrator.get_settings", return_value=settings),
-            patch("app.modules.investigations.orchestrator.ModelGateway", FailingGateway),
+            patch("app.modules.investigations.orchestrator.ports.get_settings", return_value=settings),
+            patch("app.modules.investigations.orchestrator.ports.ModelGateway", FailingGateway),
             patch(
-                "app.modules.investigations.orchestrator.get_private_object",
+                "app.modules.investigations.orchestrator.ports.get_private_object",
                 side_effect=lambda *, key: objects[key],
             ),
         ):

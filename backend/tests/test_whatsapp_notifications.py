@@ -83,15 +83,15 @@ def test_history_command_routes_directly_to_sender_scoped_case_list():
 
     with (
         patch(
-            "app.modules.conversations.service._conversation_for_sender",
+            "app.modules.conversations.service.inbound._conversation_for_sender",
             return_value=conversation,
         ),
-        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service.inbound._claim_inbound_event", return_value=None),
         patch(
-            "app.modules.conversations.service._case_list_message",
+            "app.modules.conversations.service.case_replies._case_list_message",
             return_value="Your checks, page 1.",
         ) as case_list,
-        patch("app.modules.conversations.service._send_saved_reply", new=AsyncMock()),
+        patch("app.modules.conversations.service.inbound._send_saved_reply", new=AsyncMock()),
     ):
         handled = asyncio.run(_handle_turn(session, turn, settings, MagicMock()))
 
@@ -133,12 +133,12 @@ def test_stop_persists_sender_scoped_notification_opt_out():
 
     with (
         patch(
-            "app.modules.conversations.service._conversation_for_sender",
+            "app.modules.conversations.service.inbound._conversation_for_sender",
             return_value=conversation,
         ),
-        patch("app.modules.conversations.service._claim_inbound_event", return_value=None),
-        patch("app.modules.conversations.service._notification_preference", return_value=None),
-        patch("app.modules.conversations.service._send_saved_reply", new=AsyncMock()),
+        patch("app.modules.conversations.service.inbound._claim_inbound_event", return_value=None),
+        patch("app.modules.conversations.service.identity._notification_preference", return_value=None),
+        patch("app.modules.conversations.service.inbound._send_saved_reply", new=AsyncMock()),
     ):
         handled = asyncio.run(_handle_turn(session, turn, settings, MagicMock()))
 
@@ -230,8 +230,8 @@ def test_completion_notification_sends_saved_result_inside_reply_window():
         patch("app.tasks.get_settings", return_value=_settings()),
         patch("app.tasks._configured_settings", return_value=_settings(), create=True),
         patch("app.modules.channels.whatsapp._configured_settings", return_value=_settings()),
-        patch("app.modules.conversations.service._decrypt_recipient", return_value="254700000000"),
-        patch("app.modules.conversations.service._result_message", return_value="Grounded result with sources.") as result,
+        patch("app.modules.conversations.service.identity._decrypt_recipient", return_value="254700000000"),
+        patch("app.modules.conversations.service.case_replies._result_message", return_value="Grounded result with sources.") as result,
         patch("app.modules.channels.whatsapp.send_text_message") as send,
     ):
         session_factory.return_value.__enter__.return_value = session
