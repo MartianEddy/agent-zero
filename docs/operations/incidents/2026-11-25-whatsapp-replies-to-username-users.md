@@ -1,7 +1,9 @@
 # WhatsApp replies not delivered to some personal accounts
 
 **Date:** 2026-11-25
-**Status:** Fixed in code and covered by tests. Not yet confirmed on production: Render CLI token expired, so production logs could not be read.
+**Status:** Deployed 2026-11-25 (API, worker and web on `53f926e`; migration 0019 applied; Cloudflare worker `ba92bc75`). Awaiting a live-phone retest (`docs/engineering/testing/whatsapp-live-test.md`).
+
+Production logs for the 30 days before the fix show one outbound delivery, on 2026-11-20, which failed with `131026`. No AI authentication failures in the 14 days before deployment. Render auto-deploy did not trigger for pushes after 2026-10-28; the deploys were started manually.
 
 ## Symptom
 
