@@ -252,8 +252,14 @@ def _run_fast_path_claims(
     investigation: Investigation,
     *,
     case_deadline: float,
+    lookup_deadline: float | None = None,
 ) -> set[int]:
-    """Assess settled facts with a hard five-second worker deadline; never use model memory alone."""
+    """Assess settled facts from reference sources; never use model memory alone.
+
+    The reference lookup is bounded by lookup_deadline (a few seconds); the evidence
+    assessment that follows may use the rest of the case deadline.
+    """
+    lookup_deadline = case_deadline if lookup_deadline is None else lookup_deadline
     claims = list(
         session.scalars(
             select(Claim)
@@ -281,7 +287,7 @@ def _run_fast_path_claims(
         if claim.claim_type != "SETTLED_FACT" or claim.needs_deep_investigation:
             continue
         fast_indexes.add(index)
-        remaining = case_deadline - ports.monotonic()
+        remaining = lookup_deadline - ports.monotonic()
         if remaining <= 0:
             findings_stage._record_deterministic_finding(
                 session,

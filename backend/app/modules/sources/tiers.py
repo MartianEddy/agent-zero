@@ -1,6 +1,7 @@
 """Source evidence tiers from a reviewed, explicit domain allowlist."""
 
 import json
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -15,6 +16,15 @@ def _domains_by_tier() -> dict[str, tuple[str, ...]]:
         for tier, domains in value.items()
         if isinstance(domains, list)
     }
+
+
+# Government and academic domains that are not in the reviewed registry. They count as
+# corroborating evidence, but cannot settle a claim alone: the one-source rule still
+# needs a registered source whose remit matches the claim (registry.authority_fits_claim).
+_GOVERNMENT = re.compile(
+    r"(^|\.)(gov|go|gob|gouv|gv|govt|mil)\.[a-z]{2}$|(^|\.)(gov|mil|int)$|(^|\.)gc\.ca$"
+)
+_ACADEMIC = re.compile(r"(^|\.)(ac|edu)\.[a-z]{2}$|(^|\.)edu$")
 
 
 def source_tier_for_domain(domain: str | None) -> str:
@@ -35,4 +45,8 @@ def source_tier_for_domain(domain: str | None) -> str:
             for allowed in tiers.get(tier, ())
         ):
             return tier
+    if _GOVERNMENT.search(normalized):
+        return "PRIMARY"
+    if _ACADEMIC.search(normalized):
+        return "AUTHORITATIVE_REFERENCE"
     return "UNKNOWN"

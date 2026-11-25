@@ -35,7 +35,20 @@
     "apnews.com",
     "afp.com",
     "bbc.com",
-    "bbc.co.uk"
+    "bbc.co.uk",
+    "capitalfm.co.ke",
+    "kenyans.co.ke",
+    "aljazeera.com",
+    "theguardian.com",
+    "nytimes.com",
+    "cnn.com",
+    "dw.com",
+    "france24.com",
+    "voanews.com",
+    "bloomberg.com",
+    "ft.com",
+    "economist.com",
+    "npr.org"
   ],
   "SECONDARY_AGGREGATOR": [],
   "UNVERIFIED_SOCIAL": [
@@ -45,6 +58,15 @@
     "instagram.com",
     "tiktok.com",
     "reddit.com",
-    "youtube.com"
+    "youtube.com",
+    "linkedin.com",
+    "medium.com",
+    "substack.com",
+    "t.me",
+    "whatsapp.com",
+    "threads.net",
+    "quora.com",
+    "pinterest.com",
+    "telegram.org"
   ]
 }

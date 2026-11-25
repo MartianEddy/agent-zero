@@ -645,3 +645,19 @@ class EvidencePipelineIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_reads_rotate_across_sites_and_www_is_the_same_page():
+    from types import SimpleNamespace
+
+    from app.modules.investigations.orchestrator.search_stage import _diversify
+    from app.modules.investigations.orchestrator.sourcing import _dedupe_key
+
+    sources = [SimpleNamespace(id=i, domain=d, retrieval_status="CANDIDATE") for i, d in enumerate(
+        ["legislation.gov.uk"] * 4 + ["presidentiallibrary.go.ke", "nation.africa"]
+    )]
+    order = [item.domain for item in _diversify(sources)]
+    assert order[:4] == ["legislation.gov.uk", "legislation.gov.uk", "presidentiallibrary.go.ke", "nation.africa"]
+    assert _dedupe_key("https://www.presidentiallibrary.go.ke/a/") == _dedupe_key(
+        "https://presidentiallibrary.go.ke/a"
+    )

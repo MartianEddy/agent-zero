@@ -438,7 +438,9 @@ def test_c2pa_analysis_uses_original_and_retry_reuses_run(
         )
         assert declaration_finding.status == "INSUFFICIENT_EVIDENCE"
         # The headline is application-owned; the model's cited sentence stays as detail.
-        assert declaration_finding.statement.startswith("The cited material did not meet")
+        assert declaration_finding.statement.startswith(
+            "The checks on the attached file did not establish this claim"
+        )
         assert any(
             "declare generative AI involvement" in item["sentence"]
             for item in declaration_finding.explanation_json

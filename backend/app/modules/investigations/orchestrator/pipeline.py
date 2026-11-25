@@ -219,7 +219,10 @@ def process_investigation(session: Session, *, job_id: UUID) -> str:
 
         fast_path_deadline = min(case_deadline, ports.monotonic() + 5.0)
         fast_path_indices = settled_facts._run_fast_path_claims(
-            session, investigation, case_deadline=fast_path_deadline
+            session,
+            investigation,
+            case_deadline=min(case_deadline, ports.monotonic() + 45.0),
+            lookup_deadline=fast_path_deadline,
         )
         searchable_indices = {
             index

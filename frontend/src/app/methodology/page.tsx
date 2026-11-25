@@ -12,7 +12,7 @@ export const metadata: Metadata = { title: "How results are decided", descriptio
 
 const toc = [["steps", "The steps"], ["evidence", "What counts as evidence"], ["independence", "Independent sources"], ["outcomes", "The five outcomes"], ["strength", "Evidence strength"], ["media", "Images and video"], ["limits", "Limits"]];
 const rules: Record<string, string> = {
-  SUPPORTED: "At least two independent source groups back the claim, or one directly relevant official record settles a basic fact. Nothing credible contradicts it.",
+  SUPPORTED: "At least two independent source groups back the claim. One source is enough only for a basic fact (a reference work such as an encyclopedia), a statistic (the official statistics body), or a past event (the official record of it). Nothing credible contradicts it.",
   CONTRADICTED: "The same standard, in the other direction.",
   PARTLY_TRUE: "The claim has distinct parts, and independent evidence backs some and challenges others. Two sources merely disagreeing is not enough for this label.",
   INSUFFICIENT_EVIDENCE: "We could not find enough solid, independent evidence either way. This is not the same as false.",
@@ -45,7 +45,9 @@ export default function MethodologyPage() {
           <p>Only text that was actually retrieved from a source and checked against the page counts. A search result title, a snippet, or a source reputation does not.</p>
           <ul>
             <li>Pages that could not be opened are listed as gaps, never as evidence.</li>
-            <li>Social media posts and unknown sites can be shown for context but cannot settle a result.</li>
+            <li>Social media posts, including LinkedIn, are context only and never count.</li>
+            <li>Sites Agent 0 does not yet recognise can add corroboration, but only alongside a recognised source. Two unknown sites agreeing is not enough.</li>
+            <li>A passage must actually be about the claim to count. Page clutter, such as headlines from a sidebar, is ignored even if the AI marked it as support.</li>
             <li>Fact-checks by others are leads. Agent 0 follows them back to the records they cite.</li>
             <li>The page you submitted is context, not proof of its own claim.</li>
           </ul>
@@ -76,7 +78,7 @@ export default function MethodologyPage() {
 
           <h2 id="limits">Limits you should know about</h2>
           <ul>
-            <li>The list of recognised official sources is still small and centred on Kenya. Credible sources outside it can still be found and shown, but count for less until reviewed.</li>
+            <li>The list of recognised sources is still growing and centred on Kenya. Government and university sites anywhere are recognised; other sites count only alongside a recognised one.</li>
             <li>Agent 0 can be wrong. It works best as a fast, organised first pass with a person making the call.</li>
             <li>Results can lag breaking events. Recent claims often return &ldquo;not enough evidence yet&rdquo;.</li>
             <li>A formal accuracy benchmark is still being built. Until it is published, treat results as unmeasured.</li>

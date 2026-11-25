@@ -131,6 +131,7 @@ def _persist_findings(
                 accepted_methods[evidence_id] = evidence.method
         proposed_status = candidate.status if candidate is not None else "INSUFFICIENT_EVIDENCE"
         signals: list[EvidenceSignal] = []
+        off_topic = 0
         for evidence_id, relationship in accepted:
             evidence = session.get(Evidence, evidence_id)
             source = (
@@ -147,6 +148,11 @@ def _persist_findings(
             ):
                 continue
             if relationship not in {"SUPPORTS", "CONTRADICTS"}:
+                continue
+            if not _passage_addresses_claim(claim.text, evidence.content):
+                # The model labelled a passage that does not mention the claim's subject
+                # (for example a page's sidebar headline). Keep it as context only.
+                off_topic += 1
                 continue
             tier = source_tier_for_domain(source.domain)
             group_id = evidence.independence_group_id
@@ -165,7 +171,9 @@ def _persist_findings(
                     is_stale=evidence.is_stale,
                 )
             )
-        assessment = assess_verdict(claim.claim_type, proposed_status, signals)
+        assessment = assess_verdict(
+            claim.claim_type, proposed_status, signals, claim_text=claim.text
+        )
         evidence_by_id: dict[str, dict[str, object]] = {}
         for evidence_id, _relationship in accepted:
             evidence = session.get(Evidence, evidence_id)
@@ -200,7 +208,9 @@ def _persist_findings(
         }
         citation_signals = [signal for signal in signals if signal.evidence_id in cited_ids]
         if candidate is not None:
-            assessment = assess_verdict(claim.claim_type, candidate.status, citation_signals)
+            assessment = assess_verdict(
+                claim.claim_type, candidate.status, citation_signals, claim_text=claim.text
+            )
         status = assessment.verdict
         support_group_count = len(
             {item.independence_group_id for item in citation_signals if item.stance == "SUPPORTS"}
@@ -253,11 +263,7 @@ def _persist_findings(
                     "and seek independent corroboration."
                 )
             else:
-                statement = (
-                    "The cited material did not meet the requirements for claim evidence, so "
-                    "Agent 0 could not establish a conclusion. Review the linked material and "
-                    "seek a direct, independent source."
-                )
+                statement = _nothing_countable_statement(session, accepted, source_by_id)
             limitations = [assessment.rationale, assessment.confidence_reason]
         elif status == "NOT_VERIFIABLE":
             statement = (
@@ -448,3 +454,86 @@ def _build_brief(
     session.add(brief)
     session.commit()
     common._audit(session, investigation.id, "BRIEF_GENERATED", {"finding_count": len(findings)})
+
+
+_GENERIC = {
+    "said",
+    "says",
+    "will",
+    "would",
+    "have",
+    "been",
+    "were",
+    "they",
+    "their",
+    "there",
+    "which",
+    "about",
+    "into",
+    "over",
+    "also",
+    "than",
+    "then",
+    "some",
+    "more",
+    "most",
+    "kenya",
+    "kenyan",
+    "true",
+    "false",
+}
+
+
+def _passage_addresses_claim(claim_text: str, passage: str) -> bool:
+    """Whether a passage shares enough distinctive terms with the claim to judge it.
+
+    A cheap, deterministic check on the model's stance label: at least two of the claim's
+    distinctive terms (one, if the claim only has one or two) must appear in the passage.
+    """
+    from app.modules.investigations.orchestrator.search_stage import _relevance_terms
+
+    claim_terms = _relevance_terms(claim_text) - _GENERIC
+    if not claim_terms:
+        return True
+    passage_terms = _relevance_terms(passage)
+    stems = {term[:6] for term in passage_terms}
+    shared = {term for term in claim_terms if term in passage_terms or term[:6] in stems}
+    needed = 1 if len(claim_terms) <= 2 else 2
+    return len(shared) >= needed
+
+
+def _nothing_countable_statement(session: Session, accepted, source_by_id) -> str:
+    """Say what was found and why it could not count, instead of a generic message."""
+    domains: dict[str, set[str]] = {"SUPPORTS": set(), "CONTRADICTS": set()}
+    media_only = bool(accepted)
+    for evidence_id, relationship in accepted:
+        item = session.get(Evidence, evidence_id)
+        if item is None or not item.media_asset_id:
+            media_only = False
+        if relationship not in domains:
+            continue
+        evidence = session.get(Evidence, evidence_id)
+        source = source_by_id.get(evidence.source_id) if evidence and evidence.source_id else None
+        if source is not None and source.domain:
+            domains[relationship].add(source.domain.removeprefix("www."))
+    if media_only:
+        return (
+            "The checks on the attached file did not establish this claim on their own, so no "
+            "conclusion was reached. File details and content credentials describe a file's "
+            "history; they do not prove what it shows. This is not a finding that the claim "
+            "is false."
+        )
+    found = sorted(domains["SUPPORTS"] | domains["CONTRADICTS"])
+    if found:
+        listed = ", ".join(found[:3])
+        return (
+            f"Some passages on {listed} relate to this claim, but they come from social media, "
+            "the claim's own subject, or sources that could not be confirmed as independent. "
+            "Agent 0 needs two independent sources, or one official record, before it reaches a "
+            "conclusion. This is not a finding that the claim is false."
+        )
+    return (
+        "The pages Agent 0 could read did not directly address this claim, so no conclusion "
+        "was reached. This is not a finding that the claim is false. Try adding a date, a "
+        "place or a link to the original source."
+    )

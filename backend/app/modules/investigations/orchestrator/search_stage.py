@@ -255,7 +255,7 @@ def _retrieve_candidates(
                     elif isinstance(value, list):
                         context_parts.extend(str(part) for part in value if part)
         context_by_source[source.id] = " ".join(context_parts)
-    sources = prioritize_sources(sources, claims, context_by_source=context_by_source)
+    sources = _diversify(prioritize_sources(sources, claims, context_by_source=context_by_source))
     retrieved: dict[UUID, str] = {}
     for source in sources:
         remaining_seconds = case_deadline - ports.monotonic() if case_deadline is not None else 12.0
@@ -291,9 +291,11 @@ def _retrieve_candidates(
             retrieval_cap if retrieval_cap is not None else settings.max_retrieved_sources,
         )
         if current_count >= effective_retrieval_cap:
-            source.retrieval_status = "NOT_ATTEMPTED_LIMIT"
-            session.commit()
-            ports.add_limitation(session, investigation.id, "Source retrieval limit reached.")
+            if current_count >= settings.max_retrieved_sources:
+                source.retrieval_status = "NOT_ATTEMPTED_LIMIT"
+                session.commit()
+                ports.add_limitation(session, investigation.id, "Source retrieval limit reached.")
+            # Otherwise only this pass's share is used up; later passes may still read it.
             continue
         text = (
             sourcing._save_retrieved_source(
@@ -305,3 +307,30 @@ def _retrieve_candidates(
         if text is not None:
             retrieved[source.id] = text[: getattr(settings, "max_retrieved_document_chars", 60_000)]
     return retrieved
+
+
+PAGES_PER_SITE_PER_ROUND = 2
+
+
+def _diversify(sources: list) -> list:
+    """Read at most two pages per site per round before moving to other sites.
+
+    Keeps relevance order within each round, so corroboration from independent sites is
+    found before the read budget is spent on one site.
+    """
+    from app.modules.investigations.evidence_ledger import owner_key
+
+    rounds: list[list] = []
+    seen: dict[str, int] = {}
+    for source in sources:
+        site = owner_key(getattr(source, "domain", None)) or str(getattr(source, "id", ""))
+        index = seen.get(site, 0) // PAGES_PER_SITE_PER_ROUND
+        seen[site] = seen.get(site, 0) + 1
+        while len(rounds) <= index:
+            rounds.append([])
+        rounds[index].append(source)
+    retrieved_first = [
+        item for item in sources if getattr(item, "retrieval_status", "") == "RETRIEVED"
+    ]
+    ordered = [item for group in rounds for item in group]
+    return retrieved_first + [item for item in ordered if item not in retrieved_first]

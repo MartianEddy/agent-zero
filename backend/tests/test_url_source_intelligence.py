@@ -413,7 +413,7 @@ class UrlSourceIntelligenceTests(unittest.TestCase):
             evidence = Evidence(
                 investigation_id=investigation.id,
                 source_id=source.id,
-                content=f"Retrieved passage {index} describes the event.",
+                content=f"Retrieved passage {index} reviews the factual claim.",
                 method="TEST_FIXTURE",
                 source_tier="REPUTABLE_REPORTING",
                 independence_group_id=f"group-{index}",

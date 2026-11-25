@@ -84,6 +84,19 @@ the registry; independent sources remain necessary for corroboration.
   Daily, The Star, The EastAfrican and KBC as reputable reporting. These additions are
   pending editorial review.
 
+## Policy changes (2026-11-25, from a review of production cases)
+
+A replay of production evidence showed claims with good evidence ending as "not enough evidence". Changes, each covered by tests:
+
+- **Unregistered sites corroborate with an anchor.** A retrieved, validated passage from an unregistered site now counts as an independent group, but only when a recognised source (official, reference or reputable reporting) supports the same side. Unregistered sites alone never decide. Any decision that uses one is capped at MEDIUM.
+- **Inferred tiers.** Government domains (for example `.go.ke`, `.gov`, `.gov.uk`) count as official and academic domains (`.ac.ke`, `.edu`) as reference, without the one-source exception unless registered. LinkedIn and similar platforms are social.
+- **Reference works settle settled facts.** For `SETTLED_FACT` only, a reference work (Wikipedia, Britannica) passage that directly supports or contradicts the claim can decide alone, at MEDIUM, if nothing contradicts it.
+- **Historical events.** A `CHECKABLE_EVENT` about a year at least two years past, with no future wording, may be settled by one topic-fit official record.
+- **Relevance guard.** A SUPPORTS or CONTRADICTS label only counts if the passage shares distinctive terms with the claim.
+- **Retrieval.** Up to 14 candidates and 8 pages per case (was 8 and 5); `www.` and non-`www.` URLs are one page; at most 3 candidates and 2 reads per site per round; an earlier pass's read limit no longer blocks later passes. Previously every case stopped after 3 pages.
+- **Settled-fact timing.** The reference lookup keeps a 5-second limit, but the assessment now has up to 45 seconds (it previously shared the 5 seconds and often timed out).
+- **Clearer "not enough evidence".** When nothing countable was found, the headline says what was found and why it could not count.
+
 ## Verdict gates
 
 - `SUPPORTED` / `CONTRADICTED`: at least two independent eligible groups on the

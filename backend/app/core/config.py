@@ -39,8 +39,8 @@ class Settings(BaseSettings):
     max_claims_per_investigation: int = 3
     max_search_queries: int = 5
     max_search_results_per_query: int = 5
-    max_sources_per_investigation: int = 8
-    max_retrieved_sources: int = 5
+    max_sources_per_investigation: int = 14
+    max_retrieved_sources: int = 8
     # Acquisition is bounded separately from the evidence/model context budgets.
     max_retrieved_document_chars: int = 60_000
     max_matching_regions_per_claim: int = 4

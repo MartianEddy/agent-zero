@@ -11,6 +11,7 @@ from app.modules.investigations.models import (
     Source,
     utcnow,
 )
+from app.modules.investigations.evidence_ledger import owner_key
 from app.modules.investigations.orchestrator import common, ports
 from app.modules.sources.registry import classify_source
 from app.modules.sources.retrieval import (
@@ -19,13 +20,23 @@ from app.modules.sources.retrieval import (
 from app.modules.sources.urls import normalize_source_url
 
 
+MAX_CANDIDATES_PER_SITE = 3
+
+
+def _dedupe_key(url: str) -> str:
+    """Normalised URL that treats www.example.com and example.com as the same page."""
+    normalized = normalize_source_url(url)
+    scheme, rest = normalized.split("://", 1)
+    return f"{scheme}://{rest.removeprefix('www.')}"
+
+
 def _normalized_existing_sources(session: Session, investigation_id: UUID) -> dict[str, Source]:
     output: dict[str, Source] = {}
     for source in session.scalars(
         select(Source).where(Source.investigation_id == investigation_id).order_by(Source.id)
     ):
         try:
-            output.setdefault(normalize_source_url(source.url), source)
+            output.setdefault(_dedupe_key(source.url), source)
         except ValueError:
             continue
     return output
@@ -47,8 +58,9 @@ def _create_source_candidate(
     except ValueError:
         return None
     existing = _normalized_existing_sources(session, investigation.id)
-    if normalized in existing:
-        source = existing[normalized]
+    key = _dedupe_key(normalized)
+    if key in existing:
+        source = existing[key]
         if published_at and not source.published_at:
             source.published_at = published_at[:80]
             session.commit()
@@ -58,6 +70,12 @@ def _create_source_candidate(
         ports.add_limitation(session, investigation.id, "Source-candidate limit reached.")
         return None
     domain = common._source_domain(normalized)
+    site = owner_key(domain)
+    if site and sum(owner_key(item.domain) == site for item in existing.values()) >= (
+        MAX_CANDIDATES_PER_SITE
+    ):
+        # Leave room for other sites: more pages from one site cannot add corroboration.
+        return None
     source = Source(
         investigation_id=investigation.id,
         url=normalized,
