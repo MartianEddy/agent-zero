@@ -222,3 +222,21 @@ def test_job_queued_past_the_queue_window_is_recovered(sessions) -> None:
     with factory() as session:
         assert session.get(ProcessingJob, job_id).status == "BLOCKED"
         assert session.get(Investigation, investigation_id).status == InvestigationStatus.FAILED
+
+
+def test_case_past_its_run_limit_loses_its_lease(sessions) -> None:
+    # The thread pool cannot kill a stuck case; the lease watchdog stands in for
+    # Celery's time limits.
+    factory, job_id = sessions
+    session = factory()
+    lease = claim_processing_job(session, job_id)
+    assert lease is not None
+    with (
+        patch("app.modules.investigations.job_lease.HEARTBEAT_SECONDS", 0.05),
+        patch("app.modules.investigations.job_lease.MAX_RUN_SECONDS", 0.1),
+        patch("app.modules.investigations.job_lease._heartbeat_once", return_value=True) as beat,
+    ):
+        with protect_job_lease(session, lease, factory) as lost:
+            assert lost.wait(2)
+    assert beat.call_count <= 2
+    session.close()

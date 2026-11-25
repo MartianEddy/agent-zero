@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -18,6 +19,9 @@ from app.modules.investigations.models import ProcessingJob
 logger = logging.getLogger(__name__)
 LEASE_SECONDS = 180
 HEARTBEAT_SECONDS = 30
+# Longest a case may hold its lease. Replaces Celery's time limits, which the thread
+# pool does not enforce.
+MAX_RUN_SECONDS = 540
 
 
 class JobLeaseLost(RuntimeError):
@@ -157,8 +161,19 @@ def protect_job_lease(
     lost = threading.Event()
     session.info["processing_job_lease"] = lease
 
+    started = time.monotonic()
+
     def heartbeat() -> None:
         while not stopped.wait(HEARTBEAT_SECONDS):
+            if time.monotonic() - started > MAX_RUN_SECONDS:
+                # The thread pool cannot kill a stuck case, so stop renewing: the lease
+                # then expires, fenced commits fail, and stalled-job recovery takes over.
+                lost.set()
+                logger.warning(
+                    "Job exceeded its run limit; lease renewal stopped job_id=%s",
+                    lease.job_id,
+                )
+                return
             if not _heartbeat_once(session_factory, lease):
                 lost.set()
                 logger.warning(

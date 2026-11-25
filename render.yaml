@@ -97,9 +97,11 @@ services:
     region: singapore
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
-    # Keep one child within the 512 MB plan, and bound tasks so one hang cannot
-    # block the outbox dispatcher and stalled-job recovery indefinitely.
-    dockerCommand: celery -A app.worker.celery_app worker --pool=prefork --concurrency=1 --soft-time-limit=480 --time-limit=540 --beat --schedule=/tmp/agent-zero-celerybeat-schedule --loglevel=INFO
+    # Cases are I/O bound (model and web calls), so threads run three at once in one
+    # process within the 512 MB plan; a second prefork child would not fit. Threads do
+    # not enforce Celery time limits: the job lease watchdog (job_lease.MAX_RUN_SECONDS)
+    # stops renewing a case that runs too long, and stalled-job recovery fails it.
+    dockerCommand: celery -A app.worker.celery_app worker --pool=threads --concurrency=3 --beat --schedule=/tmp/agent-zero-celerybeat-schedule --loglevel=INFO
     envVars: *app-env
 
   - type: keyvalue
